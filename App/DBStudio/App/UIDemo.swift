@@ -97,6 +97,10 @@ enum UIDemo {
                 if let view = tables.first(where: { $0.kind == .view }) {
                     controller.openSource(SourceObject(kind: .view(view.ref)), connectionID: config.id)
                 }
+            case "builder-blank":
+                // The path a connection with no default database takes: the builder
+                // starts on nothing and falls back to the first schema the server lists.
+                controller.openQueryBuilder(SchemaRef(database: "", schema: ""), connectionID: config.id)
             case "palette":
                 workspace.isCommandPalettePresented = true
             case "snippets":

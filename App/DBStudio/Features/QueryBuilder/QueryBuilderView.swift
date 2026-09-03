@@ -60,9 +60,22 @@ public struct QueryBuilderView: View {
             HStack(spacing: DesignTokens.Spacing.xs + 2) {
                 Image(systemName: Icon.builder).foregroundStyle(Color.accentColor)
                 Text("Query Builder").font(.system(size: 13, weight: .semibold))
-                Text(controller.schema.schema).font(.caption).foregroundStyle(.tertiary)
             }
             BarDivider()
+            Picker("Schema", selection: Binding(
+                get: { controller.schema },
+                set: { new in Task { await controller.select(schema: new) } }
+            )) {
+                if !controller.availableSchemas.contains(controller.schema) {
+                    Text(controller.schema.schema.isEmpty ? "Choose…" : controller.schema.schema).tag(controller.schema)
+                }
+                ForEach(controller.availableSchemas, id: \.self) { schema in
+                    Label(schema.schema, systemImage: controller.dialect == .mysql ? Icon.database : Icon.schema).tag(schema)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 180)
+            .help(controller.dialect == .mysql ? "The database whose tables are listed" : "The schema whose tables are listed")
             Toggle("Distinct", isOn: $controller.model.isDistinct).toggleStyle(.checkbox)
             Spacer()
             Button {

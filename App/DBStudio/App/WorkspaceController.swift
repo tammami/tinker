@@ -107,13 +107,29 @@ public final class WorkspaceController {
     }
 
     public func showQueryBuilder() {
-        guard let id = workspace.activeConnectionID,
-              let config = environment.connections.first(where: { $0.id == id })
-        else { return }
+        guard let id = workspace.activeConnectionID else { return }
+        openQueryBuilder(defaultSchema(for: id), connectionID: id)
+    }
+
+    /// Where a builder opened on a connection starts: the front tab's schema, else the
+    /// database expanded in the sidebar, else the connection's default. The builder
+    /// itself falls back to the first schema the server lists when that is still empty.
+    public func defaultSchema(for connectionID: UUID) -> SchemaRef {
+        guard let config = environment.connections.first(where: { $0.id == connectionID }) else {
+            return SchemaRef(database: "", schema: "")
+        }
+        if let tab = workspace.selectedTab, tab.connectionID == connectionID, let ref = tab.tableRef {
+            return ref.schemaRef
+        }
+        let marker = connectionID.uuidString
+        if let expandedDatabase = sidebar.expanded
+            .filter({ $0.contains(marker) && $0.contains("/db/") && !$0.contains("/schema/") })
+            .sorted().first,
+           let name = expandedDatabase.components(separatedBy: "/db/").last {
+            return SchemaRef(database: name, schema: config.dialect == .mysql ? name : "public")
+        }
         let database = config.database ?? ""
-        let schema = workspace.selectedTab?.tableRef?.schemaRef
-            ?? SchemaRef(database: database, schema: config.dialect == .mysql ? database : "public")
-        openQueryBuilder(schema, connectionID: id)
+        return SchemaRef(database: database, schema: config.dialect == .mysql ? database : "public")
     }
 
     public func sourceController(for tab: WorkspaceTab, object: SourceObject) -> SourceController {
@@ -213,6 +229,42 @@ public final class WorkspaceController {
                 closeTabs(for: connectionID)
                 sidebar.collapseConnection(connectionID)
                 await environment.session(for: connectionID)?.disconnect()
+            }
+        )
+    }
+
+    /// Closes a database: its tabs go, after asking, and its branch of the tree folds.
+    ///
+    /// On MySQL a database is one of many on the connection, so the connection stays up.
+    /// On PostgreSQL a query tab's session database is the connection's own.
+    public func closeDatabase(connectionID: UUID, name: String, sidebarItemID: SidebarItem.ID) {
+        let dialect = dialect(for: connectionID)
+        let open = workspace.tabs(for: connectionID, database: name) { [weak self] tab in
+            guard let self, let query = queryControllers[tab.id] else { return nil }
+            switch dialect {
+            case .mysql: return query.sessionDatabase
+            case .postgresql: return environment.connections.first { $0.id == connectionID }?.database
+            }
+        }
+        let fold = { [weak self] in self?.sidebar.collapseSubtree(sidebarItemID) }
+        guard !open.isEmpty else {
+            fold()
+            return
+        }
+        let unsaved = open.filter { hasUnsavedWork($0) }.count
+        var message = "\(open.count) open tab\(open.count == 1 ? "" : "s") on this database will be closed."
+        if unsaved > 0 {
+            message += " \(unsaved) of them \(unsaved == 1 ? "has" : "have") uncommitted changes or an open transaction, which will be lost."
+        }
+        workspace.confirmation = DestructiveConfirmation(
+            title: "Close “\(name)”?",
+            message: message,
+            confirmTitle: "Close Database",
+            action: { [weak self] in
+                guard let self else { return }
+                workspace.closeTabs(Set(open.map(\.id)))
+                pruneControllers()
+                fold()
             }
         )
     }

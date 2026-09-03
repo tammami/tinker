@@ -37,9 +37,14 @@ public struct WorkspaceView: View {
                 onNewQuery: newQuery,
                 onOpenSource: { object, id in controller.openSource(object, connectionID: id) },
                 onOpenActivity: { id in controller.openServerActivity(connectionID: id) },
-                onOpenBuilder: { schema, id in controller.openQueryBuilder(schema, connectionID: id) },
+                onOpenBuilder: { schema, id in
+                    controller.openQueryBuilder(schema.schema.isEmpty ? controller.defaultSchema(for: id) : schema, connectionID: id)
+                },
                 onDisconnect: { id in controller.disconnect(id) },
-                onCloseTabs: { id in controller.closeTabs(for: id) }
+                onCloseTabs: { id in controller.closeTabs(for: id) },
+                onCloseDatabase: { id, name, itemID in
+                    controller.closeDatabase(connectionID: id, name: name, sidebarItemID: itemID)
+                }
             )
             .navigationSplitViewColumnWidth(
                 min: DesignTokens.Metrics.sidebarMinWidth,

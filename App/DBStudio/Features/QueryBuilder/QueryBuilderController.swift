@@ -10,7 +10,10 @@ import SwiftUI
 @MainActor
 @Observable
 public final class QueryBuilderController {
-    public let schema: SchemaRef
+    /// The schema whose tables the list offers. Changing it keeps what is on the canvas.
+    public var schema: SchemaRef
+    /// Every schema the connection offers, for the picker.
+    public private(set) var availableSchemas: [SchemaRef] = []
     public let connectionID: UUID
     public let dialect: SQLDialect
 
@@ -79,6 +82,12 @@ public final class QueryBuilderController {
         defer { isLoading = false }
         do {
             _ = try await session.connect()
+            if availableSchemas.isEmpty { await loadSchemas(session) }
+            // A connection with no default database opens on nothing; take the first schema.
+            if schema.schema.isEmpty || !availableSchemas.contains(schema),
+               let first = availableSchemas.first {
+                schema = first
+            }
             let schema = schema
             availableTables = try await session.introspection(.tables(schema)) {
                 try await $0.tables(in: schema)
@@ -87,6 +96,32 @@ public final class QueryBuilderController {
         } catch {
             errorText = (error as? DBError)?.errorDescription ?? String(describing: error)
         }
+    }
+
+    /// The schemas the picker offers: MySQL's databases, PostgreSQL's schemas.
+    private func loadSchemas(_ session: ConnectionSession) async {
+        switch dialect {
+        case .mysql:
+            let databases = (try? await session.introspection(.databases) { try await $0.databases() }) ?? []
+            let system: Set<String> = ["information_schema", "performance_schema", "mysql", "sys"]
+            availableSchemas = databases.map { SchemaRef.mysql($0.name) }
+                .filter { !system.contains($0.database) }
+        case .postgresql:
+            let database = schema.database.isEmpty ? (session.config.database ?? "") : schema.database
+            let schemas = (try? await session.introspection(.schemas(database: database)) {
+                try await $0.schemas(in: database)
+            }) ?? []
+            availableSchemas = schemas.filter { !$0.isSystem }.map(\.ref)
+        }
+        if let current = availableSchemas.first(where: { $0 == schema }) {
+            schema = current
+        }
+    }
+
+    public func select(schema new: SchemaRef) async {
+        guard new != schema else { return }
+        schema = new
+        await loadTables()
     }
 
     private func loadColumns(of ref: TableRef) async -> [ColumnInfo] {

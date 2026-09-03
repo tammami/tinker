@@ -288,6 +288,29 @@ public final class WorkspaceModel {
         tabs.filter { $0.connectionID == connectionID }
     }
 
+    /// The tabs that work inside one database of a connection. A query tab counts when its
+    /// session is on that database; `queryDatabase` answers that from the tab's controller.
+    public func tabs(for connectionID: UUID, database: String, queryDatabase: (WorkspaceTab) -> String?) -> [WorkspaceTab] {
+        tabs.filter { tab in
+            guard tab.connectionID == connectionID else { return false }
+            switch tab.kind {
+            case let .table(ref): return ref.database == database
+            case let .objects(schema), let .queryBuilder(schema): return schema.database == database
+            case let .source(object): return object.schema.database == database
+            case .query: return queryDatabase(tab) == database
+            case .serverActivity: return false
+            }
+        }
+    }
+
+    public func closeTabs(_ ids: Set<UUID>) {
+        let selectedIndex = tabs.firstIndex { $0.id == selectedTabID } ?? 0
+        tabs.removeAll { ids.contains($0.id) }
+        if !tabs.contains(where: { $0.id == selectedTabID }) {
+            selectedTabID = tabs.isEmpty ? nil : tabs[min(selectedIndex, tabs.count - 1)].id
+        }
+    }
+
     /// Closes every tab of a connection, keeping the selection on a neighbour if any tab remains.
     public func closeTabs(for connectionID: UUID) {
         let selectedIndex = tabs.firstIndex { $0.id == selectedTabID } ?? 0

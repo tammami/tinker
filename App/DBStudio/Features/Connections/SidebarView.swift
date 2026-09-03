@@ -14,6 +14,7 @@ public struct SidebarView: View {
     /// Disconnecting and deleting close the connection's tabs, which the controller owns.
     let onDisconnect: (UUID) -> Void
     let onCloseTabs: (UUID) -> Void
+    let onCloseDatabase: (UUID, String, SidebarItem.ID) -> Void
 
     @State private var searchText = ""
 
@@ -36,7 +37,8 @@ public struct SidebarView: View {
                     onOpenActivity: onOpenActivity,
                     onOpenBuilder: onOpenBuilder,
                     onDisconnect: onDisconnect,
-                    onCloseTabs: onCloseTabs
+                    onCloseTabs: onCloseTabs,
+                    onCloseDatabase: onCloseDatabase
                 )
             }
         }
@@ -114,6 +116,7 @@ struct SidebarRow: View {
     let onOpenBuilder: (SchemaRef, UUID) -> Void
     let onDisconnect: (UUID) -> Void
     let onCloseTabs: (UUID) -> Void
+    let onCloseDatabase: (UUID, String, SidebarItem.ID) -> Void
 
     var body: some View {
         Group {
@@ -125,7 +128,7 @@ struct SidebarRow: View {
                             onOpenTable: onOpenTable, onNewQuery: onNewQuery,
                             onOpenSource: onOpenSource, onOpenActivity: onOpenActivity,
                             onOpenBuilder: onOpenBuilder, onDisconnect: onDisconnect,
-                            onCloseTabs: onCloseTabs
+                            onCloseTabs: onCloseTabs, onCloseDatabase: onCloseDatabase
                         )
                     }
                 } label: {
@@ -355,9 +358,9 @@ struct SidebarRow: View {
             }
             Divider()
             if sidebar.isExpanded(item.id) {
-                // Closes this database and everything opened beneath it, like Navicat's
-                // Close Database; the connection itself stays up.
-                Button { sidebar.collapseSubtree(item.id) } label: {
+                // Closes this database like Navicat does: its tabs go (after asking) and
+                // everything opened beneath it folds; the connection itself stays up.
+                Button { onCloseDatabase(id, item.title, item.id) } label: {
                     Label("Close Database", systemImage: Icon.collapse)
                 }
             } else {
@@ -418,8 +421,7 @@ struct SidebarRow: View {
             Button { onNewQuery(id, "") } label: { Label("New Query", systemImage: Icon.newQuery) }
                 .keyboardShortcut("t", modifiers: .command)
             Button {
-                let database = config.database ?? ""
-                onOpenBuilder(SchemaRef(database: database, schema: config.dialect == .mysql ? database : "public"), id)
+                onOpenBuilder(SchemaRef(database: "", schema: ""), id)
             } label: {
                 Label("Query Builder", systemImage: Icon.builder)
             }

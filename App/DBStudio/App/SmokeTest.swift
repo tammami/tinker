@@ -191,6 +191,14 @@ enum SmokeTest {
             check("double-click opens a tab for \(firstTable.name)", workspace.tabs.count == 1)
             check("the tab is selected", workspace.selectedTabID == opened.id)
 
+            // Close Database picks out the tabs of one database and closes only those.
+            let other = TableRef(database: "some_other_db", schema: "public", name: "t")
+            _ = workspace.openTable(other, connectionID: config.id)
+            let inDatabase = workspace.tabs(for: config.id, database: firstTable.database) { _ in nil }
+            check("close database finds the tabs of \(firstTable.database)", inDatabase.map(\.id) == [opened.id])
+            workspace.closeTabs(Set(inDatabase.map(\.id)))
+            check("close database leaves the other database's tab", workspace.tabs.map(\.tableRef) == [other])
+
             await query.releaseHeldConnection()
             await environment.disconnectAll()
         } catch {

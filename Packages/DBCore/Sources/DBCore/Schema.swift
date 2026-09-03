@@ -442,6 +442,15 @@ public protocol SchemaIntrospector: Sendable {
     func tableDDL(_ table: TableRef) async throws -> String
     /// Planner estimate. Never a `COUNT(*)`, which would scan the table.
     func approximateRowCount(_ table: TableRef) async throws -> Int64?
+
+    // The table designer's reads (SPEC §8, §15b).
+
+    func checkConstraints(of table: TableRef) async throws -> [CheckConstraintInfo]
+    func triggers(of table: TableRef) async throws -> [TriggerInfo]
+    /// `nil` when the table is not partitioned.
+    func partitioning(of table: TableRef) async throws -> PartitioningInfo?
+    /// Collations the server offers, for the column editor's picker.
+    func collations(in database: String) async throws -> [CollationInfo]
 }
 
 extension SchemaIntrospector {

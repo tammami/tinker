@@ -532,6 +532,59 @@ final class PostgresIntegrationTests: XCTestCase {
         }
     }
 
+    /// The four reads the table designer added (SPEC §8, §15b), against real catalogs.
+    func testDesignerReadsCheckConstraintsTriggersAndPartitioning() async throws {
+        try await withEachServer { connection, server in
+            let introspector = connection.introspector
+            func table(_ name: String) -> TableRef {
+                TableRef(database: server.database, schema: "public", name: name)
+            }
+
+            let checks = try await introspector.checkConstraints(of: table("checked_values"))
+            XCTAssertEqual(checks.map(\.name).sorted(), ["label_not_blank", "quantity_positive"])
+            let quantity = try XCTUnwrap(checks.first { $0.name == "quantity_positive" })
+            // The expression is whatever the server deparsed it to, never reformatted.
+            XCTAssertTrue(quantity.expression.contains("quantity"), quantity.expression)
+            XCTAssertTrue(quantity.expression.contains(">"), quantity.expression)
+            XCTAssertTrue(quantity.isValidated)
+
+            // A table with no checks reports none rather than failing.
+            let customerChecks = try await introspector.checkConstraints(of: table("customers"))
+            XCTAssertTrue(customerChecks.isEmpty)
+
+            let triggers = try await introspector.triggers(of: table("audited"))
+            XCTAssertEqual(triggers.count, 1, "expected the one fixture trigger")
+            let trigger = try XCTUnwrap(triggers.first)
+            XCTAssertEqual(trigger.name, "audited_bump")
+            XCTAssertEqual(trigger.timing, .before)
+            XCTAssertEqual(trigger.events, [.update])
+            XCTAssertTrue(trigger.isRowLevel)
+            XCTAssertNotNil(trigger.condition, "the fixture's WHEN clause should be read back")
+            XCTAssertTrue(
+                (trigger.functionCall ?? "").contains("bump_touched"),
+                trigger.functionCall ?? "nil"
+            )
+
+            let measurementPartitioning = try await introspector.partitioning(of: table("measurements"))
+            let partitioning = try XCTUnwrap(measurementPartitioning)
+            XCTAssertEqual(partitioning.strategy, .range)
+            XCTAssertTrue(partitioning.key.contains("taken_at"), partitioning.key)
+            XCTAssertEqual(
+                partitioning.partitions.map(\.name).sorted(),
+                ["measurements_2024", "measurements_2025"]
+            )
+            let firstPartition = try XCTUnwrap(partitioning.partitions.first)
+            XCTAssertTrue((firstPartition.bound ?? "").contains("2024"), firstPartition.bound ?? "nil")
+
+            // An ordinary table is not partitioned, and says so with nil rather than empty.
+            let none = try await introspector.partitioning(of: table("customers"))
+            XCTAssertNil(none)
+
+            let collations = try await introspector.collations(in: server.database)
+            XCTAssertFalse(collations.isEmpty, "the server offers at least the default collation")
+        }
+    }
+
     func testKeysIndexesAndForeignKeys() async throws {
         try await withEachServer { connection, server in
             let introspector = connection.introspector

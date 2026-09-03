@@ -457,3 +457,137 @@ public struct PostgresIntrospector: SchemaIntrospector {
         return value
     }
 }
+
+// MARK: - Table designer reads (SPEC §8, §15b)
+
+extension PostgresIntrospector {
+    public func checkConstraints(of table: TableRef) async throws -> [CheckConstraintInfo] {
+        // `pg_get_constraintdef` renders "CHECK ((id > 0))"; the designer wants the
+        // predicate on its own, which is what `conbin` deparses to.
+        let result = try await query("""
+            SELECT c.conname,
+                   pg_get_expr(c.conbin, c.conrelid),
+                   c.convalidated
+            FROM pg_catalog.pg_constraint c
+            JOIN pg_catalog.pg_class t ON t.oid = c.conrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+            WHERE n.nspname = $1 AND t.relname = $2 AND c.contype = 'c'
+            ORDER BY c.conname
+            """, [.string(table.schema), .string(table.name)])
+
+        return result.rows.compactMap { row in
+            guard let name = row[0].text, let expression = row[1].text else { return nil }
+            return CheckConstraintInfo(
+                name: name, expression: expression, isValidated: row[2] != .bool(false)
+            )
+        }
+    }
+
+    public func triggers(of table: TableRef) async throws -> [TriggerInfo] {
+        // tgtype is a bit mask: 1 row-level, 2 before, 4 insert, 8 delete, 16 update,
+        // 32 truncate, 64 instead-of.
+        let result = try await query("""
+            SELECT t.tgname,
+                   t.tgtype::int,
+                   pg_get_expr(t.tgqual, t.tgrelid),
+                   p.proname,
+                   n2.nspname
+            FROM pg_catalog.pg_trigger t
+            JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
+            JOIN pg_catalog.pg_namespace n2 ON n2.oid = p.pronamespace
+            WHERE n.nspname = $1 AND c.relname = $2 AND NOT t.tgisinternal
+            ORDER BY t.tgname
+            """, [.string(table.schema), .string(table.name)])
+
+        return result.rows.compactMap { row in
+            guard let name = row[0].text, let raw = row[1].text.flatMap({ Int($0) }) else {
+                return nil
+            }
+            var events: [TriggerEvent] = []
+            if raw & 4 != 0 { events.append(.insert) }
+            if raw & 8 != 0 { events.append(.delete) }
+            if raw & 16 != 0 { events.append(.update) }
+            if raw & 32 != 0 { events.append(.truncate) }
+
+            let timing: TriggerTiming = if raw & 64 != 0 { .insteadOf }
+                else if raw & 2 != 0 { .before }
+                else { .after }
+
+            let call = [row[4].text, row[3].text]
+                .compactMap { $0 }
+                .map { "\"\($0)\"" }
+                .joined(separator: ".")
+            return TriggerInfo(
+                name: name,
+                timing: timing,
+                events: events,
+                isRowLevel: raw & 1 != 0,
+                condition: row[2].text,
+                functionCall: "\(call)()"
+            )
+        }
+    }
+
+    public func partitioning(of table: TableRef) async throws -> PartitioningInfo? {
+        let result = try await query("""
+            SELECT pg_get_partkeydef(c.oid)
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'p'
+            """, [.string(table.schema), .string(table.name)])
+
+        // `pg_get_partkeydef` renders "RANGE (created_at)"; split the strategy off the key.
+        guard let definition = result.rows.first?.first?.text,
+              let open = definition.firstIndex(of: "("),
+              definition.hasSuffix(")")
+        else { return nil }
+        let strategyText = definition[definition.startIndex ..< open]
+            .trimmingCharacters(in: .whitespaces)
+            .uppercased()
+        guard let strategy = PartitionStrategy(rawValue: strategyText) else { return nil }
+        let key = String(definition[definition.index(after: open) ..< definition.index(before: definition.endIndex)])
+
+        let children = try await query("""
+            SELECT c.relname,
+                   pg_get_expr(c.relpartbound, c.oid),
+                   c.reltuples::bigint
+            FROM pg_catalog.pg_inherits i
+            JOIN pg_catalog.pg_class c ON c.oid = i.inhrelid
+            JOIN pg_catalog.pg_class parent ON parent.oid = i.inhparent
+            JOIN pg_catalog.pg_namespace n ON n.oid = parent.relnamespace
+            WHERE n.nspname = $1 AND parent.relname = $2
+            ORDER BY c.relname
+            """, [.string(table.schema), .string(table.name)])
+
+        return PartitioningInfo(
+            strategy: strategy,
+            key: key,
+            partitions: children.rows.compactMap { row in
+                guard let name = row[0].text else { return nil }
+                return PartitionInfo(
+                    name: name,
+                    bound: row[1].text,
+                    approximateRowCount: row[2].text.flatMap { Int64($0) }
+                )
+            }
+        )
+    }
+
+    public func collations(in database: String) async throws -> [CollationInfo] {
+        // A PostgreSQL collation belongs to a schema, not to a character set, and the same
+        // name appears in several encodings; the designer only needs the names.
+        let result = try await query("""
+            SELECT DISTINCT c.collname
+            FROM pg_catalog.pg_collation c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.collnamespace
+            WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+               OR c.collname IN ('default', 'C', 'POSIX')
+            ORDER BY c.collname
+            """, [])
+        return result.rows.compactMap { row in
+            row.first?.text.map { CollationInfo(name: $0, isDefault: $0 == "default") }
+        }
+    }
+}

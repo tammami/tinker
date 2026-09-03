@@ -252,3 +252,27 @@ public actor FakeTunnel: Tunnel {
         open = false
     }
 }
+
+// MARK: - Table designer reads
+
+extension FakeIntrospector {
+    public func checkConstraints(of table: TableRef) async throws -> [CheckConstraintInfo] {
+        note("checkConstraints")
+        return [CheckConstraintInfo(name: "positive_id", expression: "id > 0")]
+    }
+
+    public func triggers(of table: TableRef) async throws -> [TriggerInfo] {
+        note("triggers")
+        return []
+    }
+
+    public func partitioning(of table: TableRef) async throws -> PartitioningInfo? {
+        note("partitioning")
+        return nil
+    }
+
+    public func collations(in database: String) async throws -> [CollationInfo] {
+        note("collations")
+        return [CollationInfo(name: "C", isDefault: true)]
+    }
+}

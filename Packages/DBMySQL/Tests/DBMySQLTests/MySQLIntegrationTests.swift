@@ -557,6 +557,59 @@ final class MySQLIntegrationTests: XCTestCase {
             XCTAssertGreaterThan(batches, 100)
         }
     }
+
+    /// The four reads the table designer added (SPEC §8, §15b), against real catalogs.
+    func testDesignerReadsCheckConstraintsTriggersAndPartitioning() async throws {
+        try await withEachServer { connection, server in
+            guard let introspector = connection.introspector as? MySQLIntrospector else {
+                return XCTFail("expected the MySQL introspector")
+            }
+            func table(_ name: String) -> TableRef {
+                TableRef(schema: SchemaRef.mysql(server.database), name: name)
+            }
+
+            let checks = try await introspector.checkConstraints(of: table("checked_values"))
+            if introspector.supportsCheckConstraints {
+                XCTAssertEqual(checks.map(\.name).sorted(), ["label_not_blank", "quantity_positive"])
+                let quantity = try XCTUnwrap(checks.first { $0.name == "quantity_positive" })
+                XCTAssertTrue(quantity.expression.contains("quantity"), quantity.expression)
+            } else {
+                // Before 8.0.16 the server parses CHECK and discards it, so there is
+                // genuinely nothing in the catalog to read.
+                XCTAssertTrue(checks.isEmpty)
+            }
+
+            let customerChecks = try await introspector.checkConstraints(of: table("customers"))
+            XCTAssertTrue(customerChecks.isEmpty)
+
+            let triggers = try await introspector.triggers(of: table("audited"))
+            XCTAssertEqual(triggers.count, 1, "expected the one fixture trigger")
+            let trigger = try XCTUnwrap(triggers.first)
+            XCTAssertEqual(trigger.name, "audited_bump")
+            XCTAssertEqual(trigger.timing, .before)
+            XCTAssertEqual(trigger.events, [.update], "a MySQL trigger fires on exactly one event")
+            XCTAssertTrue(trigger.isRowLevel)
+            XCTAssertTrue((trigger.body ?? "").contains("touched"), trigger.body ?? "nil")
+
+            let measurementPartitioning = try await introspector.partitioning(of: table("measurements"))
+            let partitioning = try XCTUnwrap(measurementPartitioning)
+            XCTAssertEqual(partitioning.strategy, .range)
+            XCTAssertTrue(partitioning.key.contains("taken_at"), partitioning.key)
+            XCTAssertEqual(partitioning.partitions.map(\.name).sorted(), ["p2024", "p2025"])
+            let firstPartition = try XCTUnwrap(partitioning.partitions.first)
+            XCTAssertTrue((firstPartition.bound ?? "").contains("2025"), firstPartition.bound ?? "nil")
+
+            let none = try await introspector.partitioning(of: table("customers"))
+            XCTAssertNil(none, "an unpartitioned table reports nil, not an empty partition list")
+
+            let collations = try await introspector.collations(in: server.database)
+            XCTAssertFalse(collations.isEmpty)
+            XCTAssertTrue(
+                collations.contains { $0.characterSet != nil },
+                "MySQL groups collations under a character set"
+            )
+        }
+    }
 }
 
 /// Decoder checks that need no server.
@@ -628,4 +681,5 @@ final class MySQLValueDecoderTests: XCTestCase {
             "DELETE"
         )
     }
+
 }

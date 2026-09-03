@@ -127,8 +127,10 @@ CREATE TABLE unique_not_null (code text NOT NULL UNIQUE, payload text);
 INSERT INTO unique_not_null VALUES ('a', '1'), ('b', '2');
 
 -- Relationships and derived relations.
-DROP TABLE IF EXISTS orders;
-DROP TABLE IF EXISTS customers;
+-- CASCADE because customer_totals below depends on both, so a second run of this
+-- fixture would otherwise fail on the view it created the first time.
+DROP TABLE IF EXISTS orders CASCADE;
+DROP TABLE IF EXISTS customers CASCADE;
 CREATE TABLE customers (
     id   integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name text NOT NULL,

@@ -359,12 +359,17 @@ public struct IntrospectionCache: Sendable {
         case routines(SchemaRef)
         case ddl(TableRef)
         case rowCount(TableRef)
+        case checkConstraints(TableRef)
+        case triggers(TableRef)
+        case partitioning(TableRef)
+        case collations(database: String)
 
         /// The table an entry belongs to, so one table's DDL change clears just that table.
         public var table: TableRef? {
             switch self {
             case let .columns(table), let .indexes(table), let .foreignKeys(table),
-                 let .primaryKey(table), let .ddl(table), let .rowCount(table):
+                 let .primaryKey(table), let .ddl(table), let .rowCount(table),
+                 let .checkConstraints(table), let .triggers(table), let .partitioning(table):
                 table
             default:
                 nil

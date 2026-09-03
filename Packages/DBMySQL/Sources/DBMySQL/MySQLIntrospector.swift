@@ -344,3 +344,113 @@ public struct MySQLIntrospector: SchemaIntrospector {
         }
     }
 }
+
+// MARK: - Table designer reads (SPEC §8, §15b)
+
+extension MySQLIntrospector {
+    /// True where `information_schema.CHECK_CONSTRAINTS` exists at all.
+    var supportsCheckConstraints: Bool {
+        version.flavor == .mariadb ? version.isAtLeast(10, 2) : version.isAtLeast(8, 0, 16)
+    }
+
+    public func checkConstraints(of table: TableRef) async throws -> [CheckConstraintInfo] {
+        // MySQL only grew CHECK constraints in 8.0.16; before that the parser accepted
+        // them and threw them away, so there is nothing to read rather than nothing to say.
+        guard supportsCheckConstraints else { return [] }
+        let result = try await query("""
+            SELECT tc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
+            FROM information_schema.TABLE_CONSTRAINTS tc
+            JOIN information_schema.CHECK_CONSTRAINTS cc
+              ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
+             AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+            WHERE tc.TABLE_SCHEMA = ? AND tc.TABLE_NAME = ? AND tc.CONSTRAINT_TYPE = 'CHECK'
+            ORDER BY tc.CONSTRAINT_NAME
+            """, [.string(table.database), .string(table.name)])
+
+        return result.rows.compactMap { row in
+            guard let name = row[0].text, let clause = row[1].text else { return nil }
+            return CheckConstraintInfo(name: name, expression: clause)
+        }
+    }
+
+    public func triggers(of table: TableRef) async throws -> [TriggerInfo] {
+        let result = try await query("""
+            SELECT TRIGGER_NAME,
+                   ACTION_TIMING,
+                   EVENT_MANIPULATION,
+                   ACTION_STATEMENT,
+                   ACTION_ORDER
+            FROM information_schema.TRIGGERS
+            WHERE EVENT_OBJECT_SCHEMA = ? AND EVENT_OBJECT_TABLE = ?
+            ORDER BY ACTION_ORDER, TRIGGER_NAME
+            """, [.string(table.database), .string(table.name)])
+
+        return result.rows.compactMap { row in
+            guard let name = row[0].text,
+                  let timing = row[1].text.flatMap({ TriggerTiming(rawValue: $0.uppercased()) }),
+                  let event = row[2].text.flatMap({ TriggerEvent(rawValue: $0.uppercased()) })
+            else { return nil }
+            // A MySQL trigger fires on exactly one event and is always row-level.
+            return TriggerInfo(
+                name: name,
+                timing: timing,
+                events: [event],
+                isRowLevel: true,
+                body: row[3].text
+            )
+        }
+    }
+
+    public func partitioning(of table: TableRef) async throws -> PartitioningInfo? {
+        let result = try await query("""
+            SELECT PARTITION_NAME,
+                   PARTITION_METHOD,
+                   PARTITION_EXPRESSION,
+                   PARTITION_DESCRIPTION,
+                   TABLE_ROWS
+            FROM information_schema.PARTITIONS
+            WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND PARTITION_NAME IS NOT NULL
+            ORDER BY PARTITION_ORDINAL_POSITION
+            """, [.string(table.database), .string(table.name)])
+
+        // An unpartitioned table has one row here with a null PARTITION_NAME, which the
+        // WHERE clause above has already removed.
+        guard let first = result.rows.first,
+              let method = first[1].text.flatMap({ PartitionStrategy(rawValue: $0.uppercased()) }),
+              let key = first[2].text
+        else { return nil }
+
+        let partitions = result.rows.compactMap { row -> PartitionInfo? in
+            guard let name = row[0].text else { return nil }
+            return PartitionInfo(
+                name: name,
+                bound: row[3].text,
+                approximateRowCount: row[4].text.flatMap { Int64($0) }
+            )
+        }
+        return PartitioningInfo(
+            strategy: method,
+            key: key,
+            partitions: partitions,
+            // HASH and KEY are described by how many partitions there are, not by bounds.
+            partitionCount: (method == .hash || method == .key || method == .linearHash
+                || method == .linearKey) ? partitions.count : nil
+        )
+    }
+
+    public func collations(in database: String) async throws -> [CollationInfo] {
+        let result = try await query("""
+            SELECT COLLATION_NAME, CHARACTER_SET_NAME, IS_DEFAULT
+            FROM information_schema.COLLATIONS
+            ORDER BY CHARACTER_SET_NAME, COLLATION_NAME
+            """, [])
+        return result.rows.compactMap { row in
+            guard let name = row[0].text else { return nil }
+            return CollationInfo(
+                name: name,
+                characterSet: row[1].text,
+                isDefault: (row[2].text ?? "").uppercased() == "YES"
+            )
+        }
+    }
+}

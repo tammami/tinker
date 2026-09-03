@@ -699,6 +699,28 @@ extension PostgresIntrospector: ServerIntrospector {
         return "\(verb) \(name) AS\n\(body.trimmingCharacters(in: .whitespacesAndNewlines))\n"
     }
 
+    /// Which databases the role may connect to, and the attributes it carries.
+    public func grants(for user: ServerUserInfo) async throws -> [String] {
+        let result = try await query("""
+            SELECT d.datname
+            FROM pg_catalog.pg_database d
+            WHERE d.datallowconn AND NOT d.datistemplate
+              AND has_database_privilege($1, d.datname, 'CONNECT')
+            ORDER BY d.datname
+            """, [.string(user.name)])
+        var lines: [String] = []
+        var attributes: [String] = []
+        if user.isSuperuser { attributes.append("SUPERUSER") }
+        if user.canLogin { attributes.append("LOGIN") }
+        if user.canCreateDatabase { attributes.append("CREATEDB") }
+        if user.canCreateRole { attributes.append("CREATEROLE") }
+        if !attributes.isEmpty { lines.append(attributes.joined(separator: " ")) }
+        let databases = result.rows.compactMap { $0.first?.text }
+        if !databases.isEmpty { lines.append("CONNECT ON " + databases.joined(separator: ", ")) }
+        if let extra = user.attributes { lines.append(extra) }
+        return lines
+    }
+
     public func routineDefinition(
         in schema: SchemaRef, name: String, signature: String, kind: RoutineKind
     ) async throws -> String {

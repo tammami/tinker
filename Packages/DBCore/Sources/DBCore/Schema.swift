@@ -585,6 +585,8 @@ public protocol ServerIntrospector: Sendable {
     func routineDefinition(
         in schema: SchemaRef, name: String, signature: String, kind: RoutineKind
     ) async throws -> String
+    /// What a user may do, one line per grant, as the server reports it.
+    func grants(for user: ServerUserInfo) async throws -> [String]
 }
 
 extension SchemaIntrospector {

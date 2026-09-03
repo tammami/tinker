@@ -531,6 +531,13 @@ extension MySQLIntrospector: ServerIntrospector {
         }
     }
 
+    /// `SHOW GRANTS`, one statement per line, exactly as the server writes them.
+    public func grants(for user: ServerUserInfo) async throws -> [String] {
+        let account = "\(SQLLiteral.quoteString(user.name, dialect: .mysql))@\(SQLLiteral.quoteString(user.host ?? "%", dialect: .mysql))"
+        let result = try await query("SHOW GRANTS FOR \(account)")
+        return result.rows.compactMap { $0.first?.text }
+    }
+
     public func viewDefinition(_ table: TableRef) async throws -> String {
         let name = Identifier.qualified(table, dialect: .mysql)
         let result = try await query("SHOW CREATE VIEW \(name)")

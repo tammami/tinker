@@ -748,3 +748,25 @@ extension MySQLIntegrationTests {
         }
     }
 }
+
+extension MySQLIntegrationTests {
+    func testGrantsAreShownVerbatimAndCreateUserIsRefusedVerbatim() async throws {
+        try await withEachServer { connection, server in
+            let introspector = try XCTUnwrap(connection.introspector.server)
+            let users = try await introspector.users()
+            let me = try XCTUnwrap(users.first { $0.name == server.user })
+            let grants = try await introspector.grants(for: me)
+            XCTAssertTrue(grants.contains { $0.uppercased().hasPrefix("GRANT") }, "\(grants)")
+            XCTAssertTrue(grants.contains { $0.contains("dbstudio_test") }, "\(grants)")
+            let statements = try UserOperations.create(
+                UserRequest(name: "dbstudio_test_new_user", host: "localhost", password: "x"), dialect: .mysql
+            )
+            do {
+                _ = try await connection.executeCollecting(statements[0])
+                XCTFail("expected the server to refuse")
+            } catch let error as DBError {
+                XCTAssertFalse(error.errorDescription?.isEmpty ?? true)
+            }
+        }
+    }
+}

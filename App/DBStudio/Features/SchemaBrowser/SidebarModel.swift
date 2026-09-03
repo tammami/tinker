@@ -79,11 +79,25 @@ public final class SidebarModel {
 
     public func isExpanded(_ id: SidebarItem.ID) -> Bool { expanded.contains(id) }
 
-    /// Expands a node, loading its children the first time.
-    public func expand(_ item: SidebarItem) async {
-        expanded.insert(item.id)
+    /// Records that a node is open, without waiting for its children.
+    ///
+    /// The disclosure control reads this back on the very next layout pass, so it has to
+    /// change synchronously; doing it inside the loading task made the triangle snap shut
+    /// again before the query returned.
+    public func markExpanded(_ id: SidebarItem.ID) {
+        expanded.insert(id)
+    }
+
+    /// Loads a node's children if they have not been read yet.
+    public func loadChildrenIfNeeded(_ item: SidebarItem) async {
         guard childCache[item.id] == nil, !loading.contains(item.id) else { return }
         await loadChildren(of: item)
+    }
+
+    /// Expands a node, loading its children the first time.
+    public func expand(_ item: SidebarItem) async {
+        markExpanded(item.id)
+        await loadChildrenIfNeeded(item)
     }
 
     public func collapse(_ id: SidebarItem.ID) {
@@ -257,7 +271,14 @@ public final class SidebarModel {
                 )
             }
 
-        case .tableFolder, .table, .routine, .loading, .failure:
+        case .tableFolder:
+            // The schema's own load already attached this folder's tables. There is
+            // nothing further to read, and caching an empty list here would make
+            // `applyCachedChildren` replace those tables with it — the folder would then
+            // draw as open and empty while its badge still counted them.
+            return item.children ?? []
+
+        case .table, .routine, .loading, .failure:
             return []
         }
     }

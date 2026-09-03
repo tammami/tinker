@@ -98,6 +98,70 @@ enum SmokeTest {
             check("table has columns", !(tab.model?.columns.isEmpty ?? true))
             check("status line is populated", !tab.statusText.isEmpty)
 
+            // The sidebar tree, level by level, exactly as the view expands it.
+            let sidebar = SidebarModel(environment: environment)
+            sidebar.rebuildRoots()
+            check("sidebar lists the connection", !sidebar.roots.isEmpty)
+            guard let connectionItem = sidebar.roots.first(where: { $0.connectionID == config.id })
+                ?? sidebar.roots.first
+            else {
+                check("sidebar has a connection row", false)
+                exit(1)
+            }
+            await sidebar.expand(connectionItem)
+            let databaseItems = sidebar.find(id: connectionItem.id)?.children ?? []
+            check("connection expands to \(databaseItems.count) database(s)", !databaseItems.isEmpty)
+
+            guard let databaseItem = databaseItems.first(where: { $0.title == database })
+                ?? databaseItems.first
+            else {
+                check("a database row exists", false)
+                exit(1)
+            }
+            await sidebar.expand(databaseItem)
+            let schemaItems = sidebar.find(id: databaseItem.id)?.children ?? []
+            check("database expands to \(schemaItems.count) schema(s)", !schemaItems.isEmpty)
+
+            guard let schemaItem = schemaItems.first else {
+                check("a schema row exists", false)
+                exit(1)
+            }
+            await sidebar.expand(schemaItem)
+            let folders = sidebar.find(id: schemaItem.id)?.children ?? []
+            check("schema expands to \(folders.count) folder(s)", !folders.isEmpty)
+
+            let tableRows = folders.flatMap { $0.children ?? [] }.filter { $0.tableRef != nil }
+            check("folders hold \(tableRows.count) table row(s)", !tableRows.isEmpty)
+            check("quick open sees \(sidebar.knownTables.count) table(s)", !sidebar.knownTables.isEmpty)
+
+            // Expanding a folder is the step the view performs and this check used to
+            // skip: it read the folders' children without ever opening one. Doing so
+            // asked the loader for children a folder already had, and the empty result it
+            // returned replaced them, so the folder drew open and empty in the real app.
+            guard let tableFolder = folders.first(where: {
+                ($0.children ?? []).contains { $0.tableRef != nil }
+            }) else {
+                check("a folder holds tables", false)
+                exit(1)
+            }
+            let beforeExpand = (tableFolder.children ?? []).count
+            await sidebar.expand(tableFolder)
+            let afterExpand = (sidebar.find(id: tableFolder.id)?.children ?? []).count
+            check(
+                "expanding \(tableFolder.title) keeps its \(beforeExpand) table(s), got \(afterExpand)",
+                afterExpand == beforeExpand
+            )
+
+            // The action a double-click performs.
+            let workspace = WorkspaceModel(environment: environment)
+            guard let firstTable = tableRows.first?.tableRef else {
+                check("a table row carries a reference", false)
+                exit(1)
+            }
+            let opened = workspace.openTable(firstTable, connectionID: config.id)
+            check("double-click opens a tab for \(firstTable.name)", workspace.tabs.count == 1)
+            check("the tab is selected", workspace.selectedTabID == opened.id)
+
             await query.releaseHeldConnection()
             await environment.disconnectAll()
         } catch {

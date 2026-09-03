@@ -97,28 +97,41 @@ struct SidebarRow: View {
         Binding(
             get: { sidebar.isExpanded(item.id) },
             set: { expanded in
-                Task { @MainActor in
-                    if expanded { await sidebar.expand(item) } else { sidebar.collapse(item.id) }
+                // The state change is synchronous so the triangle stays open; the query
+                // that fills the children runs after.
+                guard expanded else {
+                    sidebar.collapse(item.id)
+                    return
                 }
+                sidebar.markExpanded(item.id)
+                if case let .connection(id) = item.kind { sidebar.watchState(of: id) }
+                Task { await sidebar.loadChildrenIfNeeded(item) }
             }
         )
     }
 
     @ViewBuilder
     var label: some View {
-        HStack(spacing: 6) {
+        // Eight points between the icon and its text, and a little air after the
+        // disclosure triangle: at six the glyphs crowd the label.
+        HStack(spacing: 8) {
             if case let .connection(id) = item.kind {
+                let config = workspace.environment.connections.first { $0.id == id }
                 Circle()
                     .fill(sidebar.state(of: id).indicatorColor)
                     .frame(width: 8, height: 8)
-                if let config = workspace.environment.connections.first(where: { $0.id == id }),
-                   let color = config.color {
+                // Which engine this is, so a MySQL row is not a PostgreSQL row with a
+                // different name.
+                if let config {
+                    EngineMark(dialect: config.dialect)
+                }
+                if let color = config?.color {
                     Circle().fill(color.swiftUIColor).frame(width: 6, height: 6)
                 }
             } else {
                 Image(systemName: item.symbolName)
                     .foregroundStyle(.secondary)
-                    .frame(width: 14)
+                    .frame(width: 16)
             }
             Text(item.title)
                 .lineLimit(1)
@@ -140,22 +153,41 @@ struct SidebarRow: View {
             }
             Spacer(minLength: 0)
         }
+        .padding(.leading, 4)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) { handleDoubleClick() }
+        // A simultaneous gesture, because the list row and the disclosure control both
+        // want the click and a plain `onTapGesture` loses to them.
+        .simultaneousGesture(TapGesture(count: 2).onEnded { handleDoubleClick() })
+        .simultaneousGesture(TapGesture(count: 1).onEnded { workspace.sidebarSelection = item.id })
+    }
+
+    /// Opens whatever the row points at: a table becomes a tab, anything else toggles.
+    func activate() {
+        switch item.kind {
+        case let .table(id, info):
+            onOpenTable(info.ref, id, false)
+        default:
+            toggleExpansion()
+        }
+    }
+
+    func toggleExpansion() {
+        if sidebar.isExpanded(item.id) {
+            sidebar.collapse(item.id)
+        } else {
+            sidebar.markExpanded(item.id)
+            if case let .connection(id) = item.kind { sidebar.watchState(of: id) }
+            Task { await sidebar.loadChildrenIfNeeded(item) }
+        }
     }
 
     func handleDoubleClick() {
-        switch item.kind {
-        case let .connection(id):
-            Task { @MainActor in
-                sidebar.watchState(of: id)
-                await sidebar.expand(item)
-            }
-        case let .table(id, info):
+        workspace.sidebarSelection = item.id
+        if case let .table(id, info) = item.kind {
             onOpenTable(info.ref, id, NSEvent.modifierFlags.contains(.option))
-        default:
-            Task { @MainActor in await sidebar.toggle(item) }
+            return
         }
+        toggleExpansion()
     }
 
     @ViewBuilder
@@ -165,6 +197,8 @@ struct SidebarRow: View {
             connectionMenu(id)
         case let .table(id, info):
             tableMenu(connectionID: id, info: info)
+        case .database, .schema, .tableFolder, .routineFolder, .group:
+            Button(sidebar.isExpanded(item.id) ? "Collapse" : "Expand") { toggleExpansion() }
         default:
             EmptyView()
         }

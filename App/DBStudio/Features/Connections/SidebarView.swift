@@ -339,7 +339,7 @@ struct SidebarRow: View {
             Divider()
             newObjectItems(connectionID: id, schema: ref)
             Divider()
-            Button(sidebar.isExpanded(item.id) ? "Collapse" : "Expand") { toggleExpansion() }
+            collapseItem
         case let .routineFolder(id, ref):
             Button { newRoutine(connectionID: id, schema: ref, procedure: false) } label: {
                 Label("New Function…", systemImage: Icon.function)
@@ -348,16 +348,37 @@ struct SidebarRow: View {
                 Label("New Procedure…", systemImage: Icon.procedure)
             }
             Divider()
-            Button(sidebar.isExpanded(item.id) ? "Collapse" : "Expand") { toggleExpansion() }
-        case .database, .group:
-            Button(sidebar.isExpanded(item.id) ? "Collapse" : "Expand") { toggleExpansion() }
-            if case let .database(id, _) = item.kind {
-                Button { onNewQuery(id, "") } label: {
-                    Label("New Query", systemImage: Icon.newQuery)
-                }
+            collapseItem
+        case let .database(id, _):
+            Button { onNewQuery(id, "") } label: {
+                Label("New Query", systemImage: Icon.newQuery)
             }
+            Divider()
+            if sidebar.isExpanded(item.id) {
+                // Closes this database and everything opened beneath it, like Navicat's
+                // Close Database; the connection itself stays up.
+                Button { sidebar.collapseSubtree(item.id) } label: {
+                    Label("Close Database", systemImage: Icon.collapse)
+                }
+            } else {
+                Button("Open Database") { toggleExpansion() }
+            }
+        case .group:
+            collapseItem
         default:
             EmptyView()
+        }
+    }
+
+    /// Collapse closes the whole branch, not just the one triangle.
+    @ViewBuilder
+    private var collapseItem: some View {
+        if sidebar.isExpanded(item.id) {
+            Button { sidebar.collapseSubtree(item.id) } label: {
+                Label("Collapse", systemImage: Icon.collapse)
+            }
+        } else {
+            Button("Expand") { toggleExpansion() }
         }
     }
 

@@ -104,6 +104,26 @@ public final class SidebarModel {
         expanded.remove(id)
     }
 
+    /// Closes a node and every node beneath it, and forgets what they had loaded, so
+    /// reopening reads the server again and nothing stays resident for a closed branch.
+    public func collapseSubtree(_ id: SidebarItem.ID) {
+        let prefix = id + "/"
+        expanded = expanded.filter { $0 != id && !$0.hasPrefix(prefix) }
+        childCache = childCache.filter { $0.key != id && !$0.key.hasPrefix(prefix) }
+        rebuildRoots()
+        applyCachedChildren()
+    }
+
+    /// What Disconnect does to the tree: every node of the connection closes and empties.
+    public func collapseConnection(_ connectionID: UUID) {
+        let marker = connectionID.uuidString
+        expanded = expanded.filter { !$0.contains(marker) }
+        childCache = childCache.filter { !$0.key.contains(marker) }
+        knownTables.removeAll { $0.connection == connectionID }
+        rebuildRoots()
+        applyCachedChildren()
+    }
+
     public func toggle(_ item: SidebarItem) async {
         if expanded.contains(item.id) {
             collapse(item.id)

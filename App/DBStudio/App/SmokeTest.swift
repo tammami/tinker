@@ -171,6 +171,16 @@ enum SmokeTest {
                 afterExpand == beforeExpand
             )
 
+            // Close Database folds the branch and forgets its children; Disconnect folds the lot.
+            sidebar.collapseSubtree(databaseItem.id)
+            check("close database folds the branch", !sidebar.isExpanded(databaseItem.id) && !sidebar.isExpanded(schemaItem.id))
+            check("close database keeps the connection open", sidebar.isExpanded(connectionItem.id))
+            check("a closed branch holds nothing", (sidebar.find(id: databaseItem.id)?.children ?? []).isEmpty)
+            sidebar.collapseConnection(config.id)
+            check("disconnect folds the connection", sidebar.expanded.isEmpty && sidebar.knownTables.isEmpty)
+            await sidebar.expand(connectionItem)
+            check("reopening reads the databases again", !(sidebar.find(id: connectionItem.id)?.children ?? []).isEmpty)
+
             // The action a double-click performs.
             let workspace = WorkspaceModel(environment: environment)
             guard let firstTable = tableRows.first?.tableRef else {

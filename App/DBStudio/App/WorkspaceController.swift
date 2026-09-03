@@ -196,6 +196,7 @@ public final class WorkspaceController {
         let open = workspace.tabs(for: connectionID)
         let unsaved = open.filter { hasUnsavedWork($0) }.count
         guard !open.isEmpty else {
+            sidebar.collapseConnection(connectionID)
             Task { await environment.session(for: connectionID)?.disconnect() }
             return
         }
@@ -210,6 +211,7 @@ public final class WorkspaceController {
             action: { [weak self] in
                 guard let self else { return }
                 closeTabs(for: connectionID)
+                sidebar.collapseConnection(connectionID)
                 await environment.session(for: connectionID)?.disconnect()
             }
         )

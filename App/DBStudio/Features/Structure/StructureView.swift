@@ -11,7 +11,15 @@ public struct StructureView: View {
     let isProduction: Bool
 
     @State private var pane: Pane = .columns
-    @State private var isPreviewPresented = false
+    @State private var ownPreviewPresented = false
+    /// A sheet that hosts the editor drives the preview from its own footer.
+    private let externalPreview: Binding<Bool>?
+    /// False hides Edit / Discard / Preview / Done, for a host that supplies its own.
+    private let showsActions: Bool
+
+    private var isPreviewPresented: Binding<Bool> {
+        externalPreview ?? $ownPreviewPresented
+    }
 
     enum Pane: String, CaseIterable, Identifiable {
         case columns = "Columns"
@@ -25,9 +33,16 @@ public struct StructureView: View {
         var id: String { rawValue }
     }
 
-    public init(controller: StructureController, isProduction: Bool = false) {
+    public init(
+        controller: StructureController,
+        isProduction: Bool = false,
+        previewPresented: Binding<Bool>? = nil,
+        showsActions: Bool = true
+    ) {
         self.controller = controller
         self.isProduction = isProduction
+        externalPreview = previewPresented
+        self.showsActions = showsActions
     }
 
     public var body: some View {
@@ -60,7 +75,7 @@ public struct StructureView: View {
             await controller.load()
             await controller.loadCollationsIfNeeded()
         }
-        .sheet(isPresented: $isPreviewPresented) {
+        .sheet(isPresented: isPreviewPresented) {
             DDLPreviewView(
                 statements: controller.pendingStatements,
                 dialect: controller.dialect,
@@ -69,9 +84,9 @@ public struct StructureView: View {
                 isProduction: isProduction,
                 onExecute: {
                     await controller.execute()
-                    isPreviewPresented = false
+                    isPreviewPresented.wrappedValue = false
                 },
-                onCancel: { isPreviewPresented = false }
+                onCancel: { isPreviewPresented.wrappedValue = false }
             )
         }
     }
@@ -80,43 +95,50 @@ public struct StructureView: View {
 
     private var toolbar: some View {
         PaneBar {
+            // The pane picker gives way; the buttons keep their size and never wrap.
             Picker("Pane", selection: $pane) {
                 ForEach(Pane.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .fixedSize()
+            .frame(maxWidth: 620)
 
-            Spacer()
+            Spacer(minLength: DesignTokens.Spacing.sm)
 
-            if controller.isEditing {
-                let count = controller.pendingStatements.count
-                if count > 0 {
-                    Badge(text: "\(count) statement\(count == 1 ? "" : "s")", color: .orange)
-                } else {
-                    Text("No changes").font(.caption).foregroundStyle(.secondary)
-                }
+            if showsActions {
+                if controller.isEditing {
+                    let count = controller.pendingStatements.count
+                    if count > 0 {
+                        Badge(text: "\(count) statement\(count == 1 ? "" : "s")", color: .orange)
+                    } else {
+                        Text("No changes").font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                    }
 
-                Button("Discard") { controller.discardChanges() }
+                    Button("Discard") { controller.discardChanges() }
+                        .disabled(!controller.hasPendingChanges)
+                        .fixedSize()
+
+                    Button {
+                        isPreviewPresented.wrappedValue = true
+                    } label: {
+                        Label("Preview…", systemImage: Icon.source)
+                    }
+                    .keyboardShortcut("p", modifiers: [.command, .shift])
                     .disabled(!controller.hasPendingChanges)
+                    .buttonStyle(.borderedProminent)
+                    .fixedSize()
 
-                Button {
-                    isPreviewPresented = true
-                } label: {
-                    Label("Preview…", systemImage: Icon.source)
+                    Button("Done") { controller.isEditing = false }
+                        .fixedSize()
+                } else {
+                    Button {
+                        controller.isEditing = true
+                    } label: {
+                        Label("Edit", systemImage: Icon.edit)
+                    }
+                    .disabled(controller.edited == nil)
+                    .fixedSize()
                 }
-                .keyboardShortcut("p", modifiers: [.command, .shift])
-                .disabled(!controller.hasPendingChanges)
-                .buttonStyle(.borderedProminent)
-
-                Button("Done") { controller.isEditing = false }
-            } else {
-                Button {
-                    controller.isEditing = true
-                } label: {
-                    Label("Edit", systemImage: Icon.edit)
-                }
-                .disabled(controller.edited == nil)
             }
         }
         .controlSize(.small)

@@ -72,6 +72,8 @@ struct Badge: View {
         Text(text)
             .font(.caption2.weight(.semibold))
             .monospacedDigit()
+            .lineLimit(1)
+            .fixedSize()
             .padding(.horizontal, DesignTokens.Spacing.xs + 1)
             .padding(.vertical, 1)
             .background(isProminent ? color : color.opacity(0.16))

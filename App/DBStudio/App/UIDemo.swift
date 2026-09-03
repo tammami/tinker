@@ -131,6 +131,11 @@ enum UIDemo {
                 // The path a connection with no default database takes: the builder
                 // starts on nothing and falls back to the first schema the server lists.
                 controller.openQueryBuilder(SchemaRef(database: "", schema: ""), connectionID: config.id)
+            case "newtable":
+                if let ref = demoSchemaRef(schema) {
+                    workspace.newTableContext = (config.id, ref)
+                    workspace.isNewTablePresented = true
+                }
             case "palette":
                 workspace.isCommandPalettePresented = true
             case "snippets":

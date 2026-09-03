@@ -36,7 +36,8 @@ public struct WorkspaceView: View {
                 onOpenTable: openTable,
                 onNewQuery: newQuery,
                 onOpenSource: { object, id in controller.openSource(object, connectionID: id) },
-                onOpenActivity: { id in controller.openServerActivity(connectionID: id) }
+                onOpenActivity: { id in controller.openServerActivity(connectionID: id) },
+                onOpenBuilder: { schema, id in controller.openQueryBuilder(schema, connectionID: id) }
             )
             .navigationSplitViewColumnWidth(
                 min: DesignTokens.Metrics.sidebarMinWidth,
@@ -157,10 +158,14 @@ public struct WorkspaceView: View {
                     isProduction: context.isProduction,
                     onCreated: { table in
                         workspace.isNewTablePresented = false
+                        workspace.newTableContext = nil
                         openTable(table, context.connectionID, false)
-                        controller.refresh()
+                        Task { await sidebar.refresh(connectionID: context.connectionID) }
                     },
-                    onCancel: { workspace.isNewTablePresented = false }
+                    onCancel: {
+                        workspace.isNewTablePresented = false
+                        workspace.newTableContext = nil
+                    }
                 )
             } else {
                 noConnectionSheet("New table") { workspace.isNewTablePresented = false }
@@ -379,6 +384,16 @@ public struct WorkspaceView: View {
                     onEditInQuery: { sql in newQuery(tab.connectionID, sql) }
                 )
                 .id(tab.id)
+            case let .queryBuilder(schema):
+                QueryBuilderView(
+                    controller: controller.builderController(for: tab, schema: schema),
+                    fontName: settings.editorFontName,
+                    fontSize: settings.editorFontSize,
+                    onOpenInQuery: { sql in newQuery(tab.connectionID, sql) },
+                    onOpenTable: { table in openTable(table, tab.connectionID, false) },
+                    onSchemaChanged: { Task { await sidebar.refresh(connectionID: tab.connectionID) } }
+                )
+                .id(tab.id)
             }
         } else {
             welcome
@@ -504,7 +519,7 @@ public struct WorkspaceView: View {
         case .table: tableControllers[tab.id]?.model
         case .query: queryControllers[tab.id]?.selectedResult?.grid
         // The other tabs are not grids; copy and export act on grids.
-        case .objects, .serverActivity, .source: nil
+        case .objects, .serverActivity, .source, .queryBuilder: nil
         }
     }
 
@@ -512,7 +527,7 @@ public struct WorkspaceView: View {
         let selection: GridSelection = switch tab.kind {
         case .table: tableControllers[tab.id]?.selection ?? GridSelection()
         case .query: queryControllers[tab.id]?.selection ?? GridSelection()
-        case .objects, .serverActivity, .source: GridSelection()
+        case .objects, .serverActivity, .source, .queryBuilder: GridSelection()
         }
         let columns = selection.columns(totalColumns: grid.columns.count)
         return selection.rows(totalRows: grid.displayRowCount).map { row in
@@ -579,6 +594,11 @@ public struct WorkspaceView: View {
 
     /// Where a new table would go: the schema of whatever is open, or the connection's own.
     var designerContext: (connectionID: UUID, schema: SchemaRef, dialect: SQLDialect, isProduction: Bool)? {
+        // Asked for from the sidebar: that folder's schema, whatever tab is in front.
+        if let context = workspace.newTableContext,
+           let config = environment.connections.first(where: { $0.id == context.connectionID }) {
+            return (context.connectionID, context.schema, config.dialect, config.isProduction)
+        }
         guard let connectionID = workspace.selectedTab?.connectionID
             ?? workspace.tabs.first?.connectionID
             ?? environment.connections.first?.id,

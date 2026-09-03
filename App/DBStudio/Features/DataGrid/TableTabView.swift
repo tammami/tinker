@@ -129,7 +129,7 @@ public struct TableTabView: View {
                     dialect: model.dialect,
                     rules: $controller.filterRules,
                     quickSearch: $controller.quickSearch,
-                    onApply: { rules in Task { await controller.applyFilter(rules) } },
+                    onApply: { rules in controller.applyFilterLive(rules) },
                     onQuickSearch: { text in Task { await controller.applyQuickSearch(text) } }
                 )
                 Divider()

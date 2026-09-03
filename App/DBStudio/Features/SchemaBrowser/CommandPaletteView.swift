@@ -147,6 +147,7 @@ public struct CommandPaletteView: View {
             ("Find Table…", Icon.search, "⌘⇧O", { ws.isQuickOpenPresented = true }),
             ("New Connection…", Icon.add, nil, { ws.presentNewConnection() }),
             ("New Table…", Icon.table, "⌘⇧N", { ws.isNewTablePresented = true }),
+            ("Query Builder", Icon.builder, "⌘⇧B", { controller.showQueryBuilder() }),
             ("Server Activity", Icon.activity, nil, { controller.showServerActivity() }),
             ("Query History…", Icon.history, "⌘Y", { ws.isHistoryPresented = true }),
             ("Snippets…", Icon.snippet, "⌘⇧K", { ws.isSnippetsPresented = true }),

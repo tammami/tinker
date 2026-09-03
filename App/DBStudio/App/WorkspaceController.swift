@@ -26,6 +26,8 @@ public final class WorkspaceController {
     public private(set) var serverControllers: [UUID: ServerActivityController] = [:]
     /// One per definition tab.
     public private(set) var sourceControllers: [UUID: SourceController] = [:]
+    /// One per query builder tab.
+    public private(set) var builderControllers: [UUID: QueryBuilderController] = [:]
     /// Toggled by the sidebar command; the split view reads it.
     public var isSidebarVisible = true
 
@@ -79,6 +81,39 @@ public final class WorkspaceController {
         let tab = workspace.openSource(object, connectionID: connectionID)
         _ = sourceController(for: tab, object: object)
         return tab
+    }
+
+    @discardableResult
+    public func openQueryBuilder(_ schema: SchemaRef, connectionID: UUID) -> WorkspaceTab {
+        let tab = workspace.openQueryBuilder(schema, connectionID: connectionID)
+        _ = builderController(for: tab, schema: schema)
+        return tab
+    }
+
+    public func builderController(for tab: WorkspaceTab, schema: SchemaRef) -> QueryBuilderController {
+        if let existing = builderControllers[tab.id] { return existing }
+        let made = QueryBuilderController(
+            schema: schema, connectionID: tab.connectionID,
+            dialect: dialect(for: tab.connectionID), environment: environment
+        )
+        builderControllers[tab.id] = made
+        return made
+    }
+
+    /// The builder for the front tab, when it is one.
+    public var activeBuilderController: QueryBuilderController? {
+        guard let tab = workspace.selectedTab else { return nil }
+        return builderControllers[tab.id]
+    }
+
+    public func showQueryBuilder() {
+        guard let id = workspace.activeConnectionID,
+              let config = environment.connections.first(where: { $0.id == id })
+        else { return }
+        let database = config.database ?? ""
+        let schema = workspace.selectedTab?.tableRef?.schemaRef
+            ?? SchemaRef(database: database, schema: config.dialect == .mysql ? database : "public")
+        openQueryBuilder(schema, connectionID: id)
     }
 
     public func sourceController(for tab: WorkspaceTab, object: SourceObject) -> SourceController {
@@ -166,6 +201,7 @@ public final class WorkspaceController {
         serverControllers.filter { !open.contains($0.key) }.values.forEach { $0.stopPolling() }
         serverControllers = serverControllers.filter { open.contains($0.key) }
         sourceControllers = sourceControllers.filter { open.contains($0.key) }
+        builderControllers = builderControllers.filter { open.contains($0.key) }
     }
 
     // MARK: - Commands the menus call

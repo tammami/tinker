@@ -125,6 +125,8 @@ public enum Icon {
     public static let variable = "slider.horizontal.3"
     public static let activity = "waveform.path.ecg"
     public static let source = "chevron.left.forwardslash.chevron.right"
+    public static let builder = "rectangle.connected.to.line.below"
+    public static let join = "link"
 
     // Tabs and panes
     public static let query = "text.alignleft"

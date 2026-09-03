@@ -19,6 +19,8 @@ public final class WorkspaceTab: Identifiable {
         case serverActivity
         /// The definition of a view or routine, read from the catalog.
         case source(SourceObject)
+        /// The visual query builder, on one schema.
+        case queryBuilder(SchemaRef)
     }
 
     public let id = UUID()
@@ -63,6 +65,7 @@ public final class WorkspaceTab: Identifiable {
         case .objects: Icon.objects
         case .serverActivity: Icon.activity
         case .source: Icon.source
+        case .queryBuilder: Icon.builder
         }
     }
 }
@@ -179,8 +182,10 @@ public final class WorkspaceModel {
     public var isInspectorVisible = false
     public var quickOpenQuery = ""
     public var isQuickOpenPresented = false
-    /// The table designer's two entry points (SPEC §15b.3, §15b.4).
+    /// The table designer's two entry points.
     public var isNewTablePresented = false
+    /// Where a new table goes when the request came from the sidebar rather than a tab.
+    public var newTableContext: (connectionID: UUID, schema: SchemaRef)?
     public var isStructureSyncPresented = false
     public var isHistoryPresented = false
     public var isExportPresented = false
@@ -295,6 +300,15 @@ public final class WorkspaceModel {
             return existing
         }
         let tab = WorkspaceTab(kind: .serverActivity, connectionID: connectionID, title: "Server")
+        open(tab)
+        return tab
+    }
+
+    /// Opens a new query builder tab on a schema.
+    @discardableResult
+    public func openQueryBuilder(_ schema: SchemaRef, connectionID: UUID) -> WorkspaceTab {
+        let number = tabs.filter { if case .queryBuilder = $0.kind { true } else { false } }.count + 1
+        let tab = WorkspaceTab(kind: .queryBuilder(schema), connectionID: connectionID, title: "Builder \(number)")
         open(tab)
         return tab
     }

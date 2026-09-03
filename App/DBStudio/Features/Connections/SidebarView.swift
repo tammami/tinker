@@ -10,6 +10,7 @@ public struct SidebarView: View {
     let onNewQuery: (UUID, String) -> Void
     let onOpenSource: (SourceObject, UUID) -> Void
     let onOpenActivity: (UUID) -> Void
+    let onOpenBuilder: (SchemaRef, UUID) -> Void
 
     @State private var searchText = ""
 
@@ -29,7 +30,8 @@ public struct SidebarView: View {
                     onOpenTable: onOpenTable,
                     onNewQuery: onNewQuery,
                     onOpenSource: onOpenSource,
-                    onOpenActivity: onOpenActivity
+                    onOpenActivity: onOpenActivity,
+                    onOpenBuilder: onOpenBuilder
                 )
             }
         }
@@ -104,6 +106,7 @@ struct SidebarRow: View {
     let onNewQuery: (UUID, String) -> Void
     let onOpenSource: (SourceObject, UUID) -> Void
     let onOpenActivity: (UUID) -> Void
+    let onOpenBuilder: (SchemaRef, UUID) -> Void
 
     var body: some View {
         Group {
@@ -113,7 +116,8 @@ struct SidebarRow: View {
                         SidebarRow(
                             item: child, sidebar: sidebar, workspace: workspace,
                             onOpenTable: onOpenTable, onNewQuery: onNewQuery,
-                            onOpenSource: onOpenSource, onOpenActivity: onOpenActivity
+                            onOpenSource: onOpenSource, onOpenActivity: onOpenActivity,
+                            onOpenBuilder: onOpenBuilder
                         )
                     }
                 } label: {
@@ -297,11 +301,11 @@ struct SidebarRow: View {
             Button { onNewQuery(id, "") } label: {
                 Label("New Query", systemImage: Icon.newQuery)
             }
-            Button {
-                workspace.isNewTablePresented = true
-            } label: {
-                Label("New Table…", systemImage: Icon.add)
+            Button { onOpenBuilder(ref, id) } label: {
+                Label("Query Builder", systemImage: Icon.builder)
             }
+            Divider()
+            newObjectItems(connectionID: id, schema: ref)
             Divider()
             Button(sidebar.isExpanded(item.id) ? "Collapse" : "Expand") { toggleExpansion() }
         case let .routine(id, schema, name, signature):
@@ -313,7 +317,31 @@ struct SidebarRow: View {
                 Label("Open Definition", systemImage: Icon.source)
             }
             Button { copy(name) } label: { Label("Copy Name", systemImage: Icon.copy) }
-        case .database, .tableFolder, .routineFolder, .group:
+        case let .tableFolder(id, ref, kind):
+            // The folder says what it holds, so its menu offers to make one of those.
+            if kind == .view || kind == .materializedView {
+                Button { onOpenBuilder(ref, id) } label: {
+                    Label("New View…", systemImage: Icon.view)
+                }
+            } else {
+                Button { presentNewTable(connectionID: id, schema: ref) } label: {
+                    Label("New Table…", systemImage: Icon.table)
+                }
+            }
+            Divider()
+            newObjectItems(connectionID: id, schema: ref)
+            Divider()
+            Button(sidebar.isExpanded(item.id) ? "Collapse" : "Expand") { toggleExpansion() }
+        case let .routineFolder(id, ref):
+            Button { newRoutine(connectionID: id, schema: ref, procedure: false) } label: {
+                Label("New Function…", systemImage: Icon.function)
+            }
+            Button { newRoutine(connectionID: id, schema: ref, procedure: true) } label: {
+                Label("New Procedure…", systemImage: Icon.procedure)
+            }
+            Divider()
+            Button(sidebar.isExpanded(item.id) ? "Collapse" : "Expand") { toggleExpansion() }
+        case .database, .group:
             Button(sidebar.isExpanded(item.id) ? "Collapse" : "Expand") { toggleExpansion() }
             if case let .database(id, _) = item.kind {
                 Button { onNewQuery(id, "") } label: {
@@ -325,11 +353,47 @@ struct SidebarRow: View {
         }
     }
 
+    /// New Table, New View, New Function, New Procedure: the same four everywhere a
+    /// schema or one of its folders is right-clicked.
+    @ViewBuilder
+    func newObjectItems(connectionID id: UUID, schema ref: SchemaRef) -> some View {
+        Button { presentNewTable(connectionID: id, schema: ref) } label: {
+            Label("New Table…", systemImage: Icon.table)
+        }
+        Button { onOpenBuilder(ref, id) } label: {
+            Label("New View…", systemImage: Icon.view)
+        }
+        Button { newRoutine(connectionID: id, schema: ref, procedure: false) } label: {
+            Label("New Function…", systemImage: Icon.function)
+        }
+        Button { newRoutine(connectionID: id, schema: ref, procedure: true) } label: {
+            Label("New Procedure…", systemImage: Icon.procedure)
+        }
+    }
+
+    func presentNewTable(connectionID: UUID, schema: SchemaRef) {
+        workspace.newTableContext = (connectionID, schema)
+        workspace.isNewTablePresented = true
+    }
+
+    /// Opens a query tab holding a `CREATE FUNCTION` / `CREATE PROCEDURE` skeleton in the
+    /// engine's own syntax, ready to edit and run.
+    func newRoutine(connectionID: UUID, schema: SchemaRef, procedure: Bool) {
+        let dialect = workspace.environment.connections.first { $0.id == connectionID }?.dialect ?? .postgresql
+        onNewQuery(connectionID, RoutineTemplates.skeleton(procedure: procedure, schema: schema, dialect: dialect))
+    }
+
     @ViewBuilder
     func connectionMenu(_ id: UUID) -> some View {
         if let config = workspace.environment.connections.first(where: { $0.id == id }) {
             Button { onNewQuery(id, "") } label: { Label("New Query", systemImage: Icon.newQuery) }
                 .keyboardShortcut("t", modifiers: .command)
+            Button {
+                let database = config.database ?? ""
+                onOpenBuilder(SchemaRef(database: database, schema: config.dialect == .mysql ? database : "public"), id)
+            } label: {
+                Label("Query Builder", systemImage: Icon.builder)
+            }
             Button { onOpenActivity(id) } label: { Label("Server Activity", systemImage: Icon.activity) }
             Divider()
             Button { workspace.editingConnection = config } label: { Label("Edit…", systemImage: Icon.edit) }
@@ -506,5 +570,54 @@ struct ConnectionStateDot: View {
         .frame(width: 8, height: 8)
         .help(state.describedForStatusBar)
         .accessibilityLabel(state.describedForStatusBar)
+    }
+}
+
+
+/// The starting text of a new routine, in each engine's own words.
+enum RoutineTemplates {
+    static func skeleton(procedure: Bool, schema: SchemaRef, dialect: SQLDialect) -> String {
+        let name = Identifier.qualify([schema.schema, procedure ? "new_procedure" : "new_function"], dialect: dialect)
+        switch (dialect, procedure) {
+        case (.postgresql, false):
+            return """
+            CREATE OR REPLACE FUNCTION \(name)(a integer, b integer)
+            RETURNS integer
+            LANGUAGE sql
+            AS $$
+                SELECT a + b;
+            $$;
+            """
+        case (.postgresql, true):
+            return """
+            CREATE OR REPLACE PROCEDURE \(name)(target_id integer)
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                -- statements
+            END;
+            $$;
+            """
+        case (.mysql, false):
+            return """
+            DELIMITER $$
+            CREATE FUNCTION \(name)(a INT, b INT)
+            RETURNS INT
+            DETERMINISTIC
+            BEGIN
+                RETURN a + b;
+            END $$
+            DELIMITER ;
+            """
+        case (.mysql, true):
+            return """
+            DELIMITER $$
+            CREATE PROCEDURE \(name)(IN target_id INT)
+            BEGIN
+                -- statements
+            END $$
+            DELIMITER ;
+            """
+        }
     }
 }

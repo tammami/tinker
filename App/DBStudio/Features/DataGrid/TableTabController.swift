@@ -224,19 +224,46 @@ public final class TableTabController: DataGridDelegate {
 
     /// The conditions the server sees: the filter rows plus the quick search, if any.
     private var effectiveFilter: [FilterRule] {
+        // A row whose value is still empty is being typed, not applied.
+        let complete = filterRules.filter { rule in
+            rule.op.operandCount == 0 || rule.values.contains { !($0.text ?? "").isEmpty }
+        }
         let trimmed = quickSearch.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return filterRules }
+        guard !trimmed.isEmpty else { return complete }
         // Every column but binary ones; a hex dump of a blob is not something anyone searches.
         let searchable = columnsInfo.filter { $0.kind != .bytes }.map(\.name)
-        return filterRules + [FilterRule.search(trimmed, in: searchable)]
+        return complete + [FilterRule.search(trimmed, in: searchable)]
     }
 
+    @ObservationIgnored private var liveFilterTask: Task<Void, Never>?
+
+    /// Applies the quick search after a short pause in typing, so each keystroke does not
+    /// send its own query and a fast typist costs the server one statement, not ten.
     public func applyQuickSearch(_ text: String) async {
         quickSearch = text
-        await model?.setFilter(effectiveFilter)
-        surfaceLoadError()
-        bumpRevision()
-        updateStatus()
+        await applyLiveFilter()
+    }
+
+    /// Applies the filter rows the same way; incomplete rows (a value still empty) wait.
+    public func applyFilterLive(_ rules: [FilterRule]) {
+        filterRules = rules
+        Task { await applyLiveFilter(persist: true) }
+    }
+
+    private func applyLiveFilter(persist: Bool = false) async {
+        liveFilterTask?.cancel()
+        let task = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, let self else { return }
+            await model?.setFilter(effectiveFilter)
+            guard !Task.isCancelled else { return }
+            surfaceLoadError()
+            bumpRevision()
+            updateStatus()
+            if persist { await persistPreferences() }
+        }
+        liveFilterTask = task
+        await task.value
     }
 
     /// The foreign key a column takes part in, and the value the focused row holds for it.

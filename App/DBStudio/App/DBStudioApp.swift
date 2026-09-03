@@ -152,6 +152,8 @@ struct DBStudioCommands: Commands {
             Button("New Connection…") { workspace?.workspace.presentNewConnection() }
             Button("New Table…") { workspace?.workspace.isNewTablePresented = true }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
+            Button("Query Builder") { workspace?.showQueryBuilder() }
+                .keyboardShortcut("b", modifiers: [.command, .shift])
             Button("Structure Sync…") { workspace?.workspace.isStructureSyncPresented = true }
             Divider()
             Button("Server Activity") { workspace?.showServerActivity() }

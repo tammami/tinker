@@ -68,6 +68,21 @@ enum UIDemo {
                 if case let .schema(id, ref) = schema.kind { _ = workspace.openObjects(ref, connectionID: id) }
             case "server":
                 controller.openServerActivity(connectionID: config.id)
+            case "builder":
+                if case let .schema(id, ref) = schema.kind {
+                    let tab = controller.openQueryBuilder(ref, connectionID: id)
+                    let builder = controller.builderController(for: tab, schema: ref)
+                    await builder.loadTables()
+                    if let customers = builder.availableTables.first(where: { $0.name == "customers" }) {
+                        await builder.add(customers.ref, at: CGPoint(x: 60, y: 60))
+                    }
+                    if let orders = builder.availableTables.first(where: { $0.name == "orders" }) {
+                        await builder.add(orders.ref, at: CGPoint(x: 420, y: 140))
+                    }
+                    builder.selectStar(ofTableNamed: "customers")
+                    builder.pane = .select
+                    builder.runPreview()
+                }
             case "source":
                 if let view = tables.first(where: { $0.kind == .view }) {
                     controller.openSource(SourceObject(kind: .view(view.ref)), connectionID: config.id)

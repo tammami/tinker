@@ -24,6 +24,9 @@ public struct FilterBarView: View {
                         .textFieldStyle(.plain)
                         .focused($isSearchFocused)
                         .onSubmit { onQuickSearch(quickSearch) }
+                        // Live: the rows follow the text as it is typed, the way a
+                        // person expects a search box to behave.
+                        .onChange(of: quickSearch) { _, new in onQuickSearch(new) }
                     if !quickSearch.isEmpty {
                         IconButton(icon: "xmark.circle.fill", label: "Clear search") {
                             quickSearch = ""
@@ -54,8 +57,7 @@ public struct FilterBarView: View {
 
                 if !rules.isEmpty {
                     Button("Apply") { onApply(rules) }
-                        .keyboardShortcut(.return, modifiers: [])
-                        .help("Apply the conditions (↩)")
+                        .help("Apply the conditions now; they also apply as you edit them")
                     Button("Clear") {
                         rules.removeAll()
                         onApply(rules)
@@ -89,14 +91,16 @@ public struct FilterBarView: View {
                             }
                             .labelsHidden()
                             .frame(width: 170)
+                            .onChange(of: rule.column) { _, _ in onApply(rules) }
 
                             Picker("Operator", selection: $rule.op) {
-                                ForEach(FilterOperator.allCases, id: \.self) { op in
+                                ForEach(FilterOperator.allCases.filter { $0 != .anyContains }, id: \.self) { op in
                                     Text(op.symbol).tag(op)
                                 }
                             }
                             .labelsHidden()
                             .frame(width: 120)
+                            .onChange(of: rule.op) { _, _ in onApply(rules) }
 
                             if rule.op.operandCount != 0 {
                                 TextField(
@@ -107,6 +111,7 @@ public struct FilterBarView: View {
                                 .textFieldStyle(.roundedBorder)
                                 .frame(maxWidth: 260)
                                 .onSubmit { onApply(rules) }
+                                .onChange(of: rule.values) { _, _ in onApply(rules) }
                             }
 
                             IconButton(icon: "minus.circle", label: "Remove this condition") {

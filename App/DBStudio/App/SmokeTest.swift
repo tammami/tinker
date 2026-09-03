@@ -98,6 +98,13 @@ enum SmokeTest {
             check("table has columns", !(tab.model?.columns.isEmpty ?? true))
             check("status line is populated", !tab.statusText.isEmpty)
 
+            // The quick search: one bound pattern per column, applied after a pause.
+            let before = tab.model?.rowCount ?? 0
+            await tab.applyQuickSearch("zzz-no-such-value-zzz")
+            check("quick search narrows \(before) rows to \(tab.model?.rowCount ?? -1)", tab.model?.rowCount == 0 && tab.errorText == nil)
+            await tab.applyQuickSearch("")
+            check("clearing the search restores the rows", tab.model?.rowCount == before)
+
             // The sidebar tree, level by level, exactly as the view expands it.
             let sidebar = SidebarModel(environment: environment)
             sidebar.rebuildRoots()

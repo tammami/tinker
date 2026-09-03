@@ -464,6 +464,22 @@ Validation: host/user required; port 1–65535; key file must exist and not be w
 
 ---
 
+### 11.4 Database overview ("Objects")
+
+Double-clicking a database or a schema in the sidebar opens an **Objects** tab listing what
+it holds, so a database can be surveyed without expanding a tree node at a time.
+
+- One row per object: name, kind, estimated rows, data length, engine (MySQL), collation,
+  owner (PostgreSQL), and comment. Every figure comes from the introspector; nothing here
+  runs `COUNT(*)`.
+- A search field filters the list by name as the user types. Sorting is by any column.
+- Double-clicking a row opens that table's tab; the context menu offers Open, Structure,
+  Copy DDL and Drop.
+- The counts are the server's estimates and are labelled as such, because a planner
+  estimate is not a row count and showing it as one is a lie the user cannot check.
+
+---
+
 ## 12. Data grid feature (Table tab and results)
 
 This is the highest-risk component. It is an `NSTableView` (view-based, `usesAutomaticRowHeights = false`, fixed row height 22pt) inside an `NSScrollView`, wrapped for SwiftUI. One implementation serves both Table tabs and query results; Table tabs add editing and paging controls.
@@ -483,6 +499,20 @@ final class GridDataSource {
     func ensureLoaded(range: Range<Int>) async  // triggers fetch of next page(s)
 }
 ```
+
+### 12.7 Pages
+
+A table tab shows one page of at most 1,000 rows, not an endless scroll. The status bar
+carries first / previous / next / last, the page number, and the row range being shown.
+
+- Moving between pages re-reads from the server; it never holds more than the current page.
+- The page size is a setting, defaulting to 1,000.
+- A filter or a sort returns to page 1, because both change what page 2 would mean.
+- Where the total is known — the filter's exact count, or a short final page — the status
+  bar shows it. Where it is only the planner's estimate, it says so rather than presenting
+  an estimate as a count.
+- Query results keep streaming as §13 describes: a result set is what the statement
+  returned, and paging it would mean running a different statement.
 
 - **Paging strategy for Table tabs:** page size 1,000 rows. Query is `SELECT <cols> FROM t [WHERE filter] [ORDER BY sort] LIMIT 1000 OFFSET n`. Both dialects. When the table has a single-column integer PK and no user sort, use keyset paging (`WHERE pk > last ORDER BY pk LIMIT 1000`) instead of OFFSET beyond page 50 (OFFSET degrades). Record the choice in the status bar tooltip.
 - **Streaming for query results:** rows append as batches arrive; grid calls `insertRows` incrementally; scroll position is preserved unless user is at the bottom.
@@ -540,6 +570,20 @@ Right-side panel (`⌘⌥I`) showing the focused cell: column name, native type,
 - Error position from `ServerError.position` maps to a red squiggle until the text changes.
 - Format SQL (`⌘⇧I`): a conservative formatter (uppercase keywords, one clause per line, indent sub-selects). Ship a small in-house implementation; do not pull a large dependency.
 
+### 13.1a The tab's session
+
+A query tab carries its own connection and database, chosen from two pickers in its
+toolbar. Statements run in that session, so a query reads `SELECT * FROM t` rather than
+`SELECT * FROM db.t`.
+
+- Changing it issues the engine's own switch: `USE db` on MySQL, `SET search_path TO
+  schema` on PostgreSQL, whose unqualified names resolve against the search path rather
+  than against a database it cannot change on an open connection. The picker is therefore
+  labelled Database on MySQL and Schema on PostgreSQL.
+- A new tab inherits the connection and database of whatever was in front of it.
+- The pickers show what the session actually holds after the switch, not what was asked
+  for: a failed switch leaves the previous database selected and reports the server's words.
+
 ### 13.2 Execution
 
 - `⌘↩`: if there is a selection, run the selection as one script; else run the statement under the cursor.
@@ -550,12 +594,32 @@ Right-side panel (`⌘⌥I`) showing the focused cell: column name, native type,
 - Query history: every executed statement (text, connection, database, timestamp, duration, row count / error) is stored in `DBStore` (SQLite), capped at 10,000 entries, searchable from a History panel (`⌘Y`). Double-click inserts into editor.
 - Default result row limit: none. Streaming handles it; the 200k banner from §12.1 applies.
 
+### 13.2a Result panes
+
+Each executed statement produces a result with four panes, chosen by a segmented control:
+
+- **Message** — the statement and what the server said, with its elapsed time.
+- **Result N** — the rows. One pane per result set the statement produced.
+- **Profile** — per-stage timings, where the engine offers them: MySQL's `SHOW PROFILE`
+  when profiling is available, PostgreSQL's `EXPLAIN (ANALYZE, FORMAT JSON)` stages.
+  Where the engine offers nothing, the pane says so instead of showing an empty table.
+- **Status** — the session counters the statement moved: MySQL's `SHOW SESSION STATUS`
+  differenced across the run, PostgreSQL's `pg_stat_database` deltas.
+
+The status line under the panes carries the SQL that ran, the elapsed time and the row
+count, so what produced the rows on screen is always visible.
+
 ### 13.3 Acceptance criteria
 
 - Pasting a 2,000-statement MySQL dump with `DELIMITER $$` procedures and running all executes correctly and reports per-statement results.
 - A PG syntax error at position 37 highlights the correct token.
 - Cancelling `SELECT pg_sleep(60)` returns within 1 s with `.cancelled`; the server connection is reusable afterwards (verified via `SELECT 1` on the same tab).
 - Autocomplete offers alias-qualified columns.
+- A query tab set to a database runs `SELECT * FROM t` without qualifying `t`.
+- A table of 2,500 rows shows 1,000, reports which page it is on, and reaches the last row
+  through the pager without ever holding more than one page.
+- The Objects list of a schema names every table the sidebar lists, with the same counts
+  the introspector reports.
 
 ---
 
@@ -676,6 +740,14 @@ Each phase lists deliverables and acceptance criteria. Do not reorder.
 ### Phase 7 — Release hardening (1 week)
 - Sparkle, signing, notarization script, crash reporting opt-in (local logs only, no third-party), first-run experience, app icon, DMG.
 - Accept: notarized DMG installs and runs on a clean macOS 14 machine with no Xcode.
+
+### Phase 9 — Objects list, pages, the tab's session and result panes (2 weeks)
+- §11.4 Objects tab, §12.7 pages, §13.1a connection and database pickers, §13.2a Message /
+  Result / Profile / Status panes.
+- Tests: paging unit tests over a fixture loader (first/last/next/previous, the page a
+  filter returns to); an integration test per engine that switches a tab's database and
+  runs an unqualified statement against it; Objects against the local fixtures.
+- Accept: the §13.3 criteria added for them.
 
 ### Phase 8 — Table designer and structure sync (4 weeks)
 - §15b in full, both engines. `DBSQL.DDLGenerator` diffs two `TableDefinition`s into ordered statements; the introspector gains check constraints, triggers, partitioning and collations (§8).

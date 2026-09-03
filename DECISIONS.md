@@ -262,3 +262,21 @@ Date: 2026-09-03
 **Consequences.** The repository's rules and its code agree again: work on the designer is now in scope because the spec says so, and everything still outside §16's phases is still forbidden. The cost is a fifth phase after "release hardening", so v0.1 as originally scoped is already shippable and Phase 8 lands on top of it.
 
 **What the spec now demands that v0.1 did not.** DDL must run in one transaction with the statements shown first, PostgreSQL must roll back on failure, and MySQL's implicit DDL commit must be stated to the user rather than hidden — because on MySQL a half-applied structure change is a real outcome, not a theoretical one.
+
+## ADR-0029 — A table tab shows pages, not an endless scroll
+Date: 2026-09-03
+
+**Context.** SPEC §12 built the grid around a scrollbar over the whole table: 1,000-row pages fetched behind a scroll position, with §12.6 asking that a million rows stay smooth. The user asked for what Navicat and TablePlus do instead — 1,000 rows on screen with a pager underneath.
+
+**Decision.** §12.7 replaces the endless scroll for **table tabs** with explicit pages: first / previous / next / last, the page number and the row range in the status bar, and never more than one page held. Query results keep streaming, because a result set is what one statement returned and paging it would mean running another.
+
+**Consequences.** The million-row acceptance criterion in §12.6 now applies to a page rather than to a scroll: the cost of reaching row 900,000 is one query, not 900 of them. The buffer, the keyset strategy and the paging planner all stay; what changes is who moves the page — the pager rather than the scrollbar. Memory is bounded by one page, which is strictly better than the old ceiling.
+
+## ADR-0030 — Estimates are labelled as estimates
+Date: 2026-09-03
+
+**Context.** The grid drew its row count from `approximateRowCount`, the planner's estimate. Under a filter that number describes a different set of rows entirely, and a filtered grid whose first page failed showed a million empty lines. The Objects list would carry the same figure per table.
+
+**Decision.** An estimate is only ever used where it is true — an unfiltered table — and is shown as an estimate. A filtered grid counts what it actually read, and the Objects list says its row figures are the server's estimates.
+
+**Consequences.** A filtered grid can under-report until the last page is reached, which is honest. Nothing runs `COUNT(*)` to make a number look precise, which is what §12 forbade for good reason on a large table.

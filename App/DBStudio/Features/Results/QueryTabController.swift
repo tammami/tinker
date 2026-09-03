@@ -27,8 +27,17 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     public var isReadOnly = false
     public var completionCandidates: [CompletionCandidate] = []
 
-    public let connectionID: UUID
-    public let dialect: SQLDialect
+    /// The connection the tab runs on. Changing it points the tab at another server
+    /// (SPEC §13.1a).
+    public var connectionID: UUID
+    public var dialect: SQLDialect
+
+    /// The database (MySQL) or schema (PostgreSQL) statements resolve unqualified names
+    /// against, so a query reads `SELECT * FROM t` rather than `SELECT * FROM db.t`.
+    public private(set) var sessionDatabase: String?
+    /// What the pickers offer.
+    public private(set) var availableConnections: [ConnectionConfig] = []
+    public private(set) var availableDatabases: [String] = []
     private let environment: AppEnvironment
     private var runTask: Task<Void, Never>?
     private var timerTask: Task<Void, Never>?
@@ -204,8 +213,12 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     /// The connection a statement runs on: the held one when a transaction is open, else
     /// a fresh lease returned as soon as the statement finishes.
     private func connectionForRun(session: ConnectionSession) async throws -> any SQLConnection {
-        if let heldConnection { return heldConnection }
+        if let heldConnection {
+            try await applySessionDatabase(on: heldConnection)
+            return heldConnection
+        }
         let (lease, connection) = try await session.lease()
+        try await applySessionDatabase(on: connection)
         if autoCommit {
             // Returned once the statement's stream is drained; the lease is released by
             // `releaseHeldConnection` when the tab closes or auto-commit turns back on.
@@ -218,6 +231,94 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             isInTransaction = true
         }
         return connection
+    }
+
+    /// Points the connection at the chosen database or schema.
+    ///
+    /// Applied on every acquisition rather than once: the pool can hand back a different
+    /// connection, and a `USE` on one says nothing about another.
+    private func applySessionDatabase(on connection: any SQLConnection) async throws {
+        guard let name = sessionDatabase, !name.isEmpty else { return }
+        let quoted = Identifier.quote(name, dialect: dialect)
+        let sql = switch dialect {
+        case .mysql: "USE \(quoted)"
+        // PostgreSQL cannot change database on an open connection; unqualified names
+        // resolve against the search path, which it can change.
+        case .postgresql: "SET search_path TO \(quoted)"
+        }
+        _ = try await connection.executeCollecting(sql)
+    }
+
+    // MARK: - The tab's session (SPEC §13.1a)
+
+    /// Reads what the pickers should offer for the current connection.
+    public func loadSessionChoices() async {
+        availableConnections = environment.connections
+        guard let session = environment.session(for: connectionID) else { return }
+        do {
+            _ = try await session.connect()
+            switch dialect {
+            case .mysql:
+                availableDatabases = try await session.introspection(.databases) {
+                    try await $0.databases()
+                }.map(\.name)
+            case .postgresql:
+                // The picker offers schemas, which is what an unqualified name resolves
+                // against on PostgreSQL.
+                let database = environment.connections
+                    .first { $0.id == connectionID }?.database ?? ""
+                availableDatabases = try await session.introspection(.schemas(database: database)) {
+                    try await $0.schemas(in: database)
+                }.filter { !$0.isSystem }.map(\.name)
+            }
+            if sessionDatabase == nil {
+                sessionDatabase = dialect == .mysql
+                    ? environment.connections.first { $0.id == connectionID }?.database
+                    : availableDatabases.first { $0 == "public" } ?? availableDatabases.first
+            }
+        } catch {
+            statusText = (error as? DBError)?.errorDescription ?? String(describing: error)
+        }
+    }
+
+    /// Switches the tab to another database or schema, reporting what the server said if
+    /// it refuses. The picker keeps the previous choice on failure.
+    public func selectDatabase(_ name: String) async {
+        let previous = sessionDatabase
+        sessionDatabase = name
+        guard let session = environment.session(for: connectionID) else { return }
+        do {
+            let connection: any SQLConnection
+            if let heldConnection {
+                connection = heldConnection
+            } else {
+                let (lease, fresh) = try await session.lease()
+                defer { Task { await session.release(lease) } }
+                connection = fresh
+            }
+            try await applySessionDatabase(on: connection)
+            statusText = "Using \(name)"
+        } catch {
+            sessionDatabase = previous
+            statusText = (error as? DBError)?.errorDescription ?? String(describing: error)
+        }
+    }
+
+    /// Points the tab at another connection, which is a different server and therefore a
+    /// different set of databases and a different completion cache.
+    public func selectConnection(_ id: UUID) async {
+        guard id != connectionID,
+              let config = environment.connections.first(where: { $0.id == id })
+        else { return }
+        await releaseHeldConnection()
+        connectionID = id
+        dialect = config.dialect
+        sessionDatabase = nil
+        availableDatabases = []
+        results.removeAll()
+        selectedResultID = nil
+        statusText = "Connected to \(config.name)"
+        await loadSessionChoices()
     }
 
     public func setAutoCommit(_ enabled: Bool) async {

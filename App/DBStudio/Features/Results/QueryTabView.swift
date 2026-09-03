@@ -55,6 +55,7 @@ public struct QueryTabView: View {
         }
         .task(id: tab.id) {
             controller.sql = tab.sql
+            await controller.loadSessionChoices()
             await controller.loadCompletionSources()
         }
         .onChange(of: controller.sql) { _, new in tab.sql = new }
@@ -94,6 +95,40 @@ public struct QueryTabView: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
+
+            Divider().frame(height: 14)
+
+            // The tab's session (SPEC §13.1a): statements resolve unqualified names here.
+            Picker("", selection: Binding(
+                get: { controller.connectionID },
+                set: { id in Task { await controller.selectConnection(id) } }
+            )) {
+                ForEach(controller.availableConnections) { config in
+                    Text(config.name).tag(config.id)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 160)
+            .help("The connection this tab runs on")
+
+            Picker("", selection: Binding(
+                get: { controller.sessionDatabase ?? "" },
+                set: { name in Task { await controller.selectDatabase(name) } }
+            )) {
+                if controller.sessionDatabase == nil {
+                    Text("Choose…").tag("")
+                }
+                ForEach(controller.availableDatabases, id: \.self) { name in
+                    Text(name).tag(name)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 170)
+            .help(
+                controller.dialect == .mysql
+                    ? "The database unqualified names resolve against (USE)"
+                    : "The schema unqualified names resolve against (search_path)"
+            )
 
             Divider().frame(height: 14)
 

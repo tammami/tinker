@@ -353,3 +353,44 @@ Phase 8 (ADR-0028).
 - **A database overview ("Objects") list** — every table with its row count, size, engine
   and collation, the way Navicat shows one when a database is opened — is not built and is
   not in SPEC.
+
+---
+
+## Phase 9 — Objects, pages, the tab's session, result panes (2026-09-03, in progress)
+
+SPEC gained §11.4 (Objects), §12.7 (pages), §13.1a (the tab's session) and §13.2a (result
+panes), plus Phase 9 in §16 and ADR-0029/0030.
+
+### Done
+
+- **A query tab carries its own connection and database.** Two pickers in its toolbar;
+  statements resolve unqualified names against them, so a query reads `SELECT * FROM t`.
+  MySQL switches with `USE`, PostgreSQL with `SET search_path` — it cannot change database
+  on an open connection, and the search path is what an unqualified name resolves against
+  there, so the picker is labelled Schema on PostgreSQL and Database on MySQL. The switch is
+  reapplied on every connection acquisition, because the pool can hand back another one.
+- **Autocomplete** (SPEC §13.1). The candidates were already implemented and alias-aware;
+  nothing had ever displayed them. A borderless panel beside the caret that never takes key
+  focus, with arrows, Return, Tab and Escape forwarded from the text view, ⌃Space to ask
+  for it, and the typed letters picked out in each row.
+- **The filter bug.** A filter whose first page failed left the grid drawing the table's
+  planner estimate as empty rows — the "empty table with thousands of rows". The estimate
+  describes the unfiltered table and is no longer used once a filter is on; a failed load
+  now reports the server's words instead of failing silently.
+- **The grid's row separators are gone**; only the header carries rules. The filter bar
+  starts visible.
+
+### Tests
+
+- `testAFilteredGridDoesNotCountTheWholeTable` — with the fix reverted it reports
+  1,000,000 rows, which is exactly what the screen showed.
+- `testAFilteredGridCountsWhatItLoaded`.
+- Verified in the app: the pickers show Local PostgreSQL / public, and
+  `SELECT * FROM customers` runs unqualified against that session.
+
+### Not done
+
+- **Pages (§12.7)** — specified, not built. A table tab still scrolls rather than paging.
+- **Objects list (§11.4)** — specified, not built.
+- **Result panes (§13.2a)** — Message / Result / Profile / Status specified, not built.
+- **The editor's line-number gutter** is still missing, as recorded in Phase 8.

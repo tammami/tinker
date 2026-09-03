@@ -1,4 +1,5 @@
 import DBCore
+import DBStore
 import Foundation
 import Observation
 import SwiftUI
@@ -26,38 +27,52 @@ public final class SidebarModel {
         rebuildRoots()
     }
 
-    /// Rebuilds the top level from the stored connections, honouring their group paths.
+    /// Rebuilds the top level: folders (nested, including empty ones the user made) with
+    /// their connections inside, then the connections that belong to no folder.
     public func rebuildRoots() {
-        var groups: [[String]: [SidebarItem]] = [:]
-        var ungrouped: [SidebarItem] = []
+        roots = buildLevel(path: [])
+    }
 
-        for config in environment.connections {
-            let item = SidebarItem(
-                id: config.id.uuidString,
-                kind: .connection(config.id),
-                title: config.name,
-                subtitle: "\(config.user)@\(config.host)",
-                symbolName: "cylinder",
-                children: childCache[config.id.uuidString] ?? []
-            )
-            if config.groupPath.isEmpty {
-                ungrouped.append(item)
-            } else {
-                groups[config.groupPath, default: []].append(item)
-            }
-        }
+    private func connectionItem(_ config: ConnectionConfig) -> SidebarItem {
+        SidebarItem(
+            id: config.id.uuidString,
+            kind: .connection(config.id),
+            title: config.name,
+            subtitle: "\(config.user)@\(config.host)",
+            symbolName: Icon.connection,
+            children: childCache[config.id.uuidString] ?? []
+        )
+    }
 
-        var items: [SidebarItem] = groups.keys.sorted { $0.joined() < $1.joined() }.map { path in
-            SidebarItem(
-                id: "group/\(path.joined(separator: "/"))",
-                kind: .group(path: path),
-                title: path.joined(separator: " › "),
-                symbolName: "folder",
-                children: groups[path] ?? []
+    /// The rows directly inside `path`: its subfolders, then its own connections.
+    private func buildLevel(path: [String]) -> [SidebarItem] {
+        var childNames: [String] = []
+        var seen: Set<String> = []
+        func note(_ candidate: [String]) {
+            guard candidate.count > path.count, candidate.starts(with: path) else { return }
+            let name = candidate[path.count]
+            if seen.insert(name).inserted { childNames.append(name) }
+        }
+        for group in environment.groups { note(group.path) }
+        for config in environment.connections { note(config.groupPath) }
+        childNames.sort { $0.localizedStandardCompare($1) == .orderedAscending }
+
+        var items: [SidebarItem] = childNames.map { name in
+            let folderPath = path + [name]
+            let children = buildLevel(path: folderPath)
+            return SidebarItem(
+                id: "group/\(folderPath.joined(separator: "\u{1F}"))",
+                kind: .group(path: folderPath),
+                title: name,
+                subtitle: children.isEmpty ? "empty" : nil,
+                symbolName: Icon.group,
+                children: children
             )
         }
-        items.append(contentsOf: ungrouped)
-        roots = items
+        items.append(contentsOf: environment.connections
+            .filter { $0.groupPath == path }
+            .map(connectionItem))
+        return items
     }
 
     public func state(of connectionID: UUID) -> ConnectionState {
@@ -77,7 +92,13 @@ public final class SidebarModel {
         }
     }
 
-    public func isExpanded(_ id: SidebarItem.ID) -> Bool { expanded.contains(id) }
+    /// Folders are open unless the user closed them; everything else is closed until opened.
+    public func isExpanded(_ id: SidebarItem.ID) -> Bool {
+        if id.hasPrefix("group/") { return !collapsedGroups.contains(id) }
+        return expanded.contains(id)
+    }
+
+    private var collapsedGroups: Set<SidebarItem.ID> = []
 
     /// Records that a node is open, without waiting for its children.
     ///
@@ -85,6 +106,7 @@ public final class SidebarModel {
     /// change synchronously; doing it inside the loading task made the triangle snap shut
     /// again before the query returned.
     public func markExpanded(_ id: SidebarItem.ID) {
+        if id.hasPrefix("group/") { collapsedGroups.remove(id) }
         expanded.insert(id)
     }
 
@@ -101,6 +123,7 @@ public final class SidebarModel {
     }
 
     public func collapse(_ id: SidebarItem.ID) {
+        if id.hasPrefix("group/") { collapsedGroups.insert(id) }
         expanded.remove(id)
     }
 
@@ -195,18 +218,7 @@ public final class SidebarModel {
     private func children(of item: SidebarItem) async throws -> [SidebarItem] {
         switch item.kind {
         case let .group(path):
-            return environment.connections
-                .filter { $0.groupPath == path }
-                .map { config in
-                    SidebarItem(
-                        id: config.id.uuidString,
-                        kind: .connection(config.id),
-                        title: config.name,
-                        subtitle: "\(config.user)@\(config.host)",
-                        symbolName: "cylinder",
-                        children: childCache[config.id.uuidString] ?? []
-                    )
-                }
+            return buildLevel(path: path)
 
         case let .connection(id):
             guard let session = environment.session(for: id) else { return [] }

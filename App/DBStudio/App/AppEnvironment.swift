@@ -17,6 +17,8 @@ import SwiftUI
 @Observable
 public final class AppEnvironment {
     public private(set) var connections: [ConnectionConfig] = []
+    /// Folders the user made, including empty ones; connections carry their own path.
+    public private(set) var groups: [StoredGroup] = []
     public private(set) var startupError: String?
     /// How NULL is written when copied, mirrored from settings so grids need not know them.
     public var nullDisplayText = ""
@@ -45,6 +47,7 @@ public final class AppEnvironment {
             let store = try await DBStore()
             self.store = store
             connections = try await store.connections()
+            groups = try await store.groups()
             startupError = nil
         } catch {
             startupError = String(describing: error)
@@ -88,6 +91,74 @@ public final class AppEnvironment {
             copy.passwordRef = destination
         }
         await save(copy)
+    }
+
+    // MARK: - Folders
+
+    /// Every folder path, stored or implied by a connection, sorted for a menu.
+    public var allGroupPaths: [[String]] {
+        var paths = Set(groups.map(\.path).filter { !$0.isEmpty })
+        for config in connections where !config.groupPath.isEmpty {
+            // A nested path implies each of its ancestors.
+            for depth in 1 ... config.groupPath.count { paths.insert(Array(config.groupPath.prefix(depth))) }
+        }
+        return paths.sorted { $0.joined(separator: "\u{1F}") < $1.joined(separator: "\u{1F}") }
+    }
+
+    public func createGroup(_ path: [String]) async {
+        guard !path.isEmpty else { return }
+        try? await store?.save(StoredGroup(path: path, isExpanded: true, sortOrder: groups.count))
+        groups = (try? await store?.groups()) ?? groups
+    }
+
+    /// Renames the last component of a folder; every connection and subfolder follows.
+    public func renameGroup(_ path: [String], to name: String) async {
+        guard !path.isEmpty, !name.isEmpty else { return }
+        let renamed = Array(path.dropLast()) + [name]
+        for config in connections where config.groupPath.starts(with: path) {
+            var moved = config
+            moved.groupPath = renamed + Array(config.groupPath.dropFirst(path.count))
+            try? await store?.save(moved)
+        }
+        for group in groups where group.path.starts(with: path) {
+            try? await store?.deleteGroup(path: group.path)
+            try? await store?.save(StoredGroup(
+                path: renamed + Array(group.path.dropFirst(path.count)),
+                isExpanded: group.isExpanded, sortOrder: group.sortOrder
+            ))
+        }
+        await reloadFromStore()
+    }
+
+    /// Removes a folder; its connections and subfolders move up to its parent.
+    public func removeGroup(_ path: [String]) async {
+        guard !path.isEmpty else { return }
+        let parent = Array(path.dropLast())
+        for config in connections where config.groupPath.starts(with: path) {
+            var moved = config
+            moved.groupPath = parent + Array(config.groupPath.dropFirst(path.count))
+            try? await store?.save(moved)
+        }
+        for group in groups where group.path.starts(with: path) {
+            try? await store?.deleteGroup(path: group.path)
+            let rest = Array(group.path.dropFirst(path.count))
+            if !rest.isEmpty {
+                try? await store?.save(StoredGroup(path: parent + rest, isExpanded: group.isExpanded, sortOrder: group.sortOrder))
+            }
+        }
+        await reloadFromStore()
+    }
+
+    public func move(_ config: ConnectionConfig, toGroup path: [String]) async {
+        var moved = config
+        moved.groupPath = path
+        await save(moved)
+        if !path.isEmpty, !groups.contains(where: { $0.path == path }) { await createGroup(path) }
+    }
+
+    private func reloadFromStore() async {
+        connections = (try? await store?.connections()) ?? connections
+        groups = (try? await store?.groups()) ?? groups
     }
 
     public func reorderConnections(_ ids: [UUID]) async {

@@ -1,6 +1,7 @@
 import DBCore
 import DBSQL
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The connections and schema tree.
 public struct SidebarView: View {
@@ -15,6 +16,7 @@ public struct SidebarView: View {
     let onDisconnect: (UUID) -> Void
     let onCloseTabs: (UUID) -> Void
     let onCloseDatabase: (UUID, String, SidebarItem.ID) -> Void
+    let onOpenUsers: (UUID, String?) -> Void
 
     @State private var searchText = ""
 
@@ -38,23 +40,38 @@ public struct SidebarView: View {
                     onOpenBuilder: onOpenBuilder,
                     onDisconnect: onDisconnect,
                     onCloseTabs: onCloseTabs,
-                    onCloseDatabase: onCloseDatabase
+                    onCloseDatabase: onCloseDatabase,
+                    onOpenUsers: onOpenUsers
                 )
             }
         }
         .listStyle(.sidebar)
         .searchable(text: $searchText, placement: .sidebar, prompt: "Filter connections and tables")
+        .sheet(item: $workspace.folderEditor) { editor in
+            FolderNameSheet(editor: editor, environment: workspace.environment) { workspace.folderEditor = nil }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 Divider()
                 HStack(spacing: DesignTokens.Spacing.sm) {
-                    Button {
-                        workspace.presentNewConnection()
+                    Menu {
+                        Button {
+                            workspace.presentNewConnection()
+                        } label: {
+                            Label("New Connection…", systemImage: Icon.connection)
+                        }
+                        .keyboardShortcut("n", modifiers: [.command, .option])
+                        Button {
+                            workspace.folderEditor = FolderEditor(kind: .create(parent: []))
+                        } label: {
+                            Label("New Folder…", systemImage: Icon.group)
+                        }
                     } label: {
-                        Label("New Connection", systemImage: Icon.add)
+                        Label("New", systemImage: Icon.add)
                     }
-                    .buttonStyle(.borderless)
-                    .help("Add a connection")
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Add a connection or a folder")
                     Spacer()
                     Text(connectionSummary)
                         .font(.caption)
@@ -117,6 +134,7 @@ struct SidebarRow: View {
     let onDisconnect: (UUID) -> Void
     let onCloseTabs: (UUID) -> Void
     let onCloseDatabase: (UUID, String, SidebarItem.ID) -> Void
+    let onOpenUsers: (UUID, String?) -> Void
 
     var body: some View {
         // The context menu sits on the row's own label, not on the disclosure group: a menu
@@ -130,7 +148,8 @@ struct SidebarRow: View {
                             onOpenTable: onOpenTable, onNewQuery: onNewQuery,
                             onOpenSource: onOpenSource, onOpenActivity: onOpenActivity,
                             onOpenBuilder: onOpenBuilder, onDisconnect: onDisconnect,
-                            onCloseTabs: onCloseTabs, onCloseDatabase: onCloseDatabase
+                            onCloseTabs: onCloseTabs, onCloseDatabase: onCloseDatabase,
+                            onOpenUsers: onOpenUsers
                         )
                     }
                 } label: {
@@ -174,6 +193,7 @@ struct SidebarRow: View {
                 Image(systemName: item.symbolName)
                     .foregroundStyle(iconColor)
                     .frame(width: DesignTokens.Metrics.iconWidth)
+                    .symbolVariant(isGroup ? .fill : .none)
                 Text(item.title)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -199,6 +219,9 @@ struct SidebarRow: View {
         .simultaneousGesture(TapGesture(count: 2).onEnded { handleDoubleClick() })
         .simultaneousGesture(TapGesture(count: 1).onEnded { workspace.sidebarSelection = item.id })
         .help(helpText)
+        // Connections drag; folders (and the space between folders, via the connection
+        // rows themselves) accept them, which is how a connection changes folder.
+        .modifier(ConnectionDragModifier(item: item, workspace: workspace))
     }
 
     /// A connection row: the connection's own colour as a thin stripe, the engine badge,
@@ -239,8 +262,11 @@ struct SidebarRow: View {
         }
     }
 
+    private var isGroup: Bool { if case .group = item.kind { true } else { false } }
+
     private var iconColor: Color {
         switch item.kind {
+        case .group: .accentColor
         case .failure: .red
         case .table(_, let info) where info.kind == .view || info.kind == .materializedView: .purple
         case .table: .accentColor
@@ -338,27 +364,14 @@ struct SidebarRow: View {
             }
             Button { copy(name) } label: { Label("Copy Name", systemImage: Icon.copy) }
         case let .tableFolder(id, ref, kind):
-            // The folder says what it holds, so its menu offers to make one of those.
-            if kind == .view || kind == .materializedView {
-                Button { onOpenBuilder(ref, id) } label: {
-                    Label("New View…", systemImage: Icon.view)
-                }
-            } else {
-                Button { presentNewTable(connectionID: id, schema: ref) } label: {
-                    Label("New Table…", systemImage: Icon.table)
-                }
-            }
-            Divider()
-            newObjectItems(connectionID: id, schema: ref)
+            // The folder says what it holds, so what it holds comes first; the rest follow
+            // once, below a rule.
+            let isViews = kind == .view || kind == .materializedView
+            newObjectItems(connectionID: id, schema: ref, first: isViews ? .view : .table)
             Divider()
             collapseItem
         case let .routineFolder(id, ref):
-            Button { newRoutine(connectionID: id, schema: ref, procedure: false) } label: {
-                Label("New Function…", systemImage: Icon.function)
-            }
-            Button { newRoutine(connectionID: id, schema: ref, procedure: true) } label: {
-                Label("New Procedure…", systemImage: Icon.procedure)
-            }
+            newObjectItems(connectionID: id, schema: ref, first: .function)
             Divider()
             collapseItem
         case let .database(id, name):
@@ -376,6 +389,9 @@ struct SidebarRow: View {
                 Divider()
                 newObjectItems(connectionID: id, schema: ref)
             }
+            Button { onOpenUsers(id, name) } label: {
+                Label("Users & Privileges…", systemImage: Icon.user)
+            }
             Divider()
             if !sidebar.isExpanded(item.id) {
                 Button("Open Database") { toggleExpansion() }
@@ -385,7 +401,41 @@ struct SidebarRow: View {
             Button { onCloseDatabase(id, name, item.id) } label: {
                 Label("Close Database", systemImage: Icon.collapse)
             }
-        case .group:
+        case let .group(path):
+            Button {
+                workspace.folderEditor = FolderEditor(kind: .create(parent: path))
+            } label: {
+                Label("New Folder Inside…", systemImage: Icon.group)
+            }
+            Button {
+                workspace.editingConnection = ConnectionConfig(
+                    name: "New Connection", groupPath: path, dialect: .postgresql,
+                    host: "localhost", port: 5_432, user: NSUserName()
+                )
+                workspace.isEditingNewConnection = true
+            } label: {
+                Label("New Connection Here…", systemImage: Icon.connection)
+            }
+            Divider()
+            Button {
+                workspace.folderEditor = FolderEditor(kind: .rename(path: path))
+            } label: {
+                Label("Rename Folder…", systemImage: Icon.rename)
+            }
+            Button(role: .destructive) {
+                let count = workspace.environment.connections.count { $0.groupPath.starts(with: path) }
+                workspace.confirmation = DestructiveConfirmation(
+                    title: "Remove folder “\(path.last ?? "")”?",
+                    message: count == 0
+                        ? "The folder is empty."
+                        : "Its \(count) connection\(count == 1 ? "" : "s") are kept and move up one level. Nothing on any server changes.",
+                    confirmTitle: "Remove Folder",
+                    action: { await workspace.environment.removeGroup(path) }
+                )
+            } label: {
+                Label("Remove Folder…", systemImage: Icon.delete)
+            }
+            Divider()
             collapseItem
         default:
             EmptyView()
@@ -412,21 +462,35 @@ struct SidebarRow: View {
         }
     }
 
+    enum NewObject { case table, view, function, procedure }
+
     /// New Table, New View, New Function, New Procedure: the same four everywhere a
-    /// schema or one of its folders is right-clicked.
+    /// schema or one of its folders is right-clicked, each exactly once. `first` is the
+    /// one the folder is about; it leads and the others follow below a rule.
     @ViewBuilder
-    func newObjectItems(connectionID id: UUID, schema ref: SchemaRef) -> some View {
-        Button { presentNewTable(connectionID: id, schema: ref) } label: {
-            Label("New Table…", systemImage: Icon.table)
-        }
-        Button { onOpenBuilder(ref, id) } label: {
-            Label("New View…", systemImage: Icon.view)
-        }
-        Button { newRoutine(connectionID: id, schema: ref, procedure: false) } label: {
-            Label("New Function…", systemImage: Icon.function)
-        }
-        Button { newRoutine(connectionID: id, schema: ref, procedure: true) } label: {
-            Label("New Procedure…", systemImage: Icon.procedure)
+    func newObjectItems(connectionID id: UUID, schema ref: SchemaRef, first: NewObject? = nil) -> some View {
+        let order: [NewObject] = [.table, .view, .function, .procedure]
+        let ordered = first.map { lead in [lead] + order.filter { $0 != lead } } ?? order
+        ForEach(Array(ordered.enumerated()), id: \.offset) { index, kind in
+            if index == 1, first != nil { Divider() }
+            switch kind {
+            case .table:
+                Button { presentNewTable(connectionID: id, schema: ref) } label: {
+                    Label("New Table…", systemImage: Icon.table)
+                }
+            case .view:
+                Button { onOpenBuilder(ref, id) } label: {
+                    Label("New View…", systemImage: Icon.view)
+                }
+            case .function:
+                Button { newRoutine(connectionID: id, schema: ref, procedure: false) } label: {
+                    Label("New Function…", systemImage: Icon.function)
+                }
+            case .procedure:
+                Button { newRoutine(connectionID: id, schema: ref, procedure: true) } label: {
+                    Label("New Procedure…", systemImage: Icon.procedure)
+                }
+            }
         }
     }
 
@@ -453,10 +517,29 @@ struct SidebarRow: View {
                 Label("Query Builder", systemImage: Icon.builder)
             }
             Button { onOpenActivity(id) } label: { Label("Server Activity", systemImage: Icon.activity) }
+            Button { onOpenUsers(id, config.database) } label: { Label("Users & Privileges…", systemImage: Icon.user) }
             Divider()
             Button { workspace.editingConnection = config } label: { Label("Edit…", systemImage: Icon.edit) }
             Button { Task { await workspace.environment.duplicate(config) } } label: {
                 Label("Duplicate", systemImage: Icon.duplicate)
+            }
+            Menu {
+                Button("No Folder") { Task { await workspace.environment.move(config, toGroup: []) } }
+                    .disabled(config.groupPath.isEmpty)
+                let folders = workspace.environment.allGroupPaths
+                if !folders.isEmpty { Divider() }
+                ForEach(folders, id: \.self) { path in
+                    Button(path.joined(separator: " › ")) {
+                        Task { await workspace.environment.move(config, toGroup: path) }
+                    }
+                    .disabled(path == config.groupPath)
+                }
+                Divider()
+                Button("New Folder…") {
+                    workspace.folderEditor = FolderEditor(kind: .create(parent: [], moving: config.id))
+                }
+            } label: {
+                Label("Move to Folder", systemImage: Icon.group)
             }
             Divider()
             Button { Task { await sidebar.refresh(connectionID: id) } } label: {
@@ -683,6 +766,134 @@ enum RoutineTemplates {
             END $$
             DELIMITER ;
             """
+        }
+    }
+}
+
+
+/// Connections can be dragged; folders take the drop. Everything else is inert.
+struct ConnectionDragModifier: ViewModifier {
+    let item: SidebarItem
+    let workspace: WorkspaceModel
+
+    func body(content: Content) -> some View {
+        switch item.kind {
+        case let .connection(id):
+            content
+                .onDrag { NSItemProvider(object: id.uuidString as NSString) }
+        case let .group(path):
+            content
+                .onDrop(of: [.plainText, .utf8PlainText, .text], delegate: FolderDropDelegate(path: path, workspace: workspace))
+        default:
+            content
+        }
+    }
+}
+
+/// Moves a dropped connection into the folder it landed on.
+struct FolderDropDelegate: DropDelegate {
+    let path: [String]
+    let workspace: WorkspaceModel
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.plainText, .utf8PlainText, .text])
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let provider = info.itemProviders(for: [.plainText, .utf8PlainText, .text]).first else { return false }
+        let workspace = workspace
+        let path = path
+        _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let text = object as? String, let id = UUID(uuidString: text) else { return }
+            Task { @MainActor in
+                guard let config = workspace.environment.connections.first(where: { $0.id == id }) else { return }
+                await workspace.environment.move(config, toGroup: path)
+            }
+        }
+        return true
+    }
+}
+
+/// What the folder sheet is doing: making a folder (perhaps to move a connection into),
+/// or renaming one.
+public struct FolderEditor: Identifiable {
+    public enum Kind {
+        case create(parent: [String], moving: UUID? = nil)
+        case rename(path: [String])
+    }
+
+    public let id = UUID()
+    public let kind: Kind
+
+    public init(kind: Kind) { self.kind = kind }
+}
+
+/// Names a folder. Folders are paths, so a name may not contain the separator.
+struct FolderNameSheet: View {
+    let editor: FolderEditor
+    let environment: AppEnvironment
+    let onDismiss: () -> Void
+
+    @State private var name = ""
+
+    private var isRename: Bool { if case .rename = editor.kind { true } else { false } }
+    private var trimmed: String { name.trimmingCharacters(in: .whitespaces) }
+    private var isValid: Bool { !trimmed.isEmpty && !trimmed.contains("/") && !trimmed.contains("›") }
+
+    var body: some View {
+        SheetFrame(
+            title: isRename ? "Rename Folder" : "New Folder",
+            icon: Icon.group,
+            subtitle: subtitle,
+            width: DesignTokens.Metrics.compactSheetWidth
+        ) {
+            FieldRow(label: "Name", labelWidth: 60) {
+                TextField("Office", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { if isValid { save() } }
+            }
+        } footer: {
+            Spacer()
+            Button("Cancel", action: onDismiss).keyboardShortcut(.cancelAction)
+            Button(isRename ? "Rename" : "Create") { save() }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(!isValid)
+        }
+        .onAppear {
+            if case let .rename(path) = editor.kind { name = path.last ?? "" }
+        }
+    }
+
+    private var subtitle: String {
+        switch editor.kind {
+        case let .create(parent, moving):
+            var text = parent.isEmpty ? "A folder at the top level of the sidebar." : "Inside \(parent.joined(separator: " › "))."
+            if moving != nil { text += " The connection moves into it." }
+            return text
+        case .rename:
+            return "Connections inside keep their place."
+        }
+    }
+
+    private func save() {
+        let environment = environment
+        let editor = editor
+        let trimmed = trimmed
+        Task { @MainActor in
+            switch editor.kind {
+            case let .create(parent, moving):
+                let path = parent + [trimmed]
+                await environment.createGroup(path)
+                if let moving, let config = environment.connections.first(where: { $0.id == moving }) {
+                    await environment.move(config, toGroup: path)
+                }
+            case let .rename(path):
+                await environment.renameGroup(path, to: trimmed)
+            }
+            onDismiss()
         }
     }
 }

@@ -67,6 +67,15 @@ public final class WorkspaceController {
         return tab
     }
 
+    /// The Server tab on its Users pane, with the grant picker on `database`.
+    public func openUsers(connectionID: UUID, database: String?) {
+        let tab = openServerActivity(connectionID: connectionID)
+        let controller = serverController(for: tab)
+        controller.initialPane = "users"
+        controller.focusDatabase = database
+        Task { await controller.loadUsers() }
+    }
+
     public func serverController(for tab: WorkspaceTab) -> ServerActivityController {
         if let existing = serverControllers[tab.id] { return existing }
         let made = ServerActivityController(
@@ -380,14 +389,19 @@ public final class WorkspaceController {
         )
     }
 
-    /// Opens the editor's find bar; the text view answers the standard action.
+    /// ⌘F: the editor's find bar in a query tab; the search field of any other tab.
     public func findInEditor(replace: Bool) {
-        let tag = replace
-            ? NSTextFinder.Action.showReplaceInterface.rawValue
-            : NSTextFinder.Action.showFindInterface.rawValue
-        let item = NSMenuItem()
-        item.tag = tag
-        NSApp.sendAction(#selector(NSTextView.performFindPanelAction(_:)), to: nil, from: item)
+        if let tab = workspace.selectedTab, tab.isQueryTab {
+            let tag = replace
+                ? NSTextFinder.Action.showReplaceInterface.rawValue
+                : NSTextFinder.Action.showFindInterface.rawValue
+            let item = NSMenuItem()
+            item.tag = tag
+            NSApp.sendAction(#selector(NSTextView.performFindPanelAction(_:)), to: nil, from: item)
+            return
+        }
+        if workspace.selectedTab?.tableRef != nil { workspace.isFilterBarVisible = true }
+        NotificationCenter.default.post(name: .dbstudioFocusSearch, object: nil)
     }
 
     public func toggleReadOnly() {

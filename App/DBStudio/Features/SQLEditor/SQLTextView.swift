@@ -474,4 +474,6 @@ public extension Notification.Name {
     static let dbstudioMoveCaret = Notification.Name("DBStudioMoveCaret")
     /// Asks the front editor to show its suggestion list, as ⌃Space does.
     static let dbstudioOfferCompletion = Notification.Name("DBStudioOfferCompletion")
+    /// ⌘F outside the editor: whichever search field is on screen takes focus.
+    static let dbstudioFocusSearch = Notification.Name("DBStudioFocusSearch")
 }

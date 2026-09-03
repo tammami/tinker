@@ -107,6 +107,19 @@ enum UIDemo {
                 if let ref = demoSchemaRef(schema) { _ = workspace.openObjects(ref, connectionID: config.id) }
             case "server":
                 controller.openServerActivity(connectionID: config.id)
+            case "newuser":
+                controller.openUsers(connectionID: config.id, database: config.database)
+                if let tab = workspace.selectedTab { controller.serverController(for: tab).wantsNewUserSheet = true }
+            case "users":
+                controller.openUsers(connectionID: config.id, database: config.database)
+                if let tab = workspace.selectedTab {
+                    let server = controller.serverController(for: tab)
+                    try? await Task.sleep(for: .milliseconds(1200))
+                    if let me = server.users.first(where: { $0.name == config.user }) {
+                        server.selectedUserID = me.id
+                        await server.loadGrants(for: me)
+                    }
+                }
             case "builder":
                 if let ref = demoSchemaRef(schema) {
                     let id = config.id

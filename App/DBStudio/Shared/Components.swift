@@ -427,3 +427,13 @@ extension View {
         overlay(alignment: .bottom) { Divider() }
     }
 }
+
+
+extension View {
+    /// Focuses `binding` when ⌘F asks for the front tab's search field.
+    func focusesOnSearchCommand(_ binding: FocusState<Bool>.Binding) -> some View {
+        onReceive(NotificationCenter.default.publisher(for: .dbstudioFocusSearch)) { _ in
+            binding.wrappedValue = true
+        }
+    }
+}

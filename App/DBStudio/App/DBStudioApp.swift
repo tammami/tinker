@@ -102,16 +102,17 @@ struct DBStudioCommands: Commands {
             Button("Paste into Grid") { workspace?.paste() }
             Divider()
             Button("Set NULL") { workspace?.setNull() }
-                .keyboardShortcut(.delete, modifiers: .command)
+                .keyboardShortcut(.delete, modifiers: [.command, .option])
             Button("Add Row") { workspace?.addRow() }
                 .keyboardShortcut("+", modifiers: .command)
             Button("Delete Selected Rows") { workspace?.deleteRows() }
-                .keyboardShortcut("-", modifiers: .command)
+                .keyboardShortcut(.delete, modifiers: .command)
         }
 
         CommandGroup(replacing: .textEditing) {
             Button("Find…") { workspace?.findInEditor(replace: false) }
                 .keyboardShortcut("f", modifiers: .command)
+                .help("Find in the editor, or search the front tab")
             Button("Find and Replace…") { workspace?.findInEditor(replace: true) }
                 .keyboardShortcut("f", modifiers: [.command, .option])
         }
@@ -152,6 +153,8 @@ struct DBStudioCommands: Commands {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             Divider()
             Button("New Connection…") { workspace?.workspace.presentNewConnection() }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+            Button("New Folder…") { workspace?.workspace.folderEditor = FolderEditor(kind: .create(parent: [])) }
             Button("New Table…") { workspace?.workspace.isNewTablePresented = true }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
             Button("Query Builder") { workspace?.showQueryBuilder() }
@@ -160,6 +163,11 @@ struct DBStudioCommands: Commands {
             Divider()
             Button("Server Activity") { workspace?.showServerActivity() }
                 .keyboardShortcut("a", modifiers: [.command, .shift])
+            Button("Users & Privileges") {
+                guard let workspace, let id = workspace.workspace.activeConnectionID else { return }
+                workspace.openUsers(connectionID: id, database: workspace.workspace.activeConnection?.database)
+            }
+            .keyboardShortcut("u", modifiers: [.command, .shift])
             Button("Refresh") { workspace?.refresh() }
                 .keyboardShortcut("r", modifiers: .command)
         }

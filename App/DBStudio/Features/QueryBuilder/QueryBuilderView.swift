@@ -20,6 +20,7 @@ public struct QueryBuilderView: View {
 
     @State private var isCreateViewPresented = false
     @State private var viewName = "new_view"
+    @FocusState private var isSearchFocused: Bool
 
     public var body: some View {
         VStack(spacing: 0) {
@@ -108,7 +109,10 @@ public struct QueryBuilderView: View {
         VStack(spacing: 0) {
             HStack(spacing: DesignTokens.Spacing.xs) {
                 Image(systemName: Icon.search).foregroundStyle(.secondary)
-                TextField("Filter tables", text: $controller.search).textFieldStyle(.plain)
+                TextField("Filter tables", text: $controller.search)
+                    .textFieldStyle(.plain)
+                    .focused($isSearchFocused)
+                    .focusesOnSearchCommand($isSearchFocused)
             }
             .padding(.horizontal, DesignTokens.Spacing.md)
             .frame(height: DesignTokens.Metrics.barHeight)

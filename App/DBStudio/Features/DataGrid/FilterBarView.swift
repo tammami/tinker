@@ -23,6 +23,7 @@ public struct FilterBarView: View {
                     TextField("Search every column…", text: $quickSearch)
                         .textFieldStyle(.plain)
                         .focused($isSearchFocused)
+                        .focusesOnSearchCommand($isSearchFocused)
                         .onSubmit { onQuickSearch(quickSearch) }
                         // Live: the rows follow the text as it is typed, the way a
                         // person expects a search box to behave.

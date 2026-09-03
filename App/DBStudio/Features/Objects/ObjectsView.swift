@@ -122,6 +122,7 @@ public struct ObjectsView: View {
     let onOpenSource: (SourceObject) -> Void
 
     private let widths: [CGFloat?] = [260, 130, 100, 100, 100, 160, nil]
+    @FocusState private var isSearchFocused: Bool
 
     public init(
         controller: ObjectsController,
@@ -153,6 +154,8 @@ public struct ObjectsView: View {
                     Image(systemName: Icon.search).foregroundStyle(.secondary)
                     TextField("Filter by name", text: $controller.search)
                         .textFieldStyle(.plain)
+                        .focused($isSearchFocused)
+                        .focusesOnSearchCommand($isSearchFocused)
                 }
                 .padding(.horizontal, DesignTokens.Spacing.sm)
                 .frame(width: 220, height: 24)

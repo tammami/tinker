@@ -181,6 +181,24 @@ enum SmokeTest {
             await sidebar.expand(connectionItem)
             check("reopening reads the databases again", !(sidebar.find(id: connectionItem.id)?.children ?? []).isEmpty)
 
+            // Folders: made, renamed and removed through the environment, mirrored by the tree.
+            await environment.createGroup(["Smoke Folder"])
+            sidebar.rebuildRoots()
+            check("a new folder appears in the tree", sidebar.roots.contains { $0.title == "Smoke Folder" })
+            await environment.renameGroup(["Smoke Folder"], to: "Smoke Renamed")
+            sidebar.rebuildRoots()
+            check("renaming a folder renames its row", sidebar.roots.contains { $0.title == "Smoke Renamed" } && !sidebar.roots.contains { $0.title == "Smoke Folder" })
+            await environment.createGroup(["Smoke Renamed", "Inner"])
+            sidebar.rebuildRoots()
+            check("a nested folder sits inside its parent", sidebar.roots.first { $0.title == "Smoke Renamed" }?.children?.contains { $0.title == "Inner" } ?? false)
+            await environment.removeGroup(["Smoke Renamed"])
+            sidebar.rebuildRoots()
+            check("removing a folder moves its subfolders up a level", !sidebar.roots.contains { $0.title == "Smoke Renamed" } && sidebar.roots.contains { $0.title == "Inner" })
+            await environment.removeGroup(["Inner"])
+            sidebar.rebuildRoots()
+            check("removing the last folder leaves none", !sidebar.roots.contains { $0.title == "Inner" })
+            check("the connections are untouched", environment.connections.allSatisfy { !$0.groupPath.contains("Smoke Renamed") })
+
             // The action a double-click performs.
             let workspace = WorkspaceModel(environment: environment)
             guard let firstTable = tableRows.first?.tableRef else {

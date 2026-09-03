@@ -202,6 +202,8 @@ public final class WorkspaceModel {
     public var pendingTableOperation: TableOperationRequest?
     /// The command palette (⌘K).
     public var isCommandPalettePresented = false
+    /// The folder sheet, when a folder is being made or renamed.
+    public var folderEditor: FolderEditor?
     /// The snippet library (⌘⇧K).
     public var isSnippetsPresented = false
 

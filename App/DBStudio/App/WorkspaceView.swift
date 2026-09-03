@@ -44,7 +44,8 @@ public struct WorkspaceView: View {
                 onCloseTabs: { id in controller.closeTabs(for: id) },
                 onCloseDatabase: { id, name, itemID in
                     controller.closeDatabase(connectionID: id, name: name, sidebarItemID: itemID)
-                }
+                },
+                onOpenUsers: { id, database in controller.openUsers(connectionID: id, database: database) }
             )
             .navigationSplitViewColumnWidth(
                 min: DesignTokens.Metrics.sidebarMinWidth,
@@ -85,7 +86,8 @@ public struct WorkspaceView: View {
             if !seen, environment.connections.isEmpty { isFirstRunPresented = true }
             await UIDemo.apply(to: controller)
         }
-        .onChange(of: environment.connections.count) { _, _ in sidebar.rebuildRoots() }
+        .onChange(of: environment.connections) { _, _ in sidebar.rebuildRoots() }
+        .onChange(of: environment.groups) { _, _ in sidebar.rebuildRoots() }
         .sheet(item: boundWorkspace.editingConnection) { config in
             ConnectionEditorView(
                 config: config,

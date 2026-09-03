@@ -14,6 +14,7 @@ public struct WorkspaceView: View {
 
     let environment: AppEnvironment
     @Bindable var settings: AppSettings
+    @State private var isFirstRunPresented = false
 
     public init(environment: AppEnvironment, settings: AppSettings) {
         self.environment = environment
@@ -52,6 +53,9 @@ public struct WorkspaceView: View {
             await environment.load()
             sidebar.rebuildRoots()
             for config in environment.connections { sidebar.watchState(of: config.id) }
+            // Shown once, and only when there is nothing to connect to yet.
+            let seen = await environment.setting("firstRun.seen", default: false)
+            if !seen, environment.connections.isEmpty { isFirstRunPresented = true }
         }
         .onChange(of: environment.connections.count) { _, _ in sidebar.rebuildRoots() }
         .sheet(item: $workspace.editingConnection) { config in
@@ -113,6 +117,24 @@ public struct WorkspaceView: View {
             )
         }
         .sheet(isPresented: $workspace.isExportPresented) { exportSheet }
+        .sheet(isPresented: $isFirstRunPresented) {
+            FirstRunView(
+                onAddConnection: {
+                    workspace.editingConnection = ConnectionConfig(
+                        name: "New Connection", dialect: .postgresql,
+                        host: "localhost", port: 5_432, user: NSUserName()
+                    )
+                    workspace.isEditingNewConnection = true
+                },
+                onDismiss: {
+                    isFirstRunPresented = false
+                    Task { await environment.setSetting(true, for: "firstRun.seen") }
+                },
+                onSetDiagnostics: { enabled in
+                    Task { await environment.setSetting(enabled, for: CrashReporter.optInSettingKey) }
+                }
+            )
+        }
     }
 
     /// The window toolbar (SPEC §10.1).

@@ -35,6 +35,17 @@ public final class AppSettings {
 
 public struct SettingsView: View {
     @Bindable var settings: AppSettings
+    let crashReporter: CrashReporter
+    let updater: Updater
+
+    @State private var collectDiagnostics = false
+    @State private var reportCount = 0
+
+    public init(settings: AppSettings, crashReporter: CrashReporter, updater: Updater) {
+        self.settings = settings
+        self.crashReporter = crashReporter
+        self.updater = updater
+    }
 
     public var body: some View {
         TabView {
@@ -66,6 +77,36 @@ public struct SettingsView: View {
             }
             .formStyle(.grouped)
             .tabItem { Label("Safety", systemImage: "lock.shield") }
+
+            Form {
+                Toggle("Save diagnostic reports on this Mac", isOn: $collectDiagnostics)
+                    .onChange(of: collectDiagnostics) { _, value in
+                        Task { await crashReporter.setEnabled(value) }
+                    }
+                Text("Reports are written to Application Support and never sent anywhere. They record the app version, the system version and a stack trace; never SQL, values or credentials.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Text("\(reportCount) report\(reportCount == 1 ? "" : "s") saved")
+                    Spacer()
+                    Button("Show in Finder") { CrashReporter.revealReportsInFinder() }
+                    Button("Delete All", role: .destructive) {
+                        CrashReporter.deleteAllReports()
+                        reportCount = CrashReporter.existingReports().count
+                    }
+                    .disabled(reportCount == 0)
+                }
+                Divider()
+                LabeledContent("Updates") {
+                    Text(Self.describe(updater.status))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("Diagnostics", systemImage: "stethoscope") }
+        }
+        .task {
+            reportCount = CrashReporter.existingReports().count
         }
         .frame(width: 460, height: 260)
         .onChange(of: settings.editorFontName) { _, _ in Task { await settings.save() } }
@@ -73,6 +114,16 @@ public struct SettingsView: View {
         .onChange(of: settings.nullDisplayText) { _, _ in Task { await settings.save() } }
         .onChange(of: settings.confirmOnProduction) { _, _ in Task { await settings.save() } }
         .onChange(of: settings.showSystemSchemas) { _, _ in Task { await settings.save() } }
+    }
+
+    static func describe(_ status: Updater.Status) -> String {
+        switch status {
+        case .notConfigured: "Not configured in this build"
+        case let .idle(feed): feed.host ?? feed.absoluteString
+        case .checking: "Checking…"
+        case let .upToDate(checkedAt): "Up to date, checked \(checkedAt.formatted(date: .omitted, time: .shortened))"
+        case let .failed(message): message
+        }
     }
 
     static var monospacedFonts: [String] {

@@ -206,3 +206,21 @@ Date: 2026-09-03 (Phase 6)
 **Decision.** The driver sends a server name only when the host is not an IPv4 or IPv6 literal.
 
 **Consequences.** `require` mode works against a server reached by address, which is the common local case. `verify-full` against an address cannot check a host name, so it verifies the chain only — the same thing `mysql --ssl-mode=VERIFY_IDENTITY` does with an address.
+
+## ADR-0023 — Sparkle is configured from the environment at release time
+Date: 2026-09-03 (Phase 7)
+
+**Context.** Sparkle 2 needs an appcast URL and an EdDSA public key, and the matching private key signs each release. Only whoever ships the app has those, and committing a placeholder key would make an unsigned feed look trusted.
+
+**Decision.** `Info.plist` reads `SUFeedURL` and `SUPublicEDKey` from build settings that `Scripts/release.sh` fills in from `DBSTUDIO_APPCAST_URL` and `DBSTUDIO_SPARKLE_PUBLIC_KEY`. A build without them creates no `SPUStandardUpdaterController` at all, and the Check for Updates menu item is disabled and says so.
+
+**Consequences.** A development build never touches the network for updates and never logs Sparkle's "no feed" error. Automatic checking is off until the user turns it on, which is the right default for a tool that talks to production databases. The release script prints the `sign_update` command whose output goes into the appcast.
+
+## ADR-0024 — The signed and notarized path could not be exercised here
+Date: 2026-09-03 (Phase 7)
+
+**Context.** SPEC §16 Phase 7 accepts on "a notarized DMG installs and runs on a clean macOS 14 machine". Notarization needs a Developer ID Application certificate and an App Store Connect credential. This machine has only an Apple Development certificate, and creating a Developer ID one requires a paid account action no build can take for itself.
+
+**Decision.** `Scripts/release.sh` implements the whole path — archive, export with `developer-id`, verify the hardened runtime, notarize, staple, `spctl` assess, build and notarize the DMG — and refuses to run with a message naming exactly what is missing and how to create it. `--unsigned` runs everything except signing and notarization, which is what was verified here.
+
+**Consequences.** The build, packaging and installation path is proven: `--unsigned` produces a 7.2 MB DMG whose app passes the smoke test when run from the mounted image. Signing, notarization, stapling and Gatekeeper's verdict are untested and recorded as a gap in PROGRESS.md. Whoever holds the certificate runs `Scripts/release.sh` unchanged.

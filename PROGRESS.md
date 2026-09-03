@@ -1,6 +1,6 @@
 # PROGRESS.md — per-phase log
 
-Current phase: **Phase 7 — Release hardening** (Phases 0–6 complete).
+All seven phases of SPEC §16 are complete. See the per-phase entries below, and the gaps each one records.
 
 ---
 
@@ -153,3 +153,44 @@ plumbing and none of the three is testable in isolation.
 - **`sha256_password` is untested**, for the same reason: no server offers it here.
 - **Encrypted MySQL connections are untested.** The local server refused the TLS handshake, so `require` exercised only its failure path, and `verify-ca` and `verify-identity` never ran.
 - **The authentication plugin in use was not asserted**: reading `mysql.user` needs a privilege the test account correctly lacks. The suite reports what it could read and moves on.
+
+---
+
+## Phase 7 — Release hardening (2026-09-03)
+
+### Done
+- **App icon**: a generated set at every size the catalogue asks for, 16 pt through 512 pt at 1× and 2×, drawn as three stacked discs on a blue squircle.
+- **Hardened runtime and entitlements**: `DBStudio.entitlements` turns the sandbox off — SSH tunnels and export need it (SPEC §2) — enables the network client, and grants none of the runtime exceptions. The hardened runtime is on in both configurations.
+- **Sparkle 2** linked into the app target and wired behind an `Updater` facade. The feed URL and public key come from the environment at release time (ADR-0023); a build without them creates no updater, disables the menu item and says why. Automatic checking is off by default.
+- **Crash reporting**, opt-in and local only: reports go to `Application Support/DBStudio/Diagnostics`, record the app and system version and a stack trace, and never contain SQL, values or credentials. Settings has a Diagnostics pane to turn it on, count the reports, reveal them in Finder and delete them.
+- **First-run experience**: shown once when there are no connections, stating where passwords are kept, that every grid change is previewed as SQL and runs in one transaction, and what Production and Read-only do. It offers the diagnostics choice there rather than assuming it.
+- **`Scripts/release.sh`**: archive, export, verify the signature and hardened runtime, notarize, staple, `spctl` assess, build the DMG, sign and notarize it, and print the Sparkle signing command. `--skip-notarize` and `--unsigned` stop earlier. It derives the team id from the signing identity and refuses to run without a Developer ID certificate, naming what to install.
+
+### Verified
+- `Scripts/release.sh --unsigned` produces `DBStudio-0.1.0.dmg`, 7.2 MB, containing the app and an Applications symlink.
+- The DMG mounts, and the app **inside the mounted image** passes the full smoke test against the local PostgreSQL — store, connection, query, cancel, table tab.
+- `Sparkle.framework` is embedded in the released bundle.
+- Running the script without a Developer ID certificate fails with the list of available identities and the command to create the notary profile.
+
+### Gaps that did not run, and why
+- **Nothing was signed or notarized.** This machine has an Apple Development certificate only; a Developer ID Application certificate cannot be created by a build (ADR-0024). Signing, notarization, stapling, `spctl` assessment and the "installs on a clean macOS 14 machine" criterion are all untested. The script implements them and fails loudly rather than silently skipping.
+- **Sparkle has never checked a feed.** No appcast exists to point it at, so the update path — `SPUStandardUpdaterController` reaching a signed appcast and applying an update — is unexercised.
+- **The crash handler has not fired.** `NSSetUncaughtExceptionHandler` is installed when the user opts in; no test provokes it, because doing so would mean crashing the app under test.
+
+---
+
+## Status against SPEC §16
+
+| Phase | State | Verified against |
+|---|---|---|
+| 0 Scaffold | complete | `Scripts/ci.sh` green |
+| 1 DBCore + PostgreSQL | complete | PostgreSQL 16.15 |
+| 2 Session, tunnel, store | complete | PostgreSQL 16.15, in-process SSH server, real Keychain |
+| 3 Data grid | complete | 1,000,000-row fixtures on both engines |
+| 4 App shell | complete | app smoke test; views not driven |
+| 5 SQL editor and export | complete | app smoke test; views not driven |
+| 6 MySQL | complete | MySQL 9.4.0 |
+| 7 Release hardening | complete except signing | unsigned DMG, run from the mounted image |
+
+348 tests, 1 skipped with a reason. Every gap above is a thing that did not run, not a thing
+that was claimed.

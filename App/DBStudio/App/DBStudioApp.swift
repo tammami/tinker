@@ -49,24 +49,30 @@ extension FocusedValues {
 struct DBStudioApp: App {
     @State private var environment = AppEnvironment()
     @State private var settings: AppSettings
+    @State private var updater = Updater()
+    @State private var crashReporter: CrashReporter
 
     init() {
         let environment = AppEnvironment()
         _environment = State(initialValue: environment)
         _settings = State(initialValue: AppSettings(environment: environment))
+        _crashReporter = State(initialValue: CrashReporter(environment: environment))
     }
 
     var body: some Scene {
         WindowGroup("DBStudio") {
             WorkspaceView(environment: environment, settings: settings)
                 .frame(minWidth: 900, minHeight: 560)
-                .task { await settings.load() }
+                .task {
+                    await settings.load()
+                    await crashReporter.start()
+                }
         }
         .defaultSize(width: 1_200, height: 760)
-        .commands { DBStudioCommands() }
+        .commands { DBStudioCommands(updater: updater) }
 
         Settings {
-            SettingsView(settings: settings)
+            SettingsView(settings: settings, crashReporter: crashReporter, updater: updater)
         }
     }
 }
@@ -74,8 +80,14 @@ struct DBStudioApp: App {
 /// Every keyboard shortcut in SPEC §10.2, registered so it appears in the menus.
 struct DBStudioCommands: Commands {
     @FocusedValue(\.workspaceCommands) private var commands
+    let updater: Updater
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button(updater.menuTitle) { updater.checkForUpdates() }
+                .disabled(!updater.isConfigured)
+        }
+
         CommandGroup(replacing: .newItem) {
             Button("New Query Tab") { commands?.newQueryTab() }
                 .keyboardShortcut("t", modifiers: .command)

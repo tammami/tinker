@@ -119,6 +119,8 @@ struct SidebarRow: View {
     let onCloseDatabase: (UUID, String, SidebarItem.ID) -> Void
 
     var body: some View {
+        // The context menu sits on the row's own label, not on the disclosure group: a menu
+        // on the group would cover every child row and answer for them.
         Group {
             if item.isExpandable {
                 DisclosureGroup(isExpanded: expansionBinding) {
@@ -132,14 +134,13 @@ struct SidebarRow: View {
                         )
                     }
                 } label: {
-                    label
+                    label.contextMenu { contextMenu }
                 }
             } else {
-                label
+                label.contextMenu { contextMenu }
             }
         }
         .tag(item.id)
-        .contextMenu { contextMenu }
     }
 
     var expansionBinding: Binding<Bool> {
@@ -244,7 +245,9 @@ struct SidebarRow: View {
         case .table(_, let info) where info.kind == .view || info.kind == .materializedView: .purple
         case .table: .accentColor
         case .routine: .orange
-        case .database: .secondary
+        // An open database is green, a closed one grey, so the tree says which databases
+        // are in use and Close Database has an obvious target.
+        case .database: sidebar.isExpanded(item.id) ? .green : .secondary
         case .schema: .teal
         default: .secondary
         }

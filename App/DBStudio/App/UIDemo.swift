@@ -1,4 +1,5 @@
 import DBCore
+import DBGrid
 import DBSQL
 import AppKit
 import Foundation
@@ -63,6 +64,18 @@ enum UIDemo {
                 if let preferred { controller.openTable(preferred.ref, connectionID: config.id) }
             case "inspector":
                 workspace.isInspectorVisible = true
+            case "datepicker":
+                if let preferred {
+                    let tab = controller.openTable(preferred.ref, connectionID: config.id)
+                    workspace.isInspectorVisible = true
+                    if let table = controller.tableController(for: tab) {
+                        try? await Task.sleep(for: .milliseconds(900))
+                        if let column = table.model?.columns.firstIndex(where: { $0.kind == .timestamp || $0.kind == .date }) {
+                            table.selection = GridSelection(row: 0, column: column)
+                            table.bumpRevision()
+                        }
+                    }
+                }
             case "structure":
                 if let preferred { controller.openTable(preferred.ref, connectionID: config.id) }
                 UserDefaults.standard.set(true, forKey: "uiDemo.structure")

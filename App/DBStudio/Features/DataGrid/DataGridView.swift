@@ -498,6 +498,12 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
                 menu.addItem(follow)
                 menu.addItem(.separator())
             }
+            if model.isEditable, [.date, .time, .timestamp].contains(model.columns[column].kind) {
+                let pick = NSMenuItem(title: "Pick Date and Time…", action: #selector(showInspector(_:)), keyEquivalent: "")
+                pick.target = self
+                pick.image = NSImage(systemSymbolName: "calendar", accessibilityDescription: nil)
+                menu.addItem(pick)
+            }
             let inspect = NSMenuItem(title: "Show in Inspector", action: #selector(showInspector(_:)), keyEquivalent: "")
             inspect.target = self
             inspect.image = NSImage(systemSymbolName: Icon.inspector, accessibilityDescription: nil)

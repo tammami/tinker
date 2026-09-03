@@ -88,6 +88,7 @@ public struct CellInspectorView: View {
                 }
                 CellValueEditor(
                     columnName: column.name,
+                    kind: column.kind,
                     value: value,
                     isEditable: isEditable,
                     onCommit: { onCommit(focusedColumn, $0) },
@@ -164,6 +165,7 @@ private struct RowFormField: View {
 
     @State private var draft = ""
     @State private var isNull = false
+    @State private var isPickerShown = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
@@ -174,6 +176,11 @@ private struct RowFormField: View {
                 Spacer()
                 if hasReference {
                     IconButton(icon: Icon.goTo, label: "Go to referenced row", action: onFollow)
+                }
+                if isEditable, TemporalText.isTemporal(column.kind) {
+                    IconButton(icon: column.kind == .time ? "clock" : "calendar", label: "Pick a value") {
+                        isPickerShown.toggle()
+                    }
                 }
                 if isEditable, !isNull, column.isNullable != false {
                     IconButton(icon: Icon.null, label: "Set NULL", action: onSetNull)
@@ -189,6 +196,16 @@ private struct RowFormField: View {
                     .lineLimit(1 ... 6)
                     .disabled(!isEditable)
                     .onSubmit { if draft != (value.text ?? "") { onCommit(draft) } }
+                if isPickerShown, isEditable, TemporalText.isTemporal(column.kind) {
+                    TemporalPickerView(kind: column.kind, text: draft) { picked in
+                        draft = picked
+                        isPickerShown = false
+                        onCommit(picked)
+                    }
+                    .padding(DesignTokens.Spacing.sm)
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius))
+                }
             }
         }
         .onAppear { load() }
@@ -204,6 +221,7 @@ private struct RowFormField: View {
 /// The editor for one value: text, pretty JSON, a hex dump, or NULL.
 private struct CellValueEditor: View {
     let columnName: String
+    let kind: DBValueKind
     let value: DBValue?
     let isEditable: Bool
     let onCommit: (String) -> Void
@@ -211,6 +229,8 @@ private struct CellValueEditor: View {
 
     @State private var draft = ""
     @State private var isExporting = false
+    /// Open by default: a date cell is usually edited with the calendar, not by typing.
+    @State private var isPickerShown = true
 
     var body: some View {
         switch value {
@@ -278,10 +298,31 @@ private struct CellValueEditor: View {
 
         case let .some(other):
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                if TemporalText.isTemporal(kind) {
+                    // A date is typed or picked; either way the text below is what is sent.
+                    HStack {
+                        Toggle(isOn: $isPickerShown) {
+                            Label(kind == .time ? "Clock" : "Calendar", systemImage: kind == .time ? "clock" : "calendar")
+                        }
+                        .toggleStyle(.button)
+                        .controlSize(.small)
+                        .disabled(!isEditable)
+                        Spacer()
+                    }
+                    if isPickerShown, isEditable {
+                        TemporalPickerView(kind: kind, text: draft) { picked in
+                            draft = picked
+                            onCommit(picked)
+                        }
+                        .padding(DesignTokens.Spacing.sm)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius))
+                    }
+                }
                 TextEditor(text: $draft)
                     .font(.system(.body, design: .monospaced))
                     .disabled(!isEditable)
-                    .frame(minHeight: 140)
+                    .frame(minHeight: TemporalText.isTemporal(kind) ? 60 : 140)
                     .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius))
                     .overlay(
                         RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius)

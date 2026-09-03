@@ -24,8 +24,17 @@ final class CompletionPopover: NSObject, NSTableViewDataSource, NSTableViewDeleg
         return candidates.indices.contains(row) ? candidates[row] : nil
     }
 
+    /// A panel that never takes the keyboard.
+    ///
+    /// If it did, every key — including Escape — would go to it instead of to the editor,
+    /// and the list could not be dismissed or typed past.
+    private final class NonKeyPanel: NSPanel {
+        override var canBecomeKey: Bool { false }
+        override var canBecomeMain: Bool { false }
+    }
+
     override init() {
-        panel = NSPanel(
+        panel = NonKeyPanel(
             contentRect: NSRect(x: 0, y: 0, width: 380, height: 220),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -35,7 +44,6 @@ final class CompletionPopover: NSObject, NSTableViewDataSource, NSTableViewDeleg
 
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = true
-        panel.becomesKeyOnlyIfNeeded = true
         panel.level = .popUpMenu
         panel.hasShadow = true
         panel.isOpaque = false

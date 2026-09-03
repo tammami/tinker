@@ -81,6 +81,27 @@ public final class SQLTextView: NSTextView {
         }
     }
 
+    /// Escape reaches an `NSTextView` as `cancelOperation`, not as a plain `keyDown`, so
+    /// the list has to be closed from both or it cannot be dismissed at all.
+    public override func cancelOperation(_ sender: Any?) {
+        if let coordinator, coordinator.completion.isVisible {
+            coordinator.completion.dismiss()
+            return
+        }
+        super.cancelOperation(sender)
+    }
+
+    /// Clicking into the text, or anywhere else, closes the list.
+    public override func mouseDown(with event: NSEvent) {
+        coordinator?.completion.dismiss()
+        super.mouseDown(with: event)
+    }
+
+    public override func resignFirstResponder() -> Bool {
+        coordinator?.completion.dismiss()
+        return super.resignFirstResponder()
+    }
+
     public override func keyDown(with event: NSEvent) {
         Self.keyLog.info("keyDown keyCode=\(event.keyCode) flags=\(event.modifierFlags.rawValue)")
 

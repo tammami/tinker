@@ -190,6 +190,9 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         offerCompletions()
     }
 
+    /// Closes the list and forgets it, for when the editor goes away entirely.
+    func dismissCompletion() { completion.dismiss() }
+
     // MARK: - Autocomplete (SPEC §13.1)
 
     /// The word being typed, which is what the list completes and what accepting replaces.
@@ -258,6 +261,10 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         delegate?.editorDidChangeSelection(offset: textView.selectedRange().location)
         textView.needsDisplay = true
         highlightMatchingBracket()
+        // Moving the caret off the word being completed makes the list about nothing.
+        if completion.isVisible, (completionPrefixRange()?.length ?? 0) == 0 {
+            completion.dismiss()
+        }
     }
 
     /// Highlighting runs after a short pause so typing never waits on it.

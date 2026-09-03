@@ -116,7 +116,10 @@ public final class GridModel {
     public var displayRowCount: Int {
         let known = if let total = totalCount {
             Int(total)
-        } else if let estimate = estimatedTotal, estimate > Int64(rowCount) {
+        } else if filter.isEmpty, let estimate = estimatedTotal, estimate > Int64(rowCount) {
+            // The estimate counts the whole table. Under a filter it is not the number of
+            // matching rows, and using it draws thousands of rows that hold nothing —
+            // which is what a filtered grid looked like when its first page failed to load.
             Int(estimate)
         } else {
             rowCount

@@ -167,9 +167,18 @@ public final class TableTabController: DataGridDelegate {
     public func applyFilter(_ rules: [FilterRule]) async {
         filterRules = rules
         await model?.setFilter(rules)
+        // A filter that the server refuses used to fail silently: the rows never arrived,
+        // and the grid drew the unfiltered estimate as empty rows instead of saying why.
+        surfaceLoadError()
         bumpRevision()
         updateStatus()
         await persistPreferences()
+    }
+
+    /// Shows whatever the last page load failed with, verbatim (SPEC §6).
+    private func surfaceLoadError() {
+        guard let error = model?.lastError else { return }
+        errorText = (error as? DBError)?.errorDescription ?? String(describing: error)
     }
 
     public func gridDidClickColumnHeader(column: Int, additive: Bool) {
@@ -179,6 +188,7 @@ public final class TableTabController: DataGridDelegate {
     public func cycleSort(columnIndex: Int, additive: Bool) async {
         guard let model, model.columns.indices.contains(columnIndex) else { return }
         await model.cycleSort(column: model.columns[columnIndex].name, additive: additive)
+        surfaceLoadError()
         bumpRevision()
         updateStatus()
         await persistPreferences()

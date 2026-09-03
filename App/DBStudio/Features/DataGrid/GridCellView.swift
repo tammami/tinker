@@ -127,11 +127,6 @@ final class GridCellView: NSView {
             backgroundColor.setFill()
             bounds.fill()
         }
-        // A one-pixel separator, drawn here rather than by a grid style so it stays
-        // crisp at every backing-scale factor.
-        DesignTokens.Colors.gridSeparator.setFill()
-        NSRect(x: bounds.maxX - 1, y: 0, width: 1, height: bounds.height).fill()
-
         if isFocusedCell {
             NSColor.controlAccentColor.setStroke()
             let path = NSBezierPath(rect: bounds.insetBy(dx: 1, dy: 1))
@@ -199,10 +194,7 @@ final class GridRowNumberView: NSView {
         (isSelected ? NSColor.controlAccentColor.withAlphaComponent(0.25)
                     : NSColor.controlBackgroundColor).setFill()
         bounds.fill()
-        // The same trailing hairline the data cells draw, so the gutter reads as part of
-        // the same grid.
-        DesignTokens.Colors.gridSeparator.setFill()
-        NSRect(x: bounds.maxX - 1, y: 0, width: 1, height: bounds.height).fill()
+        // No trailing hairline: the rows carry no column rules, only the header does.
     }
 }
 

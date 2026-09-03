@@ -83,6 +83,23 @@ public final class SQLTextView: NSTextView {
 
     public override func keyDown(with event: NSEvent) {
         Self.keyLog.info("keyDown keyCode=\(event.keyCode) flags=\(event.modifierFlags.rawValue)")
+
+        // While the autocomplete list is up it takes the arrows, Return, Tab and Escape.
+        // It never becomes key, so the keys arrive here and are forwarded by hand.
+        if let coordinator, coordinator.completion.isVisible {
+            switch event.keyCode {
+            case 125: return coordinator.completion.moveSelection(by: 1)     // down
+            case 126: return coordinator.completion.moveSelection(by: -1)    // up
+            case 36, 48: return coordinator.completion.acceptSelection()     // return, tab
+            case 53: return coordinator.completion.dismiss()                 // escape
+            default: break
+            }
+        }
+        // ⌃Space asks for the list without waiting for another character (SPEC §13.1).
+        if event.keyCode == 49, event.modifierFlags.contains(.control) {
+            coordinator?.offerCompletions()
+            return
+        }
         super.keyDown(with: event)
     }
 

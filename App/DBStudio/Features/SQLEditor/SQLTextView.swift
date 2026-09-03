@@ -170,6 +170,8 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
     weak var textView: SQLTextView?
     var errorPosition: Int?
     var lastErrorPosition: Int?
+    /// The autocomplete list. One per editor, reused rather than rebuilt per keystroke.
+    let completion = CompletionPopover()
     var hasTakenFocus = false
     private var highlightTask: Task<Void, Never>?
 
@@ -185,6 +187,70 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         delegate?.editorDidChangeText(textView.string)
         textView.needsDisplay = true
         scheduleHighlighting()
+        offerCompletions()
+    }
+
+    // MARK: - Autocomplete (SPEC §13.1)
+
+    /// The word being typed, which is what the list completes and what accepting replaces.
+    /// A dot is part of it, so `u.` offers that alias's columns.
+    func completionPrefixRange() -> NSRange? {
+        guard let textView else { return nil }
+        let text = textView.string as NSString
+        let caret = textView.selectedRange()
+        guard caret.length == 0, caret.location <= text.length else { return nil }
+        var start = caret.location
+        while start > 0 {
+            let character = text.character(at: start - 1)
+            guard let scalar = Unicode.Scalar(character) else { break }
+            let isWord = CharacterSet.alphanumerics.contains(scalar)
+                || scalar == "_" || scalar == "." || scalar == "$"
+            if !isWord { break }
+            start -= 1
+        }
+        return NSRange(location: start, length: caret.location - start)
+    }
+
+    /// Shows the list, or hides it when there is nothing worth offering.
+    func offerCompletions() {
+        guard let textView, let delegate else { return completion.dismiss() }
+        guard let range = completionPrefixRange(), range.length > 0 else {
+            return completion.dismiss()
+        }
+        let text = textView.string as NSString
+        let prefix = text.substring(with: range)
+        // The statement under the cursor is what makes the columns alias-aware.
+        let statement = StatementSplitter.split(textView.string, dialect: dialect)
+            .first { $0.utf16Range.contains(range.location) }?.text ?? textView.string
+
+        let candidates = delegate.editorCompletionCandidates(prefix: prefix, statement: statement)
+        guard !candidates.isEmpty else { return completion.dismiss() }
+
+        let caretRect = textView.firstRect(forCharacterRange: range, actualRange: nil)
+        let local = textView.convert(
+            textView.window?.convertFromScreen(caretRect) ?? .zero, from: nil
+        )
+        completion.show(
+            candidates: candidates, prefix: prefix, below: local, in: textView
+        ) { [weak self] candidate in
+            self?.accept(candidate, replacing: range)
+        }
+    }
+
+    /// Puts the chosen text in place of what was typed.
+    private func accept(_ candidate: CompletionCandidate, replacing range: NSRange) {
+        guard let textView else { return }
+        // A qualified prefix keeps its qualifier: `u.na` becomes `u.name`, not `name`.
+        let typed = (textView.string as NSString).substring(with: range)
+        let replacement: String
+        if let dot = typed.lastIndex(of: ".") {
+            replacement = String(typed[typed.startIndex ... dot]) + candidate.text
+        } else {
+            replacement = candidate.text
+        }
+        guard textView.shouldChangeText(in: range, replacementString: replacement) else { return }
+        textView.replaceCharacters(in: range, with: replacement)
+        textView.didChangeText()
     }
 
     public func textViewDidChangeSelection(_ notification: Notification) {

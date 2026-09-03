@@ -201,6 +201,35 @@ final class GridModelTests: XCTestCase {
         return (model, loader)
     }
 
+    /// The planner estimate describes the whole table. Once a filter is on it is not the
+    /// number of matching rows, and a grid that keeps using it draws rows that hold
+    /// nothing — which is what a filtered table looked like when its page failed to load.
+    func testAFilteredGridDoesNotCountTheWholeTable() async {
+        let (model, loader) = makeModel(rows: 2_500)
+        model.estimatedTotal = 1_000_000
+        await model.load(page: 0)
+        XCTAssertEqual(model.displayRowCount, 1_000_000, "unfiltered, the estimate stands")
+
+        // A filter whose first page cannot be read.
+        await loader.setFailure(DBError.notConnected)
+        await model.setFilter([FilterRule(column: "name", op: .contains, values: [.string("x")])])
+
+        XCTAssertNotNil(model.lastError, "the failure is kept so the tab can show it")
+        XCTAssertEqual(
+            model.displayRowCount, 0,
+            "no rows were read, so none are drawn — not a million empty ones"
+        )
+    }
+
+    /// And a filter that does match reports what it matched.
+    func testAFilteredGridCountsWhatItLoaded() async {
+        let (model, _) = makeModel(rows: 12)
+        model.estimatedTotal = 1_000_000
+        await model.setFilter([FilterRule(column: "name", op: .contains, values: [.string("row")])])
+        XCTAssertEqual(model.displayRowCount, 12)
+        XCTAssertNil(model.lastError)
+    }
+
     func testLoadingAPageFillsColumnsAndRows() async {
         let (model, _) = makeModel()
         await model.load(page: 0)

@@ -31,10 +31,10 @@ public enum DesignTokens {
         public static let binaryText = NSColor.secondaryLabelColor
         public static let productionBadge = NSColor.systemRed
 
-        /// The hairline between grid columns.
+        /// The hairline under the grid's column headings.
         ///
-        /// Faint on purpose: it only has to separate two columns, and at full strength a
-        /// wide table reads as a cage of lines rather than as rows of values.
+        /// Only the header carries rules. The rows do not: alternating backgrounds already
+        /// separate them, and vertical lines through the values read as a cage.
         public static let gridSeparator = NSColor.separatorColor.withAlphaComponent(0.22)
 
         /// The stripe colour for a connection.

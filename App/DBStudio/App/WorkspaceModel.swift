@@ -133,7 +133,9 @@ public final class WorkspaceModel {
     public var isHistoryPresented = false
     public var isExportPresented = false
     public var isSettingsPresented = false
-    public var isFilterBarVisible = false
+    /// On by default: a table tab is for finding rows, and a filter behind a shortcut is
+    /// a filter most people never find.
+    public var isFilterBarVisible = true
     /// The connection whose editor sheet is open, or nil.
     public var editingConnection: ConnectionConfig?
     public var isEditingNewConnection = false

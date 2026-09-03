@@ -253,6 +253,48 @@ final class ConnectionSessionTests: XCTestCase {
         XCTAssertEqual(introspector.callCount("databases"), 2)
     }
 
+    /// A loader whose result is optional has to run on a miss.
+    ///
+    /// It did not: the cache cast a missing entry straight to the requested type, which
+    /// succeeds for an optional one and reports a hit holding nothing. `rowIdentity` and
+    /// `approximateRowCount` are exactly that shape, so the app never asked the server for
+    /// a primary key and opened every table read-only.
+    func testAnOptionalResultStillRunsItsLoaderOnAMiss() async throws {
+        let session = makeSession()
+        let (lease, connection) = try await session.lease()
+        let introspector = try XCTUnwrap(connection.introspector as? FakeIntrospector)
+        await session.release(lease)
+        let table = TableRef(database: "fake", schema: "public", name: "users")
+
+        let identity: [String]? = try await session.introspection(.primaryKey(table)) {
+            try await $0.rowIdentity(of: table)
+        }
+        XCTAssertEqual(identity, ["id"], "the loader never ran, so the key was never read")
+        XCTAssertEqual(introspector.callCount("primaryKey"), 1)
+
+        // And the second read is still served from the cache.
+        let again: [String]? = try await session.introspection(.primaryKey(table)) {
+            try await $0.rowIdentity(of: table)
+        }
+        XCTAssertEqual(again, ["id"])
+        XCTAssertEqual(introspector.callCount("primaryKey"), 1, "the cache should have answered")
+    }
+
+    /// A genuinely absent value is cached as absent, rather than re-read every time.
+    func testACachedNilIsRememberedAsNil() {
+        var cache = IntrospectionCache()
+        let table = TableRef(database: "d", schema: "public", name: "no_pk")
+        let absent: [String]? = nil
+        cache.store(absent, for: .primaryKey(table))
+
+        XCTAssertEqual(cache.count, 1, "storing nil must keep the entry, not drop the key")
+        let read: [String]?? = cache.value(for: .primaryKey(table))
+        guard let stored = read else {
+            return XCTFail("a stored nil must read back as a hit, not a miss")
+        }
+        XCTAssertNil(stored, "and the hit must carry nil")
+    }
+
     func testInvalidatingATableClearsEveryEntryAboutIt() {
         var cache = IntrospectionCache()
         let table = TableRef(database: "d", schema: "public", name: "users")

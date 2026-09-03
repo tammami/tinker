@@ -552,6 +552,11 @@ final class PostgresIntegrationTests: XCTestCase {
             let noIdentity = try await introspector.rowIdentity(of: table("no_pk"))
             XCTAssertNil(noIdentity)
 
+            // An ordinary keyed table, the shape the grid opens most often. It is listed
+            // here because the app reported one as having no key while the server did.
+            let customersIdentity = try await introspector.rowIdentity(of: table("customers"))
+            XCTAssertEqual(customersIdentity, ["id"])
+
             let indexes = try await introspector.indexes(of: table("orders"))
             XCTAssertTrue(indexes.contains { $0.isPrimary && $0.columns == ["id"] })
             XCTAssertTrue(indexes.contains { $0.name == "orders_customer_idx" && !$0.isUnique })

@@ -377,7 +377,13 @@ public struct IntrospectionCache: Sendable {
     public init() {}
 
     public func value<Value: Sendable>(for key: Key) -> Value? {
-        storage[key] as? Value
+        // The presence check has to come first. Casting a missing entry straight to
+        // `Value` succeeds whenever `Value` is itself optional — `nil as? [String]?`
+        // yields `.some(nil)` — so a miss would report itself as a hit holding nothing,
+        // and a loader returning an optional (`rowIdentity`, `approximateRowCount`) would
+        // never run at all.
+        guard let boxed = storage[key] else { return nil }
+        return boxed as? Value
     }
 
     public mutating func store<Value: Sendable>(_ value: Value, for key: Key) {

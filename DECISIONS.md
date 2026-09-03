@@ -251,3 +251,14 @@ Date: 2026-09-03
 **Decision.** `DBStudio.icon` is written by hand rather than through the GUI. It is a plain directory: `icon.json` naming one group, one layer and the background fill, and `Assets/bulb.svg` holding the artwork. The schema was read out of `IconComposerFoundation`; colours are `space:components` strings, which is what "Invalid color encoding, missing ':' delimiter" was complaining about. `ASSETCATALOG_COMPILER_APPICON_NAME` names it, and the synchronized folder group picks it up with no project surgery.
 
 **Consequences.** The icon is adaptive: the system composites the squircle, the gradient, the specular sweep and the shadow, and derives the dark and tinted appearances, so none of that is painted into the artwork any more. The source is one SVG a designer can edit, which is why `Scripts/make-icon.swift` and the ten fixed-size PNGs are gone. The format is not publicly documented, so an Xcode upgrade could change it; `xcrun actool --compile` on the `.icon` reproduces the check in seconds, and `Scripts/ci.sh` fails on any warning it emits.
+
+## ADR-0028 — The table designer moves from deferred into Phase 8
+Date: 2026-09-03
+
+**Context.** SPEC §16 listed "table designer" and "structure sync" as deferred to v0.2, with `CLAUDE.md` forbidding scope expansion. The user asked for structure editing — set a primary key, create a btree index, design a table the way Navicat or TablePlus do — which is exactly that deferred item.
+
+**Decision.** Rather than build against the spec, the spec changed first. §8 gains the four reads a designer needs (check constraints, triggers, partitioning, collations), a new §15b describes the feature and its acceptance criteria, and §16 gains Phase 8 and drops both items from the deferred list. Import, data transfer, backup/restore and the rest stay deferred.
+
+**Consequences.** The repository's rules and its code agree again: work on the designer is now in scope because the spec says so, and everything still outside §16's phases is still forbidden. The cost is a fifth phase after "release hardening", so v0.1 as originally scoped is already shippable and Phase 8 lands on top of it.
+
+**What the spec now demands that v0.1 did not.** DDL must run in one transaction with the statements shown first, PostgreSQL must roll back on failure, and MySQL's implicit DDL commit must be stated to the user rather than hidden — because on MySQL a half-applied structure change is a real outcome, not a theoretical one.

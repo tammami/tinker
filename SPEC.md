@@ -303,12 +303,21 @@ public protocol SchemaIntrospector: Sendable {
     func routines(in schema: SchemaRef) async throws -> [RoutineInfo] // functions/procedures, signature only
     func tableDDL(_ table: TableRef) async throws -> String           // MySQL: SHOW CREATE TABLE; PG: synthesized (Phase 2)
     func approximateRowCount(_ table: TableRef) async throws -> Int64?
+
+    // Added in Phase 8; everything above predates it.
+    func checkConstraints(of table: TableRef) async throws -> [CheckConstraintInfo]
+    func triggers(of table: TableRef) async throws -> [TriggerInfo]
+    func partitioning(of table: TableRef) async throws -> PartitioningInfo?
+    /// Collations the server offers, for the column editor's picker.
+    func collations(in database: String) async throws -> [CollationInfo]
 }
 ```
 
 Model types (`TableInfo`, `ColumnInfo` etc.) carry: name, kind, comment, and for columns: ordinal, nativeType, nullable, default expression text, isPrimaryKey, isAutoIncrement/identity, isGenerated, character set/collation (MySQL). Keep them plain structs, `Sendable`, `Hashable`, `Identifiable` by fully-qualified name.
 
 Introspection results are cached per session with explicit invalidation (user "Refresh", or after the app itself executes DDL). Never auto-refresh on a timer.
+
+A cache lookup must distinguish "not read yet" from "read, and the answer was nothing". Several of these reads return an optional, and a cache that cannot tell the two apart silently answers every one of them with `nil` and never calls the driver.
 
 ---
 
@@ -573,6 +582,54 @@ Migrations: numbered SQL files applied in order, version tracked in `PRAGMA user
 
 ---
 
+## 15b. Table designer and structure sync
+
+Editing structure, not rows. Everything here goes through the same discipline §12.3 already imposes on data edits: nothing runs until the user has read the SQL, and what runs, runs in one transaction.
+
+### 15b.1 Structure tab
+
+A table opens with a **Data** tab and a **Structure** tab. Structure is read-only until the user presses Edit, so browsing a production schema cannot alter it by a stray keystroke.
+
+Structure has one pane per kind of object, each a table of rows the user can add to, edit and remove:
+
+- **Columns** — name, type, length/precision/scale, nullable, default, auto-increment/identity, generated expression, character set, collation, comment. Reordering is offered only where the server supports it (MySQL `AFTER`); on PostgreSQL the control is absent, not disabled-with-a-tooltip.
+- **Indexes** — name, method (btree, hash, gin, gist, brin, spgist on PG; btree, hash, fulltext, spatial on MySQL), column list with per-column sort direction, unique, partial predicate (PG), comment.
+- **Primary key** — chosen on the Columns pane by marking columns, in key order. Dropping and adding a primary key is a single edit, not two.
+- **Foreign keys** — name, local columns, referenced table and columns, `ON UPDATE` / `ON DELETE`, deferrability (PG).
+- **Check constraints** — name and expression, stored verbatim.
+- **Triggers** — name, timing (`BEFORE`/`AFTER`/`INSTEAD OF`), events, level (row/statement), condition (PG `WHEN`), and the body or the function it calls.
+- **Partitions** — the strategy and key for a partitioned table, and the list of partitions with their bounds. Creating and detaching partitions is in scope; rewriting an unpartitioned table into a partitioned one is not.
+- **Table** — name, comment, storage engine and character set (MySQL), tablespace (PG).
+
+### 15b.2 How a change is applied
+
+- The designer never mutates anything as the user types. It holds an edited `TableDefinition` beside the one introspection returned.
+- **Preview** diffs the two and renders the statements. The sheet shows them in execution order, syntax-highlighted, and is the only route to Execute.
+- Execution runs every statement in one transaction. PostgreSQL rolls back cleanly; **MySQL commits DDL implicitly**, so on MySQL the sheet says so plainly, lists the statements that will not roll back, and asks for confirmation naming the table.
+- After execution the app invalidates that table's introspection and reloads the pane from the server. What is shown afterwards is what the server has, never the edit that was requested.
+- A failure reports the server's message verbatim (§6) alongside the statement that produced it, and leaves the editor's state intact so the user can correct it.
+- `isProduction` and `readOnly` connections behave as in §12.3: read-only forbids Execute outright; production delays the button and names the connection in red.
+
+### 15b.3 Create table
+
+The same editor with an empty definition. It emits one `CREATE TABLE` plus the `CREATE INDEX`, `COMMENT ON` and trigger statements the definition needs, in dependency order.
+
+### 15b.4 Structure sync
+
+Compares a source table or schema against a target on any configured connection, including across engines, and produces the DDL that would make the target match. It is a generator, not an applier: the result opens in a SQL editor tab. It never drops anything the user has not seen; destructive statements are listed separately in the preview and are unchecked by default.
+
+### 15b.5 Acceptance criteria
+
+- Adding a column, changing its type, marking it `NOT NULL`, setting a default and dropping it each produce the statements the server accepts, verified against local PostgreSQL and MySQL fixtures.
+- Setting a primary key on `no_pk` makes the Data tab editable without reopening the tab, because introspection was invalidated.
+- Creating a btree index and a unique index on `customers`, then dropping them, round-trips through introspection: what the designer shows afterwards equals what the server reports.
+- A composite foreign key with `ON DELETE CASCADE` created by the designer is read back with the same actions.
+- A failing statement (a duplicate index name) leaves the table unchanged on PostgreSQL, reports the server's text, and on MySQL reports exactly which statements had already committed.
+- Structure sync of a table against itself produces no statements.
+- No pane blocks the main thread: opening Structure on a table with 100 columns and 30 indexes stays under one frame (§12.6 method).
+
+---
+
 ## 16. Phased execution plan
 
 Each phase lists deliverables and acceptance criteria. Do not reorder.
@@ -620,7 +677,13 @@ Each phase lists deliverables and acceptance criteria. Do not reorder.
 - Sparkle, signing, notarization script, crash reporting opt-in (local logs only, no third-party), first-run experience, app icon, DMG.
 - Accept: notarized DMG installs and runs on a clean macOS 14 machine with no Xcode.
 
-Deferred to v0.2 (do not build now, do not stub): table designer, import, data transfer, structure sync, backup/restore, EXPLAIN visual, saved queries/snippets, editing of multi-table results, client-cert TLS, Redis, other engines.
+### Phase 8 — Table designer and structure sync (4 weeks)
+- §15b in full, both engines. `DBSQL.DDLGenerator` diffs two `TableDefinition`s into ordered statements; the introspector gains check constraints, triggers, partitioning and collations (§8).
+- The Structure tab, its panes, the preview sheet, Create Table, and structure sync as a generator.
+- Tests: a diff unit suite per dialect covering every column attribute, primary-key add/drop/change, index add/drop including method and partial predicate, foreign-key actions, check constraints and triggers; integration tests that run the generated DDL against the local PG and MySQL and read it back through introspection, asserting the round trip; a failure test asserting PostgreSQL rolls back and that MySQL's partial-commit warning names the right statements.
+- Accept: §15b.5 criteria, on PostgreSQL and MySQL.
+
+Deferred to v0.2 (do not build now, do not stub): import, data transfer, backup/restore, EXPLAIN visual, saved queries/snippets, editing of multi-table results, client-cert TLS, Redis, other engines.
 
 ---
 

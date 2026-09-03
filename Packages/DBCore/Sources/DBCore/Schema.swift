@@ -251,6 +251,145 @@ public struct ForeignKeyInfo: Sendable, Hashable, Codable, Identifiable {
     public var id: String { name }
 }
 
+/// A `CHECK` constraint. The expression is kept exactly as the server renders it.
+public struct CheckConstraintInfo: Sendable, Hashable, Codable, Identifiable {
+    public let name: String
+    /// The predicate as the catalog stores it. Never reformatted (SPEC §5).
+    public let expression: String
+    /// PostgreSQL can mark a constraint `NOT VALID`, which skips the check on existing rows.
+    public let isValidated: Bool
+
+    public init(name: String, expression: String, isValidated: Bool = true) {
+        self.name = name
+        self.expression = expression
+        self.isValidated = isValidated
+    }
+
+    public var id: String { name }
+}
+
+/// When a trigger runs.
+public enum TriggerTiming: String, Sendable, Hashable, Codable, CaseIterable {
+    case before = "BEFORE"
+    case after = "AFTER"
+    /// Views only, and PostgreSQL only.
+    case insteadOf = "INSTEAD OF"
+}
+
+/// What a trigger fires on.
+public enum TriggerEvent: String, Sendable, Hashable, Codable, CaseIterable {
+    case insert = "INSERT"
+    case update = "UPDATE"
+    case delete = "DELETE"
+    /// PostgreSQL only.
+    case truncate = "TRUNCATE"
+}
+
+public struct TriggerInfo: Sendable, Hashable, Codable, Identifiable {
+    public let name: String
+    public let timing: TriggerTiming
+    /// A PostgreSQL trigger can fire on several events; MySQL's fires on one.
+    public let events: [TriggerEvent]
+    /// `FOR EACH ROW` when true, `FOR EACH STATEMENT` when false.
+    public let isRowLevel: Bool
+    /// PostgreSQL `WHEN (…)`. `nil` when unconditional.
+    public let condition: String?
+    /// MySQL keeps the body here. PostgreSQL calls a function and leaves this nil.
+    public let body: String?
+    /// PostgreSQL's `EXECUTE FUNCTION` target, including its argument list.
+    public let functionCall: String?
+    /// MySQL orders triggers on the same event with `FOLLOWS`/`PRECEDES`.
+    public let orderingHint: String?
+
+    public init(
+        name: String,
+        timing: TriggerTiming,
+        events: [TriggerEvent],
+        isRowLevel: Bool = true,
+        condition: String? = nil,
+        body: String? = nil,
+        functionCall: String? = nil,
+        orderingHint: String? = nil
+    ) {
+        self.name = name
+        self.timing = timing
+        self.events = events
+        self.isRowLevel = isRowLevel
+        self.condition = condition
+        self.body = body
+        self.functionCall = functionCall
+        self.orderingHint = orderingHint
+    }
+
+    public var id: String { name }
+}
+
+/// How a partitioned table divides its rows.
+public enum PartitionStrategy: String, Sendable, Hashable, Codable, CaseIterable {
+    case range = "RANGE"
+    case list = "LIST"
+    case hash = "HASH"
+    /// MySQL only.
+    case key = "KEY"
+    /// MySQL only.
+    case linearHash = "LINEAR HASH"
+    /// MySQL only.
+    case linearKey = "LINEAR KEY"
+}
+
+public struct PartitionInfo: Sendable, Hashable, Codable, Identifiable {
+    public let name: String
+    /// The bound as the server spells it: `FROM ('2024-01-01') TO ('2025-01-01')`,
+    /// `IN (1, 2)`, `WITH (MODULUS 4, REMAINDER 0)`, or MySQL's `VALUES LESS THAN (…)`.
+    public let bound: String?
+    public let approximateRowCount: Int64?
+
+    public init(name: String, bound: String? = nil, approximateRowCount: Int64? = nil) {
+        self.name = name
+        self.bound = bound
+        self.approximateRowCount = approximateRowCount
+    }
+
+    public var id: String { name }
+}
+
+public struct PartitioningInfo: Sendable, Hashable, Codable {
+    public let strategy: PartitionStrategy
+    /// The partition key expression, as the server renders it.
+    public let key: String
+    public let partitions: [PartitionInfo]
+    /// MySQL `PARTITIONS n` for hash and key strategies.
+    public let partitionCount: Int?
+
+    public init(
+        strategy: PartitionStrategy,
+        key: String,
+        partitions: [PartitionInfo] = [],
+        partitionCount: Int? = nil
+    ) {
+        self.strategy = strategy
+        self.key = key
+        self.partitions = partitions
+        self.partitionCount = partitionCount
+    }
+}
+
+/// A collation the server offers, for the column editor's picker.
+public struct CollationInfo: Sendable, Hashable, Codable, Identifiable {
+    public let name: String
+    /// MySQL groups collations under a character set; PostgreSQL leaves this nil.
+    public let characterSet: String?
+    public let isDefault: Bool
+
+    public init(name: String, characterSet: String? = nil, isDefault: Bool = false) {
+        self.name = name
+        self.characterSet = characterSet
+        self.isDefault = isDefault
+    }
+
+    public var id: String { characterSet.map { "\($0).\(name)" } ?? name }
+}
+
 public enum RoutineKind: String, Sendable, Hashable, Codable, CaseIterable {
     case function, procedure, aggregate, window, trigger
 }

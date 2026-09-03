@@ -105,3 +105,50 @@ Date: 2026-09-03 (Phase 1)
 **Decision.** Every parameter is bound as text with type OID 0, which tells PostgreSQL to infer the type from where the placeholder sits. One code path covers all types, and the server does the coercion.
 
 **Consequences.** A placeholder with no inferable context — `SELECT $1` with no cast — fails with the server's own "could not determine data type" error, which is correct and legible. Generated DML always has column context. Covered by `testParameterTypesTheServerInfers`.
+
+## ADR-0012 — `ConnectionSession` lives in DBCore behind three protocols
+Date: 2026-09-03 (Phase 2)
+
+**Context.** SPEC §3 puts the session in `DBCore`, and SPEC §9 has it resolve Keychain secrets, open SSH tunnels and hold a pool of driver connections. `DBCore` may import only Foundation and swift-log, so it cannot reach any of those directly.
+
+**Decision.** `DBCore` declares `SecretStore`, `TunnelProvider` and `DriverRegistry`; the concrete implementations are injected. `DBStore` provides `KeychainSecretStore`, `DBTunnel` provides `SSHTunnelProvider`, and the app registers the drivers at launch.
+
+**Consequences.** The session is testable with no I/O at all — `DBTestKit` supplies a fake driver, introspector and tunnel — and the dependency direction in SPEC §3 holds unchanged. The cost is one indirection at startup, where the app builds the registry.
+
+## ADR-0013 — SSH agent authentication is not available
+Date: 2026-09-03 (Phase 2)
+
+**Context.** SPEC §9 lists `.agent` alongside password and key authentication. Citadel offers no agent support, and swift-nio-ssh's `NIOSSHUserAuthenticationOffer` accepts only a `NIOSSHPrivateKey` the process holds — there is no hook for a signature produced elsewhere. Supporting an agent means implementing `NIOSSHPrivateKeyProtocol`, `NIOSSHPublicKeyProtocol` and `NIOSSHSignatureProtocol` over the agent socket protocol and registering them as custom algorithms.
+
+**Decision.** Password and private-key-file authentication ship. `.agent` throws a `tunnelFailed(stage: .sshAuth, …)` whose message names the alternative (`~/.ssh/id_ed25519`). The spec's stated fallback — libssh2 through a C module — would replace the whole tunnel implementation for one authentication method and is not worth it in v0.1.
+
+**Consequences.** A user whose key is only in the agent, or on a hardware token, must point DBStudio at a key file. Recorded as a gap in PROGRESS.md. ECDSA key *files* are also unsupported, because Citadel exposes OpenSSH readers for ed25519 and RSA only; ed25519 is what `ssh-keygen` produces by default.
+
+## ADR-0014 — Tunnel tests use an SSH server hosted in the test process
+Date: 2026-09-03 (Phase 2)
+
+**Context.** SPEC §16 Phase 2 names the machine's own `sshd` as the SSH test target, with Remote Login enabled in System Settings. Enabling it needs administrator rights, which the test environment is forbidden to take, and it is off on this machine.
+
+**Decision.** The tunnel suite starts an SSH server inside the test process using Citadel's server support, with a generated host key and a delegate that accepts one password or one public key. Tests then forward to a local echo server and to the real local PostgreSQL.
+
+**Consequences.** Key exchange, authentication and `direct-tcpip` forwarding are exercised over a real socket against a real SSH implementation, so the client is genuinely covered. What is *not* covered is interoperability with OpenSSH's `sshd` — its key-exchange and cipher preferences, its `known_hosts` behaviour end to end, and jump hosts. Those remain gaps until `DBSTUDIO_TEST_SSH_PASSWORD_URL` / `DBSTUDIO_TEST_SSH_JUMP_URL` name a reachable server.
+
+Two Citadel defects were found along the way and worked around in the test server rather than in the library: `DirectTCPIPForwardingDelegate` installs only outbound handlers, so it forwards nothing; and `Curve25519.Signing.PrivateKey.makeSSHRepresentation()` writes a key its own parser rejects with `invalidPadding`. Key fixtures are therefore generated with `ssh-keygen`, which is what users have anyway.
+
+## ADR-0015 — Both ends of a forward share one event loop
+Date: 2026-09-03 (Phase 2)
+
+**Context.** The forward glues an accepted local socket to an SSH `direct-tcpip` channel; each handler writes into the other's channel. NIO asserts that a write happens on the channel's own event loop, and the two channels were landing on different loops.
+
+**Decision.** The local listener passes the SSH client's event loop as its `childGroup`, so every accepted socket shares a loop with the SSH connection.
+
+**Consequences.** Writes cross no loop boundary and need no hop, which is also the faster arrangement. One SSH connection's forwards are serialised on one loop, which is correct for a client where a tunnel carries at most a handful of database connections.
+
+## ADR-0016 — `saved_queries` is not created
+Date: 2026-09-03 (Phase 2)
+
+**Context.** SPEC §15 lists a `saved_queries` table marked "(Phase 2)", while SPEC §16 defers saved queries and snippets to v0.2 with "do not build now, do not stub".
+
+**Decision.** The table is not created. `StoreSchema` is append-only, so v0.2 adds it as migration 2 when the feature is built.
+
+**Consequences.** None for v0.1. The deferral list wins over the table listing, since building the table now would be the stub the spec forbids.

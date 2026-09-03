@@ -36,6 +36,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.0"),
         .package(url: "https://github.com/vapor/postgres-nio.git", from: "1.21.0"),
+        .package(url: "https://github.com/orlandos-nl/Citadel.git", from: "0.7.0"),
     ],
     targets: [
         // MARK: Libraries
@@ -70,7 +71,10 @@ let package = Package(
         ),
         .target(
             name: "DBTunnel",
-            dependencies: ["DBCore"],
+            dependencies: [
+                "DBCore",
+                .product(name: "Citadel", package: "Citadel"),
+            ],
             path: "Packages/DBTunnel/Sources/DBTunnel",
             swiftSettings: strict
         ),
@@ -91,7 +95,7 @@ let package = Package(
 
         .executableTarget(
             name: "dbcli",
-            dependencies: ["DBCore", "DBSQL", "DBPostgres", "DBMySQL", "DBTunnel"],
+            dependencies: ["DBCore", "DBSQL", "DBPostgres", "DBMySQL", "DBTunnel", "DBStore"],
             path: "Tools/dbcli",
             swiftSettings: strict
         ),
@@ -124,7 +128,11 @@ let package = Package(
         ),
         .testTarget(
             name: "DBTunnelTests",
-            dependencies: ["DBTunnel", "DBTestKit"],
+            // DBPostgres is a *test-only* dependency here: the tunnel's acceptance
+            // criterion is a real database reached through a real SSH forward, which is
+            // exactly how the app composes the two. The DBTunnel library itself never
+            // imports a driver, and Scripts/ci.sh checks that.
+            dependencies: ["DBTunnel", "DBTestKit", "DBPostgres"],
             path: "Packages/DBTunnel/Tests/DBTunnelTests",
             swiftSettings: strict
         ),

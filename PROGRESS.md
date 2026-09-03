@@ -1,6 +1,6 @@
 # PROGRESS.md — per-phase log
 
-Current phase: **Phase 2 — ConnectionSession, tunnel, store** (Phases 0–1 complete).
+Current phase: **Phase 3 — Data grid** (Phases 0–2 complete).
 
 ---
 
@@ -62,3 +62,28 @@ PostgreSQL 16.15 (Homebrew, localhost:5432), reported in the CI coverage summary
 - **Encrypted connections are untested**: the local PostgreSQL is built without TLS, so `sslmode=require` fails with `tlsRequiredButUnavailable` — the correct behaviour, but the encrypted path itself never ran. `verify-ca` and `verify-full` are therefore also uncovered.
 - **Only PostgreSQL 16 was exercised.** `DBSTUDIO_TEST_PG_URLS` is empty, so version branching for 11 and 12 (`prokind`, `attgenerated`) ran only on its modern branch.
 - **Client-certificate TLS** is wired but unexercised; SPEC §16 places it in Phase 3.
+
+---
+
+## Phase 2 — ConnectionSession, tunnel, store (2026-09-03)
+
+### Done
+- **`ConnectionSession` (§9)**: actor owning the tunnel, a pool of at most 8 physical connections with a 5-minute idle reap, a state stream (`disconnected` / `connecting(stage:)` / `connected` / `degraded`), leases per tab, rollback of any transaction a returned connection still holds, liveness check before reuse, the session-only read-only unlock, the introspection cache with per-table invalidation, and `testConnection` reporting stage by stage. Secrets, tunnels and drivers arrive through `SecretStore`, `TunnelProvider` and `DriverRegistry` so DBCore keeps its two imports (ADR-0012).
+- **`DBTunnel`**: `SSHTunnelProvider` over Citadel with password and private-key authentication (ed25519 and RSA, passphrase supported), one level of jump host, and the three known-hosts policies backed by a real `~/.ssh/known_hosts` parser that understands plain, bracketed-port, multi-host and HMAC-SHA1-hashed entries and appends newly accepted keys. `SSHPortForward` binds an ephemeral loopback port and glues each accepted socket to a `direct-tcpip` channel on the same event loop (ADR-0015).
+- **`DBStore` (§15)**: SQLite over the C API in WAL mode with a busy timeout, numbered migrations tracked in `PRAGMA user_version`, and typed access to connections, groups, query history (capped at 10,000 and trimmed on write), grid preferences and settings. `KeychainSecretStore` stores passwords, SSH passwords and passphrases under `com.dbstudio.connection`, and deletes all three when a connection is removed.
+- **`dbcli`**: `--ssh user@host[:port]`, `--ssh-key`, `--ssh-password`.
+
+### Tests (85 added; 232 total, 1 skipped)
+- `ConnectionSessionTests` (19): state transitions and the state stream, degraded state after a failed connect, one connection per lease, reuse after release, the pool stopping at eight and waiting rather than failing, rollback on release, replacement of a dead pooled connection, the dropped-with-open-transaction message, password resolution, the tunnel redirecting the driver to loopback while the certificate keeps naming the real host, one tunnel shared by every connection, the missing-provider error, the session-only read-only unlock, cache hits and invalidation by key and by table, and `testConnection` reporting stages in order.
+- `DBStoreTests` (16) and `SQLiteDatabaseTests` (4): migrations applied once and recorded, every table from §15 present, WAL on, connections round-tripping across a reopen with SSH and jump-host config intact, edit-in-place keeping sidebar order, reordering, cascading delete of preferences and history, groups, history recording/search/cap/clear, grid preferences per table per connection, settings with defaults and forward-compatible decoding, value round-trips for every SQLite column type, bound parameters against an injection attempt, transaction rollback, and errors carrying the statement.
+- **`testNoSecretReachesTheStoreFile`**: writes a connection, a history row and a setting, then greps every file the store touched — database, WAL and shared memory — for the secret. Required by SPEC §11.3.
+- `KeychainSecretStoreTests` (5): round-trip, update-in-place, Unicode and 4 KB secrets, deletion of every field of one connection, scoping between connections, and deleting something absent. Skips with the OS status if the Keychain is unavailable.
+- `KnownHostsTests` (11) and `SSHAuthenticationTests` (6): plain, marker, multi-host, bracketed-port and hashed entries, append round-trip, missing and malformed files, the three policies, and key loading for real `ssh-keygen` output (ed25519, ed25519 with a passphrase, RSA) plus clear errors for a wrong passphrase, a missing file, garbage, and agent authentication.
+- `TunnelIntegrationTests` (8): against an SSH server hosted in the test process (ADR-0014) — byte forwarding, three connections through one tunnel, a 400 KB payload crossing several SSH windows, public-key authentication, wrong-password failing at `.sshAuth`, a closed port failing at `.ssh`, **PostgreSQL reached through the forward**, and a full `ConnectionSession` over the tunnel using the real driver.
+
+### Gaps that did not run, and why
+- **No test ran against OpenSSH's `sshd`.** Remote Login is off on this machine and enabling it needs administrator rights the test environment may not take. The in-process server covers the client's protocol path but not interoperability with `sshd`'s algorithm preferences. `dbcli --ssh user@localhost` against the local PostgreSQL — the literal Phase 2 acceptance criterion — therefore could not be run; the equivalent is covered by `testPostgresThroughTheTunnel`.
+- **Jump hosts are untested.** `SSHClient.jump(to:)` is wired but no second server was stood up, and `DBSTUDIO_TEST_SSH_JUMP_URL` is unset.
+- **SSH agent authentication is not implemented** (ADR-0013); `.agent` throws with a message naming the alternative.
+- **ECDSA private-key files are unsupported**, because Citadel provides OpenSSH readers for ed25519 and RSA only.
+- **`known_hosts` is never consulted in an integration test**: the tunnel tests use the `ignore` policy, since the in-process server generates a fresh host key each run. Parsing and policy selection are unit-tested against real key material.

@@ -49,9 +49,18 @@ Run `prepare.sh` against each of them too (one admin URL at a time).
 - Unset variables **skip** the engine, and `Scripts/ci.sh` prints a visible warning plus a
   coverage summary at the end saying which engines actually ran.
 
-## SSH (Phase 2)
+## SSH
 
-Tunnel tests use the local `sshd` with the current user via agent/key auth.
-Enable *System Settings → General → Sharing → Remote Login*.
-Password-auth and jump-host tests run only when `DBSTUDIO_TEST_SSH_PASSWORD_URL` /
-`DBSTUDIO_TEST_SSH_JUMP_URL` are set.
+Tunnel tests need nothing set up: they start an SSH server inside the test process and
+forward through it to the local PostgreSQL (see DECISIONS.md ADR-0014). That covers the
+client's protocol path but not interoperability with OpenSSH's `sshd`.
+
+To also test against a real server, enable
+*System Settings → General → Sharing → Remote Login* and set:
+
+```sh
+export DBSTUDIO_TEST_SSH_PASSWORD_URL='ssh://user:password@host:22'
+export DBSTUDIO_TEST_SSH_JUMP_URL='ssh://user@bastion:22'
+```
+
+Both are optional; when unset, those paths are reported as gaps rather than passing.

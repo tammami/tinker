@@ -9,6 +9,7 @@
 import DBCore
 import DBPostgres
 import DBSQL
+import DBTunnel
 import Foundation
 import Logging
 
@@ -31,6 +32,18 @@ struct DBCLI {
             case "--ping": options.ping = true
             case "-v", "--verbose": options.verbose = true
             case "--no-header": options.header = false
+            case "--ssh":
+                index += 1
+                guard index < arguments.count else { fail("--ssh needs user@host[:port]") }
+                options.ssh = arguments[index]
+            case "--ssh-key":
+                index += 1
+                guard index < arguments.count else { fail("--ssh-key needs a path") }
+                options.sshKey = arguments[index]
+            case "--ssh-password":
+                index += 1
+                guard index < arguments.count else { fail("--ssh-password needs a password") }
+                options.sshPassword = arguments[index]
             case "--cancel-after":
                 index += 1
                 guard index < arguments.count, let seconds = parseDuration(arguments[index]) else {
@@ -55,7 +68,21 @@ struct DBCLI {
         logger.logLevel = options.verbose ? .debug : .warning
 
         do {
-            let config = try parseURL(urlText)
+            var config = try parseURL(urlText)
+            var tunnel: (any Tunnel)?
+            if let sshTarget = options.ssh {
+                let (sshConfig, secrets) = try await makeSSHConfig(sshTarget, options: options)
+                standardError("opening SSH tunnel through \(sshConfig.user)@\(sshConfig.host):\(sshConfig.port)…\n")
+                let forward = try await SSHTunnelProvider().openTunnel(
+                    sshConfig, to: config.host, port: config.port, secrets: secrets, logger: logger
+                )
+                tunnel = forward
+                standardError("forwarding 127.0.0.1:\(forward.localPort) → \(config.host):\(config.port)\n")
+                config.tlsServerName = config.host
+                config.host = "127.0.0.1"
+                config.port = forward.localPort
+            }
+            defer { if let tunnel { Task { await tunnel.close() } } }
             let connection: any SQLConnection = switch config.dialect {
             case .postgresql: try await PostgresDriver.connect(config, logger: logger)
             case .mysql: throw CLIError("The MySQL driver lands in Phase 6")
@@ -89,6 +116,9 @@ struct DBCLI {
         var header = true
         var cancelAfter: Duration?
         var sql: String?
+        var ssh: String?
+        var sshKey: String?
+        var sshPassword: String?
     }
 
     // MARK: - Running statements
@@ -265,6 +295,35 @@ struct DBCLI {
         )
     }
 
+    /// Builds an SSH config from `--ssh user@host[:port]`, choosing key or password auth.
+    static func makeSSHConfig(
+        _ target: String,
+        options: Options
+    ) async throws -> (SSHConfig, any SecretStore) {
+        let parts = target.split(separator: "@", maxSplits: 1)
+        let user = parts.count == 2 ? String(parts[0]) : NSUserName()
+        let hostPart = String(parts.last ?? "localhost")
+        let hostPieces = hostPart.split(separator: ":", maxSplits: 1)
+        let host = String(hostPieces[0])
+        let port = hostPieces.count == 2 ? Int(hostPieces[1]) ?? 22 : 22
+
+        let secrets = EphemeralSecretStore()
+        let auth: SSHAuth
+        if let password = options.sshPassword {
+            let reference = SecretRef(account: "dbcli.ssh.password")
+            try await secrets.setSecret(password, for: reference)
+            auth = .password(reference)
+        } else {
+            let path = options.sshKey
+                ?? (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/id_ed25519")
+            auth = .privateKey(path: path, passphrase: nil)
+        }
+        return (
+            SSHConfig(host: host, port: port, user: user, auth: auth, knownHostsPolicy: .acceptNew),
+            secrets
+        )
+    }
+
     static func parseDuration(_ text: String) -> Duration? {
         if text.hasSuffix("ms"), let value = Double(text.dropLast(2)) {
             return .milliseconds(Int(value))
@@ -316,6 +375,9 @@ struct DBCLI {
           dbcli <url> --ping           check the connection
 
         OPTIONS
+          --ssh <user@host[:port]>     tunnel the connection over SSH
+          --ssh-key <path>             private key to use (default ~/.ssh/id_ed25519)
+          --ssh-password <password>    use password authentication instead of a key
           --cancel-after <duration>    cancel the running statement (e.g. 2s, 500ms)
           --no-header                  omit the column-name row
           -v, --verbose                debug logging

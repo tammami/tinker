@@ -15,12 +15,28 @@ public protocol DataGridDelegate: AnyObject {
     /// A click on a column heading. `additive` is true when shift was held, which adds a
     /// secondary sort rather than replacing the first (SPEC §12.4).
     func gridDidClickColumnHeader(column: Int, additive: Bool)
+    /// Whether a cell's value points at a row in another table.
+    func gridHasReference(row: Int, column: Int) -> Bool
+    /// Opens the row a cell's foreign key points at.
+    func gridDidRequestFollowReference(row: Int, column: Int)
+    /// The context menu's copy, in the chosen format.
+    func gridDidRequestCopy(format: ClipboardFormat)
+    func gridDidRequestSetNull()
+    func gridDidRequestDeleteRows()
+    func gridDidRequestAddRow()
+    func gridDidRequestAutosize(column: Int)
 }
 
 public extension DataGridDelegate {
     /// Query results are what the statement returned; re-ordering them would mean running
     /// a different statement, so a results grid ignores this.
     func gridDidClickColumnHeader(column: Int, additive: Bool) {}
+    func gridHasReference(row: Int, column: Int) -> Bool { false }
+    func gridDidRequestFollowReference(row: Int, column: Int) {}
+    func gridDidRequestSetNull() {}
+    func gridDidRequestDeleteRows() {}
+    func gridDidRequestAddRow() {}
+    func gridDidRequestAutosize(column: Int) {}
 }
 
 /// The data grid: an `NSTableView` in an `NSScrollView`, wrapped for SwiftUI.
@@ -467,6 +483,103 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         tableView.window?.makeFirstResponder(editor)
     }
 
+    // MARK: - Context menu
+
+    /// The menu for a right-click on a cell: the value's own actions first, then the
+    /// selection's, then the column's.
+    func contextMenu(row: Int, column: Int?) -> NSMenu {
+        let menu = NSMenu()
+        if let column {
+            if delegate?.gridHasReference(row: row, column: column) == true {
+                let follow = NSMenuItem(title: "Go to Referenced Row", action: #selector(followReference(_:)), keyEquivalent: "")
+                follow.target = self
+                follow.image = NSImage(systemSymbolName: Icon.goTo, accessibilityDescription: nil)
+                follow.representedObject = [row, column]
+                menu.addItem(follow)
+                menu.addItem(.separator())
+            }
+            let inspect = NSMenuItem(title: "Show in Inspector", action: #selector(showInspector(_:)), keyEquivalent: "")
+            inspect.target = self
+            inspect.image = NSImage(systemSymbolName: Icon.inspector, accessibilityDescription: nil)
+            menu.addItem(inspect)
+            let copyValue = NSMenuItem(title: "Copy Value", action: #selector(copyValue(_:)), keyEquivalent: "")
+            copyValue.target = self
+            copyValue.image = NSImage(systemSymbolName: Icon.copy, accessibilityDescription: nil)
+            copyValue.representedObject = [row, column]
+            menu.addItem(copyValue)
+        }
+        let copyAs = NSMenuItem(title: "Copy Selection As", action: nil, keyEquivalent: "")
+        copyAs.image = NSImage(systemSymbolName: Icon.copy, accessibilityDescription: nil)
+        let submenu = NSMenu()
+        for format in ClipboardFormat.allCases {
+            let item = NSMenuItem(title: format.displayName, action: #selector(copyAs(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = format.rawValue
+            submenu.addItem(item)
+        }
+        copyAs.submenu = submenu
+        menu.addItem(copyAs)
+
+        if model.isEditable {
+            menu.addItem(.separator())
+            let setNull = NSMenuItem(title: "Set NULL", action: #selector(setNull(_:)), keyEquivalent: "")
+            setNull.target = self
+            setNull.image = NSImage(systemSymbolName: Icon.null, accessibilityDescription: nil)
+            menu.addItem(setNull)
+            let addRow = NSMenuItem(title: "Add Row", action: #selector(addRow(_:)), keyEquivalent: "")
+            addRow.target = self
+            addRow.image = NSImage(systemSymbolName: Icon.add, accessibilityDescription: nil)
+            menu.addItem(addRow)
+            let count = selection.rows(totalRows: model.displayRowCount).count
+            let delete = NSMenuItem(
+                title: count > 1 ? "Delete \(count) Rows" : "Delete Row",
+                action: #selector(deleteRows(_:)), keyEquivalent: ""
+            )
+            delete.target = self
+            delete.image = NSImage(systemSymbolName: Icon.delete, accessibilityDescription: nil)
+            menu.addItem(delete)
+        }
+        if let column {
+            menu.addItem(.separator())
+            let autosize = NSMenuItem(title: "Size Column to Fit", action: #selector(autosize(_:)), keyEquivalent: "")
+            autosize.target = self
+            autosize.representedObject = column
+            menu.addItem(autosize)
+        }
+        return menu
+    }
+
+    @objc private func followReference(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [Int], pair.count == 2 else { return }
+        delegate?.gridDidRequestFollowReference(row: pair[0], column: pair[1])
+    }
+
+    @objc private func showInspector(_ sender: NSMenuItem) {
+        delegate?.gridDidRequestInspector()
+    }
+
+    @objc private func copyValue(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [Int], pair.count == 2,
+              let value = model.value(row: pair[0], column: pair[1])
+        else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(ClipboardFormatter.cellText(value), forType: .string)
+    }
+
+    @objc private func copyAs(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let format = ClipboardFormat(rawValue: raw) else { return }
+        delegate?.gridDidRequestCopy(format: format)
+    }
+
+    @objc private func setNull(_ sender: NSMenuItem) { delegate?.gridDidRequestSetNull() }
+    @objc private func addRow(_ sender: NSMenuItem) { delegate?.gridDidRequestAddRow() }
+    @objc private func deleteRows(_ sender: NSMenuItem) { delegate?.gridDidRequestDeleteRows() }
+
+    @objc private func autosize(_ sender: NSMenuItem) {
+        guard let column = sender.representedObject as? Int, model.columns.indices.contains(column) else { return }
+        autosizeColumn(named: model.columns[column].name)
+    }
+
     // MARK: - Keyboard
 
     /// Handles the navigation and editing keys the grid owns. Returns false for anything
@@ -489,6 +602,9 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         case 121: new.move(rowDelta: 30, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
         case 36:  // Return starts editing
             beginEditingFocusedCell()
+            return true
+        case 49:  // Space shows the focused cell in the inspector
+            delegate?.gridDidRequestInspector()
             return true
         case 48:  // Tab moves right, wrapping to the next row
             if selection.focusColumn == columnCount - 1, selection.focusRow < rowCount - 1 {
@@ -513,6 +629,26 @@ public final class GridTableView: NSTableView {
     public override func keyDown(with event: NSEvent) {
         if let controller, MainActor.assumeIsolated({ controller.handleKeyDown(event) }) { return }
         super.keyDown(with: event)
+    }
+
+    /// A right-click selects the cell under the pointer, then offers what can be done with it.
+    public override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        let row = row(at: point)
+        let position = column(at: point)
+        guard row >= 0 else { return nil }
+        var menu: NSMenu?
+        MainActor.assumeIsolated {
+            guard let controller else { return }
+            let column = position >= 0 ? controller.modelColumn(atPosition: position) : nil
+            if let column, !controller.selection.contains(row: row, column: column, columnCount: controller.model.columns.count) {
+                controller.handleClick(row: row, column: column, extending: false)
+            } else if column == nil, !controller.selection.containsRow(row) {
+                controller.handleRowClick(row: row, extending: false)
+            }
+            menu = controller.contextMenu(row: row, column: column)
+        }
+        return menu
     }
 
     public override func mouseDown(with event: NSEvent) {

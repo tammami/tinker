@@ -1,7 +1,7 @@
 import DBCore
 import SwiftUI
 
-/// Shown the first time DBStudio launches with no connections (SPEC §16 Phase 7).
+/// Shown the first time DBStudio launches with no connections.
 ///
 /// It states plainly what the app does with credentials and diagnostics, because those are
 /// the two questions a database client should answer before it asks for a password.
@@ -13,36 +13,28 @@ public struct FirstRunView: View {
     @State private var collectDiagnostics = false
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 12) {
+        VStack(spacing: 0) {
+            VStack(spacing: DesignTokens.Spacing.md) {
                 Image(nsImage: NSApp.applicationIconImage)
                     .resizable()
-                    .frame(width: 56, height: 56)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Welcome to DBStudio").font(.title2.weight(.semibold))
-                    Text("A native client for PostgreSQL and MySQL.")
-                        .foregroundStyle(.secondary)
-                }
+                    .frame(width: 72, height: 72)
+                Text("Welcome to \(Product.name)").font(.title2.weight(.semibold))
+                Text("A native client for PostgreSQL and MySQL.")
+                    .foregroundStyle(.secondary)
+                Text(Product.credit).font(.caption).foregroundStyle(.tertiary)
             }
+            .padding(.top, DesignTokens.Spacing.xl)
+            .padding(.bottom, DesignTokens.Spacing.lg)
 
-            VStack(alignment: .leading, spacing: 10) {
-                Label {
-                    Text("Passwords are stored in your macOS Keychain, never in DBStudio's own files.")
-                } icon: {
-                    Image(systemName: "key.fill").foregroundStyle(.blue)
-                }
-                Label {
-                    Text("Every change you make in the grid is shown to you as SQL before it runs, and runs in one transaction.")
-                } icon: {
-                    Image(systemName: "checkmark.shield").foregroundStyle(.green)
-                }
-                Label {
-                    Text("Mark a connection as Production to get a confirmation on every write, or Read-only to block them entirely.")
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
-                }
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                point(Icon.key, .blue, "Passwords live in your macOS Keychain",
+                      "Never in \(Product.name)'s own files.")
+                point(Icon.shield, .green, "Every change is shown as SQL before it runs",
+                      "Grid edits run in one transaction, and roll back if anything is off.")
+                point(Icon.production, .orange, "Mark a connection Production or Read-only",
+                      "Production asks before every write. Read-only blocks them entirely.")
             }
-            .font(.callout)
+            .padding(.horizontal, DesignTokens.Spacing.xl)
 
             Toggle(isOn: $collectDiagnostics) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -53,18 +45,39 @@ public struct FirstRunView: View {
                 }
             }
             .onChange(of: collectDiagnostics) { _, value in onSetDiagnostics(value) }
+            .padding(DesignTokens.Spacing.xl)
 
+            Divider()
             HStack {
-                Spacer()
                 Button("Later", action: onDismiss)
-                Button("Add a Connection…") {
+                Spacer()
+                Button {
                     onAddConnection()
                     onDismiss()
+                } label: {
+                    Label("Add a Connection…", systemImage: Icon.add)
                 }
                 .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(.horizontal, DesignTokens.Spacing.lg)
+            .padding(.vertical, DesignTokens.Spacing.md)
+            .background(.bar)
+        }
+        .frame(width: 520)
+    }
+
+    private func point(_ icon: String, _ color: Color, _ title: String, _ detail: String) -> some View {
+        HStack(alignment: .top, spacing: DesignTokens.Spacing.md) {
+            Image(systemName: icon)
+                .foregroundStyle(color)
+                .frame(width: 28, height: 28)
+                .background(color.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.callout.weight(.medium))
+                Text(detail).font(.caption).foregroundStyle(.secondary)
             }
         }
-        .padding(20)
-        .frame(width: 520)
     }
 }

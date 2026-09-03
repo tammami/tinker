@@ -2,8 +2,7 @@ import DBCore
 import DBSQL
 import SwiftUI
 
-/// The sheet that shows what a structure change will run, and the only route to Execute
-/// (SPEC §15b.2).
+/// The sheet that shows what a structure change will run, and the only route to Execute.
 struct DDLPreviewView: View {
     let statements: [GeneratedDDL]
     let dialect: SQLDialect
@@ -24,106 +23,34 @@ struct DDLPreviewView: View {
     private var destructive: [GeneratedDDL] { statements.filter(\.isDestructive) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
-            Divider()
-            statementList
-            if !isTransactional { implicitCommitWarning }
-            if !destructive.isEmpty { destructiveWarning }
-            Divider()
-            footer
-        }
-        .padding(16)
-        .frame(minWidth: 640, minHeight: 460)
-        .task {
-            guard isProduction else { return }
-            productionDelayRemaining = Self.productionDelay
-            while productionDelayRemaining > 0 {
-                try? await Task.sleep(for: .milliseconds(100))
-                productionDelayRemaining -= 0.1
-            }
-        }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Review \(statements.count) statement\(statements.count == 1 ? "" : "s")")
-                .font(.headline)
-            Text(
-                isTransactional
-                    ? "They run in one transaction on \(tableName)."
-                    : "They run in order on \(tableName)."
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-    }
-
-    private var statementList: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(Array(statements.enumerated()), id: \.element.id) { index, statement in
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
-                            Text("\(index + 1)")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.tertiary)
-                            Text(label(for: statement.kind))
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(statement.isDestructive ? .red : .secondary)
-                            if statement.isDestructive {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .font(.caption2)
-                                    .foregroundStyle(.red)
-                            }
-                        }
-                        Text(statement.sql)
-                            .font(.system(.callout, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color(nsColor: .textBackgroundColor))
+        SheetFrame(
+            title: "Review \(statements.count) statement\(statements.count == 1 ? "" : "s")",
+            icon: Icon.structure,
+            subtitle: isTransactional
+                ? "They run in one transaction on \(tableName)."
+                : "They run in order on \(tableName). MySQL commits each one as it runs.",
+            width: DesignTokens.Metrics.wideSheetWidth
+        ) {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                statementList
+                if !isTransactional {
+                    InlineBanner(
+                        kind: .warning,
+                        message: "If one statement fails, the ones before it stay applied and cannot be rolled back.",
+                        onDismiss: {}
+                    )
+                }
+                if !destructive.isEmpty {
+                    InlineBanner(
+                        kind: .error,
+                        message: "\(destructive.count) statement\(destructive.count == 1 ? "" : "s") discard\(destructive.count == 1 ? "s" : "") data that cannot be recovered.",
+                        onDismiss: {}
                     )
                 }
             }
-        }
-        .frame(maxHeight: .infinity)
-    }
-
-    /// MySQL cannot undo this, and the user has to be told before they run it, not after.
-    private var implicitCommitWarning: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-            Text(
-                "MySQL commits each structure statement as it runs. If one fails, the "
-                    + "statements before it stay applied and cannot be rolled back."
-            )
-            .font(.callout)
-        }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.orange.opacity(0.12)))
-    }
-
-    private var destructiveWarning: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "trash.fill").foregroundStyle(.red)
-            Text(
-                "\(destructive.count) statement\(destructive.count == 1 ? "" : "s") "
-                    + "discard\(destructive.count == 1 ? "es" : "") data that cannot be recovered."
-            )
-            .font(.callout)
-        }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.red.opacity(0.12)))
-    }
-
-    private var footer: some View {
-        HStack {
+        } footer: {
             if isProduction {
-                Label("Production", systemImage: "exclamationmark.octagon.fill")
+                Label("Production", systemImage: Icon.production)
                     .foregroundStyle(.red)
                     .font(.callout.weight(.semibold))
             }
@@ -138,8 +65,46 @@ struct DDLPreviewView: View {
                 }
             }
             .keyboardShortcut(.defaultAction)
+            .buttonStyle(.borderedProminent)
+            .tint(destructive.isEmpty && !isProduction ? nil : .red)
             .disabled(isExecuting || statements.isEmpty || productionDelayRemaining > 0)
         }
+        .task {
+            guard isProduction else { return }
+            productionDelayRemaining = Self.productionDelay
+            while productionDelayRemaining > 0 {
+                try? await Task.sleep(for: .milliseconds(100))
+                productionDelayRemaining -= 0.1
+            }
+        }
+    }
+
+    private var statementList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                ForEach(Array(statements.enumerated()), id: \.element.id) { index, statement in
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                        HStack(spacing: DesignTokens.Spacing.sm) {
+                            Text("\(index + 1)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                            Badge(text: label(for: statement.kind), color: statement.isDestructive ? .red : .secondary)
+                            if statement.isDestructive {
+                                Image(systemName: Icon.warning).font(.caption2).foregroundStyle(.red)
+                            }
+                        }
+                        Text(statement.sql)
+                            .font(.system(.callout, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(DesignTokens.Spacing.sm)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius))
+                }
+            }
+        }
+        .frame(minHeight: 240, maxHeight: 420)
     }
 
     private var executeTitle: String {

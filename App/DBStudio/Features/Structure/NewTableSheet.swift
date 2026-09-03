@@ -1,7 +1,7 @@
 import DBCore
 import SwiftUI
 
-/// Builds a table that does not exist yet (SPEC §15b.3).
+/// Builds a table that does not exist yet.
 ///
 /// It is the Structure tab's own panes with an empty definition behind them, so a new
 /// table is described exactly the way an existing one is edited.
@@ -20,18 +20,25 @@ struct NewTableSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
+            PaneBar(height: 44) {
+                Image(systemName: Icon.table)
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 28, height: 28)
+                    .background(Color.accentColor.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius))
                 Text("New table in").font(.callout).foregroundStyle(.secondary)
                 Text(schema.id).font(.callout.weight(.medium))
                 TextField("name", text: $name)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 220)
+                    .frame(width: 240)
                     .onChange(of: name) { _, newName in rename(to: newName) }
                 Spacer()
+                if isProduction {
+                    Label("Production", systemImage: Icon.production).foregroundStyle(.red).font(.callout.weight(.semibold))
+                }
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
             }
-            .padding(10)
             Divider()
 
             if let controller {

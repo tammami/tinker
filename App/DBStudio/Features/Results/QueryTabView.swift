@@ -3,7 +3,7 @@ import DBGrid
 import DBSQL
 import SwiftUI
 
-/// A query tab: editor above, one result tab per statement below (SPEC §13).
+/// A query tab: editor above, one result tab per statement below.
 public struct QueryTabView: View {
     @Bindable var controller: QueryTabController
     @Bindable var workspace: WorkspaceModel
@@ -11,11 +11,13 @@ public struct QueryTabView: View {
     let fontName: String
     let fontSize: Double
 
-    @State private var editorSelection: Range<Int>?
+    @State private var resultPane: ResultPane = .result
 
     public var body: some View {
         VSplitView {
             VStack(spacing: 0) {
+                editorToolbar
+                Divider()
                 SQLEditorView(
                     text: $controller.sql,
                     dialect: controller.dialect,
@@ -24,16 +26,15 @@ public struct QueryTabView: View {
                     errorPosition: controller.errorBanner?.position,
                     delegate: controller
                 )
-                Divider()
-                editorToolbar
             }
             // The editor pane fills the split view's width. Without this it is laid out at
             // the ideal width of what is beside it and sits centred in a narrow column.
-            .frame(maxWidth: .infinity, minHeight: 120, idealHeight: 240)
+            .frame(maxWidth: .infinity, minHeight: 120, idealHeight: 260)
 
             VStack(spacing: 0) {
                 if let banner = controller.errorBanner {
-                    ErrorBanner(
+                    InlineBanner(
+                        kind: .error,
                         message: banner.sqlState.map { "[\($0)] \(banner.message)" } ?? banner.message,
                         detail: banner.detail,
                         hint: banner.hint,
@@ -45,15 +46,11 @@ public struct QueryTabView: View {
                     )
                     Divider()
                 }
-
-                if controller.results.count > 1 {
-                    resultTabBar
-                    Divider()
-                }
-
+                resultHeader
+                Divider()
                 resultContent
             }
-            .frame(maxWidth: .infinity, minHeight: 120)
+            .frame(maxWidth: .infinity, minHeight: 140)
         }
         .task(id: tab.id) {
             controller.sql = tab.sql
@@ -67,29 +64,46 @@ public struct QueryTabView: View {
         }
     }
 
+    // MARK: - Editor bar
+
+    /// Run controls on the left, the tab's session in the middle, the transaction on the
+    /// right: what to do, where it goes, and what state it leaves behind.
     var editorToolbar: some View {
-        HStack(spacing: 10) {
+        PaneBar {
             Button {
                 controller.run(all: false)
             } label: {
-                Label("Run", systemImage: "play.fill")
+                Label("Run", systemImage: Icon.run)
             }
+            .keyboardShortcut(.return, modifiers: .command)
             .disabled(controller.isRunning)
             .help("Run the statement under the cursor (⌘↩)")
 
             Button {
                 controller.run(all: true)
             } label: {
-                Label("Run All", systemImage: "forward.fill")
+                Label("Run All", systemImage: Icon.runAll)
             }
             .disabled(controller.isRunning)
             .help("Run every statement (⌘⇧↩)")
+
+            Button {
+                controller.explain(analyze: false)
+            } label: {
+                Label("Explain", systemImage: Icon.explain)
+            }
+            .disabled(controller.isRunning)
+            .help("Show the plan for the statement under the cursor (⌘⇧E)")
+            .contextMenu {
+                Button("Explain") { controller.explain(analyze: false) }
+                Button("Explain Analyze (runs the statement)") { controller.explain(analyze: true) }
+            }
 
             if controller.isRunning {
                 Button {
                     controller.cancel()
                 } label: {
-                    Label("Cancel", systemImage: "stop.fill")
+                    Label("Stop", systemImage: Icon.stop)
                 }
                 .help("Cancel on the server (⌘.)")
                 ProgressView().controlSize(.small)
@@ -98,22 +112,22 @@ public struct QueryTabView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Divider().frame(height: 14)
+            BarDivider()
 
-            // The tab's session (SPEC §13.1a): statements resolve unqualified names here.
-            Picker("", selection: Binding(
+            // The tab's session: statements resolve unqualified names here.
+            Picker("Connection", selection: Binding(
                 get: { controller.connectionID },
                 set: { id in Task { await controller.selectConnection(id) } }
             )) {
                 ForEach(controller.availableConnections) { config in
-                    Text(config.name).tag(config.id)
+                    Label(config.name, systemImage: Icon.connection).tag(config.id)
                 }
             }
             .labelsHidden()
-            .frame(width: 160)
+            .frame(width: 170)
             .help("The connection this tab runs on")
 
-            Picker("", selection: Binding(
+            Picker("Database", selection: Binding(
                 get: { controller.sessionDatabase ?? "" },
                 set: { name in Task { await controller.selectDatabase(name) } }
             )) {
@@ -125,147 +139,192 @@ public struct QueryTabView: View {
                 }
             }
             .labelsHidden()
-            .frame(width: 170)
+            .frame(width: 160)
             .help(
                 controller.dialect == .mysql
                     ? "The database unqualified names resolve against (USE)"
                     : "The schema unqualified names resolve against (search_path)"
             )
 
-            Divider().frame(height: 14)
+            BarDivider()
 
             Toggle("Auto-commit", isOn: Binding(
                 get: { controller.autoCommit },
                 set: { value in Task { await controller.setAutoCommit(value) } }
             ))
             .toggleStyle(.checkbox)
-            .controlSize(.small)
+            .help("Off holds a transaction open until you commit or roll back")
 
             if controller.isInTransaction {
-                Text("Transaction open")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.orange)
+                Badge(text: "TRANSACTION OPEN", color: .orange)
                 Button("Commit") { Task { await controller.commitTransaction() } }
-                    .controlSize(.small)
                 Button("Rollback") { Task { await controller.rollbackTransaction() } }
-                    .controlSize(.small)
             }
 
             Spacer()
 
-            Text(controller.statusText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 10)
-        .frame(height: 28)
-        .background(.bar)
-    }
-
-    var resultTabBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 0) {
-                ForEach(controller.results) { result in
-                    Button {
-                        controller.selectedResultID = result.id
-                    } label: {
-                        HStack(spacing: 4) {
-                            if result.error != nil {
-                                Image(systemName: "exclamationmark.circle.fill")
-                                    .foregroundStyle(.red)
-                                    .font(.caption)
-                            }
-                            Text(result.label).lineLimit(1).font(.system(size: 11))
-                        }
-                        .padding(.horizontal, 10)
-                        .frame(height: 24)
-                        .background(
-                            controller.selectedResultID == result.id
-                                ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.25)
-                                : .clear
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
-                Spacer(minLength: 0)
+            IconButton(icon: Icon.format, label: "Format SQL (⌘⇧I)") { controller.formatSQL() }
+            IconButton(icon: Icon.snippet, label: "Snippets (⌘⇧K)") {
+                workspace.isSnippetsPresented = true
+            }
+            IconButton(icon: Icon.history, label: "History (⌘Y)") {
+                workspace.isHistoryPresented = true
             }
         }
-        .frame(height: 24)
+        .controlSize(.small)
+    }
+
+    // MARK: - Results
+
+    /// Which pane of a result is showing.
+    enum ResultPane: String, CaseIterable, Identifiable {
+        case result = "Rows"
+        case text = "Text"
+        case message = "Message"
+        case profile = "Profile"
+        case status = "Status"
+
+        var id: String { rawValue }
+
+        var icon: String {
+            switch self {
+            case .result: Icon.data
+            case .text: Icon.text
+            case .message: Icon.message
+            case .profile: Icon.profile
+            case .status: Icon.status
+            }
+        }
+    }
+
+    /// The result strip: one chip per statement on the left, the pane picker on the right.
+    var resultHeader: some View {
+        HStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: DesignTokens.Spacing.xs) {
+                    ForEach(controller.results) { result in
+                        resultChip(result)
+                    }
+                }
+                .padding(.horizontal, DesignTokens.Spacing.sm)
+            }
+            Spacer(minLength: DesignTokens.Spacing.sm)
+            Picker("Pane", selection: $resultPane) {
+                ForEach(ResultPane.allCases) { pane in
+                    Label(pane.rawValue, systemImage: pane.icon).tag(pane)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
+            .fixedSize()
+            .padding(.trailing, DesignTokens.Spacing.sm)
+        }
+        .frame(height: DesignTokens.Metrics.resultTabHeight)
         .background(.bar)
     }
 
-    @State private var resultPane: ResultPane = .result
-
-    /// Which pane of a result is showing (SPEC §13.2a).
-    enum ResultPane: String, CaseIterable, Identifiable {
-        case message = "Message"
-        case result = "Result"
-        case profile = "Profile"
-        case status = "Status"
-        var id: String { rawValue }
+    private func resultChip(_ result: QueryResultTab) -> some View {
+        let isSelected = controller.selectedResultID == result.id
+        return Button {
+            controller.selectedResultID = result.id
+        } label: {
+            HStack(spacing: DesignTokens.Spacing.xs) {
+                Image(systemName: result.error != nil ? Icon.error : (result.grid == nil ? Icon.success : Icon.data))
+                    .font(.system(size: 10))
+                    .foregroundStyle(result.error != nil ? .red : (isSelected ? Color.accentColor : .secondary))
+                Text(result.label).lineLimit(1).font(.system(size: 11, weight: isSelected ? .medium : .regular))
+                if let grid = result.grid {
+                    Badge(text: "\(grid.displayRowCount)")
+                }
+            }
+            .padding(.horizontal, DesignTokens.Spacing.sm)
+            .frame(height: 22)
+            .background(isSelected ? Color.accentColor.opacity(0.14) : .clear)
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(result.statement)
     }
 
     @ViewBuilder
     var resultContent: some View {
         if let result = controller.selectedResult {
-            VStack(spacing: 0) {
-                HStack {
-                    Spacer()
-                    Picker("", selection: $resultPane) {
-                        ForEach(ResultPane.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 340)
-                    Spacer()
-                }
-                .padding(.vertical, 5)
-                Divider()
-
-                switch resultPane {
-                case .message: messagePane(result)
-                case .result: rowsPane(result)
-                case .profile: tablePane(
-                    columns: result.profileColumns, rows: result.profile, note: result.profileNote
-                )
-                .task(id: result.id) { await controller.loadProfile(for: result) }
-                case .status: tablePane(
-                    columns: result.statusColumns, rows: result.status, note: result.statusNote
-                )
-                .task(id: result.id) { await controller.loadStatus(for: result) }
-                }
+            switch resultPane {
+            case .message: messagePane(result)
+            case .result: rowsPane(result)
+            case .text: textPane(result)
+            case .profile: tablePane(
+                columns: result.profileColumns, rows: result.profile, note: result.profileNote
+            )
+            .task(id: result.id) { await controller.loadProfile(for: result) }
+            case .status: tablePane(
+                columns: result.statusColumns, rows: result.status, note: result.statusNote
+            )
+            .task(id: result.id) { await controller.loadStatus(for: result) }
             }
         } else {
-            ContentUnavailableView("Run a statement to see results", systemImage: "play")
+            EmptyStateView(
+                icon: Icon.run,
+                title: "No results yet",
+                message: "Run the statement under the cursor with ⌘↩, or every statement with ⌘⇧↩."
+            )
         }
     }
 
     /// The statement and what the server said about it.
     private func messagePane(_ result: QueryResultTab) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("sql").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                    Text("Statement").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     Text(result.statement)
                         .font(.system(.callout, design: .monospaced))
                         .textSelection(.enabled)
                 }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("message").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                    Text("Server").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     Text(result.error?.message ?? result.message ?? "OK")
                         .font(.callout)
                         .foregroundStyle(result.error == nil ? Color.primary : Color.red)
                         .textSelection(.enabled)
                 }
                 if let completion = result.completion {
-                    Text((completion.serverTag ?? "") + " • " + Self.milliseconds(completion.durationTotal))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: DesignTokens.Spacing.sm) {
+                        if let tag = completion.serverTag { Badge(text: tag) }
+                        Text(Self.seconds(completion.durationTotal))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        if let server = completion.durationServer {
+                            Text("server \(Self.seconds(server))")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    if !completion.notices.isEmpty {
+                        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                            Text("Notices").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            ForEach(Array(completion.notices.enumerated()), id: \.offset) { _, notice in
+                                Text(notice).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                            }
+                        }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
+            .padding(DesignTokens.Spacing.lg)
+        }
+    }
+
+    /// The rows as aligned plain text, the way a terminal client prints them.
+    private func textPane(_ result: QueryResultTab) -> some View {
+        Group {
+            if let grid = result.grid {
+                TextResultView(grid: grid, revision: controller.revision, fontName: fontName, fontSize: fontSize)
+            } else {
+                EmptyStateView(icon: Icon.text, title: result.message ?? "No rows")
+            }
         }
     }
 
@@ -275,110 +334,108 @@ public struct QueryTabView: View {
         columns: [String], rows: [[String]]?, note: String?
     ) -> some View {
         if let note {
-            ContentUnavailableView {
-                Text("Not available")
-            } description: {
-                Text(note)
-            }
+            EmptyStateView(icon: Icon.info, title: "Not available", message: note)
         } else if let rows, !rows.isEmpty {
-            ScrollView([.vertical, .horizontal]) {
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack(spacing: 0) {
-                        ForEach(Array(columns.enumerated()), id: \.offset) { _, name in
-                            Text(name)
-                                .font(.caption.weight(.semibold))
-                                .frame(width: 200, alignment: .leading)
-                                .padding(.horizontal, 6)
-                        }
-                    }
-                    .padding(.vertical, 5)
-                    Divider()
-                    ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                        HStack(spacing: 0) {
-                            ForEach(Array(row.enumerated()), id: \.offset) { _, value in
-                                Text(value)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .frame(width: 200, alignment: .leading)
-                                    .padding(.horizontal, 6)
-                                    .lineLimit(1)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                        .background(
-                            index.isMultiple(of: 2)
-                                ? Color.clear
-                                : Color(nsColor: .alternatingContentBackgroundColors[1])
-                        )
-                    }
-                }
-            }
+            SimpleTable(
+                columns: columns.map { SimpleTable.Column(title: $0, width: 200) },
+                rows: rows
+            )
         } else {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    static func milliseconds(_ duration: Duration) -> String {
+    static func seconds(_ duration: Duration) -> String {
         let ms = Double(duration.components.attoseconds) / 1e15
             + Double(duration.components.seconds) * 1000
-        return String(format: "%.3f s", ms / 1000)
+        return ms < 1_000 ? String(format: "%.0f ms", ms) : String(format: "%.3f s", ms / 1000)
     }
 
     @ViewBuilder
     private func rowsPane(_ result: QueryResultTab) -> some View {
         VStack(spacing: 0) {
-                if let grid = result.grid {
-                    DataGridView(
-                        model: grid,
-                        selection: $controller.selection,
-                        revision: controller.revision,
-                        delegate: controller
+            if let grid = result.grid {
+                DataGridView(
+                    model: grid,
+                    selection: $controller.selection,
+                    revision: controller.revision,
+                    delegate: controller
+                )
+                if grid.hasReachedMemoryCap {
+                    InlineBanner(
+                        kind: .warning,
+                        message: "Showing the first 200,000 rows. Export to a file to get the rest.",
+                        onDismiss: {}
                     )
-                    if grid.hasReachedMemoryCap {
-                        memoryCapBanner
-                    }
-                } else {
-                    VStack {
-                        Text(result.message ?? "No rows")
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                Divider()
-                HStack(spacing: 10) {
-                    // What produced the rows on screen, so it is never in doubt.
-                    Text(result.statement)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Spacer()
-                    if let completion = result.completion {
-                        Text(Self.milliseconds(completion.durationTotal))
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    if let grid = result.grid {
-                        Text("\(grid.displayRowCount) record\(grid.displayRowCount == 1 ? "" : "s")")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                    .overlay(alignment: .trailing) {
+                        Button("Export…") { workspace.isExportPresented = true }
+                            .controlSize(.small)
+                            .padding(.trailing, 44)
                     }
                 }
-                .padding(.horizontal, 10)
-                .frame(height: 22)
-                .background(.bar)
+            } else {
+                EmptyStateView(
+                    icon: result.error == nil ? Icon.success : Icon.error,
+                    title: result.error == nil ? "Done" : "Failed",
+                    message: result.error?.message ?? result.message
+                )
+            }
+            Divider()
+            StatusBarView {
+                // What produced the rows on screen, so it is never in doubt.
+                Text(result.statement.split(whereSeparator: \.isNewline).joined(separator: " "))
+                    .font(.system(.caption, design: .monospaced))
+                Spacer()
+                if let completion = result.completion {
+                    Label(Self.seconds(completion.durationTotal), systemImage: Icon.profile)
+                        .monospacedDigit()
+                }
+                if let grid = result.grid {
+                    Text("\(grid.displayRowCount) row\(grid.displayRowCount == 1 ? "" : "s")")
+                        .monospacedDigit()
+                    if controller.selection.rowSpan > 1 || controller.selection.columnSpan > 1 {
+                        Text("\(controller.selection.rowSpan)×\(controller.selection.columnSpan) selected")
+                            .monospacedDigit()
+                    }
+                }
+            }
         }
     }
+}
 
-    /// Shown once a result reaches the in-memory row cap (SPEC §12.1).
-    var memoryCapBanner: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle")
-            Text("Showing the first 200,000 rows. Export to a file to get the rest.")
-                .font(.caption)
-            Spacer()
-            Button("Export…") { workspace.isExportPresented = true }
-                .controlSize(.small)
+/// Rows rendered as monospaced, column-aligned text.
+///
+/// Built from the loaded rows only and capped, because a text view that holds a million
+/// rows would defeat the grid's whole reason for existing.
+struct TextResultView: View {
+    let grid: GridModel
+    let revision: Int
+    let fontName: String
+    let fontSize: Double
+
+    static let rowCap = 2_000
+
+    var body: some View {
+        ScrollView([.vertical, .horizontal]) {
+            Text(rendered)
+                .font(Font(DesignTokens.Fonts.editor(name: fontName, size: CGFloat(fontSize))))
+                .textSelection(.enabled)
+                .padding(DesignTokens.Spacing.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(8)
-        .background(Color.orange.opacity(0.12))
+        .background(Color(nsColor: .textBackgroundColor))
+    }
+
+    private var rendered: String {
+        let limit = min(grid.displayRowCount, Self.rowCap)
+        let rows = (0 ..< limit).compactMap { grid.loadedRow($0) }
+        var text = ClipboardFormatter.render(
+            columns: grid.columns, rows: rows, format: .text,
+            options: .init(includeHeader: true, dialect: grid.dialect)
+        )
+        if grid.displayRowCount > limit {
+            text += "\n… \(grid.displayRowCount - limit) more rows; export to get them all\n"
+        }
+        return text
     }
 }

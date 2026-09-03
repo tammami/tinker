@@ -111,6 +111,38 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         runTask = Task { await execute(statements) }
     }
 
+    /// Runs `EXPLAIN` for the statement under the cursor and shows the plan as a result.
+    ///
+    /// `analyze` executes the statement to time it, so it is only offered explicitly and
+    /// never on a read-only connection.
+    public func explain(analyze: Bool) {
+        NotificationCenter.default.post(name: .dbstudioDismissCompletion, object: nil)
+        guard !isRunning,
+              let statement = StatementSplitter.statement(at: caretOffset, in: sql, dialect: dialect)
+        else {
+            statusText = "Put the cursor in a statement to explain it"
+            return
+        }
+        let text = TableOperations.explain(statement.text, analyze: analyze, dialect: dialect)
+        let explained = SQLStatement(
+            text: text, utf16Range: statement.utf16Range,
+            startLine: statement.startLine, terminator: statement.terminator
+        )
+        runTask = Task { await execute([explained]) }
+    }
+
+    /// Puts text at the caret, replacing the selection if there is one.
+    public func insertAtCaret(_ text: String) {
+        let units = Array(sql.utf16)
+        let offset = min(max(0, caretOffset), units.count)
+        let before = String(decoding: units[..<offset], as: UTF16.self)
+        let after = String(decoding: units[offset...], as: UTF16.self)
+        let separator = before.isEmpty || before.hasSuffix("\n") ? "" : "\n"
+        sql = before + separator + text + after
+        caretOffset = offset + separator.utf16.count + text.utf16.count
+        NotificationCenter.default.post(name: .dbstudioMoveCaret, object: nil, userInfo: ["offset": caretOffset])
+    }
+
     private func execute(_ statements: [SQLStatement]) async {
         guard let session else {
             statusText = "This connection is no longer configured"
@@ -587,6 +619,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     public func gridDidCommitEdit(row: Int, column: Int, text: String) {}
     public func gridDidRequestInspector() {}
     public func gridDidChangeColumnWidths(_ widths: [String: Double]) {}
+    public func gridDidRequestCopy(format: ClipboardFormat) { copySelection(format: format) }
 
     /// Copies the current result selection as tab-separated text.
     public func copySelection(format: ClipboardFormat) {

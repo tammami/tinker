@@ -20,7 +20,7 @@ public enum ExportScope: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// The export sheet (SPEC §14).
+/// The export sheet.
 public struct ExportView: View {
     let columns: [ColumnMeta]
     let dialect: SQLDialect
@@ -42,66 +42,88 @@ public struct ExportView: View {
     @State private var exportTask: Task<Void, Never>?
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Export").font(.headline)
-
-            Form {
-                Picker("Format", selection: $options.format) {
-                    ForEach(ExportFormat.allCases) { format in
-                        Text(format.displayName).tag(format)
-                    }
-                }
-                Picker("Rows", selection: $scope) {
-                    ForEach(ExportScope.allCases) { value in
-                        Text(value.title).tag(value)
-                    }
-                }
-                .onChange(of: scope) { _, new in
-                    if new == .selection, !hasSelection { scope = .loadedRows }
-                }
-
-                switch options.format {
-                case .csv:
-                    TextField("Delimiter", text: $delimiterText)
-                        .onChange(of: delimiterText) { _, new in
-                            options.delimiter = new.first ?? ","
+        SheetFrame(
+            title: "Export \(table?.name ?? "result")",
+            icon: Icon.export,
+            subtitle: "Rows are written as they arrive, so a large table never has to fit in memory.",
+            contentInset: 0
+        ) {
+            VStack(spacing: 0) {
+                Form {
+                    Section {
+                        Picker("Format", selection: $options.format) {
+                            ForEach(ExportFormat.allCases) { format in
+                                Text(format.displayName).tag(format)
+                            }
                         }
-                    Toggle("Include header row", isOn: $options.includeHeader)
-                    TextField("NULL as", text: $options.nullText)
-                    Toggle("UTF-8 byte-order mark (for Excel)", isOn: $options.writeByteOrderMark)
-                case .sqlInsert:
-                    TextField("Rows per statement", value: $options.batchSize, format: .number)
-                    Toggle("Include CREATE TABLE", isOn: $options.includeCreateTable)
-                case .json, .ndjson:
-                    EmptyView()
-                }
-            }
-            .formStyle(.grouped)
+                        Picker("Rows", selection: $scope) {
+                            ForEach(ExportScope.allCases) { value in
+                                Text(value.title + (value == .loadedRows ? " (\(loadedRowCount))" : "")).tag(value)
+                            }
+                        }
+                        .onChange(of: scope) { _, new in
+                            if new == .selection, !hasSelection { scope = .loadedRows }
+                        }
+                    }
 
-            if isRunning {
-                HStack {
-                    ProgressView().controlSize(.small)
-                    Text(progress).font(.caption).foregroundStyle(.secondary)
+                    Section {
+                        switch options.format {
+                        case .csv:
+                            Picker("Delimiter", selection: $delimiterText) {
+                                Text("Comma").tag(",")
+                                Text("Semicolon").tag(";")
+                                Text("Tab").tag("\t")
+                                Text("Pipe").tag("|")
+                            }
+                            .onChange(of: delimiterText) { _, new in
+                                options.delimiter = new.first ?? ","
+                            }
+                            Toggle("Include header row", isOn: $options.includeHeader)
+                            TextField("NULL as", text: $options.nullText, prompt: Text("empty"))
+                            Toggle("UTF-8 byte-order mark (for Excel)", isOn: $options.writeByteOrderMark)
+                        case .sqlInsert:
+                            TextField("Rows per statement", value: $options.batchSize, format: .number)
+                            Toggle("Include CREATE TABLE", isOn: $options.includeCreateTable)
+                        case .json, .ndjson:
+                            Text("One JSON value per row, with column names as keys.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    } header: {
+                        Text("Options")
+                    }
                 }
-            }
-            if let failure {
-                ErrorBanner(message: failure) { self.failure = nil }
-            }
+                .formStyle(.grouped)
+                .frame(height: 300)
 
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) {
-                    exportTask?.cancel()
-                    onDismiss()
+                if isRunning {
+                    HStack(spacing: DesignTokens.Spacing.sm) {
+                        ProgressView().controlSize(.small)
+                        Text(progress.isEmpty ? "Writing…" : progress).font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, DesignTokens.Spacing.lg)
+                    .padding(.bottom, DesignTokens.Spacing.md)
                 }
-                .keyboardShortcut(.cancelAction)
-                Button("Export…") { chooseDestination() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(isRunning)
+                if let failure {
+                    InlineBanner(kind: .error, message: failure) { self.failure = nil }
+                }
             }
+        } footer: {
+            Spacer()
+            Button("Cancel", role: .cancel) {
+                exportTask?.cancel()
+                onDismiss()
+            }
+            .keyboardShortcut(.cancelAction)
+            Button {
+                chooseDestination()
+            } label: {
+                Label("Export…", systemImage: Icon.export)
+            }
+            .keyboardShortcut(.defaultAction)
+            .buttonStyle(.borderedProminent)
+            .disabled(isRunning)
         }
-        .padding(16)
-        .frame(width: 460)
     }
 
     func chooseDestination() {
@@ -126,9 +148,10 @@ public struct ExportView: View {
             case .loadedRows:
                 exporter.write(rows: loadedRows())
             case .everything:
-                // Rows are written as they arrive, so memory stays flat (SPEC §14).
+                // Rows are written as they arrive, so memory stays flat.
                 try await streamAll { batch in
                     exporter.write(rows: batch)
+                    progress = "Wrote \(exporter.writtenRowCount) rows"
                 }
             }
             try exporter.finish()

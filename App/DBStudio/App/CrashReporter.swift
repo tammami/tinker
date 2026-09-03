@@ -23,7 +23,7 @@ public final class CrashReporter {
     public nonisolated static var reportsDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("DBStudio/Diagnostics", isDirectory: true)
+        return base.appendingPathComponent("\(Product.name)/Diagnostics", isDirectory: true)
     }
 
     /// Reads the user's choice and installs the handlers if they said yes.
@@ -70,7 +70,7 @@ public final class CrashReporter {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
         let report = """
-            DBStudio \(version) (\(build))
+            \(Product.name) \(version) (\(build))
             macOS \(ProcessInfo.processInfo.operatingSystemVersionString)
             \(stamp)
 

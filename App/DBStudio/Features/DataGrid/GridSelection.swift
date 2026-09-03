@@ -38,6 +38,10 @@ public struct GridSelection: Equatable, Sendable {
         min(anchorColumn, focusColumn) ... max(anchorColumn, focusColumn)
     }
 
+    /// How many rows and columns the rectangle spans, for the status line.
+    public var rowSpan: Int { rowRange.count }
+    public var columnSpan: Int { columnRange.count }
+
     public var isSingleCell: Bool {
         mode == .cells && rowRange.count == 1 && columnRange.count == 1
     }

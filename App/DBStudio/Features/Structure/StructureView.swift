@@ -36,18 +36,18 @@ public struct StructureView: View {
             Divider()
 
             if let error = controller.errorText {
-                ErrorBanner(message: error) { controller.clearError() }
+                InlineBanner(kind: .error, message: error) { controller.clearError() }
                 Divider()
             }
             if let status = controller.statusText {
-                statusBanner(status)
+                InlineBanner(kind: .success, message: status) { controller.clearStatus() }
                 Divider()
             }
 
             if controller.edited == nil {
-                ContentUnavailableView(
-                    controller.isLoading ? "Reading the structure…" : "No structure loaded",
-                    systemImage: "tablecells"
+                EmptyStateView(
+                    icon: Icon.structure,
+                    title: controller.isLoading ? "Reading the structure…" : "No structure loaded"
                 )
             } else {
                 paneContent
@@ -79,53 +79,47 @@ public struct StructureView: View {
     // MARK: - Chrome
 
     private var toolbar: some View {
-        HStack(spacing: 10) {
-            Picker("", selection: $pane) {
+        PaneBar {
+            Picker("Pane", selection: $pane) {
                 ForEach(Pane.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(maxWidth: 560)
+            .fixedSize()
 
             Spacer()
 
             if controller.isEditing {
                 let count = controller.pendingStatements.count
-                Text(count == 0 ? "No changes" : "\(count) statement\(count == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if count > 0 {
+                    Badge(text: "\(count) statement\(count == 1 ? "" : "s")", color: .orange)
+                } else {
+                    Text("No changes").font(.caption).foregroundStyle(.secondary)
+                }
 
                 Button("Discard") { controller.discardChanges() }
                     .disabled(!controller.hasPendingChanges)
 
-                Button("Preview…") { isPreviewPresented = true }
-                    .keyboardShortcut("p", modifiers: [.command, .shift])
-                    .disabled(!controller.hasPendingChanges)
+                Button {
+                    isPreviewPresented = true
+                } label: {
+                    Label("Preview…", systemImage: Icon.source)
+                }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+                .disabled(!controller.hasPendingChanges)
+                .buttonStyle(.borderedProminent)
 
                 Button("Done") { controller.isEditing = false }
             } else {
-                Button("Edit") { controller.isEditing = true }
-                    .disabled(controller.edited == nil)
+                Button {
+                    controller.isEditing = true
+                } label: {
+                    Label("Edit", systemImage: Icon.edit)
+                }
+                .disabled(controller.edited == nil)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-    }
-
-    private func statusBanner(_ text: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-            Text(text).font(.callout)
-            Spacer()
-            Button {
-                controller.clearStatus()
-            } label: {
-                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .controlSize(.small)
     }
 
     @ViewBuilder
@@ -168,13 +162,14 @@ struct StructureGrid<Row: Identifiable, Content: View>: View {
                 ForEach(Array(headers.enumerated()), id: \.offset) { _, header in
                     Text(header.title)
                         .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
                         .frame(width: header.width, alignment: .leading)
                         .frame(maxWidth: header.width == nil ? .infinity : nil, alignment: .leading)
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, DesignTokens.Spacing.sm)
                 }
             }
-            .padding(.vertical, 5)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .frame(height: DesignTokens.Metrics.gridHeaderHeight)
+            .background(.bar)
             Divider()
 
             ScrollView {
@@ -204,7 +199,7 @@ private struct Cell<Content: View>: View {
         content
             .frame(width: width, alignment: .leading)
             .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
-            .padding(.horizontal, 6)
+            .padding(.horizontal, DesignTokens.Spacing.sm)
     }
 }
 
@@ -295,21 +290,11 @@ struct ColumnsPane: View {
                     // PostgreSQL has no syntax for moving a column, so the control is
                     // absent there rather than present and disabled.
                     if controller.dialect == .mysql {
-                        Divider().frame(height: 16)
-                        Button {
-                            move(selectedColumn, by: -1)
-                        } label: {
-                            Label("Move Up", systemImage: "arrow.up")
-                        }
-                        .labelStyle(.iconOnly)
-                        .disabled(selectedColumn <= 0)
+                        BarDivider()
+                        IconButton(icon: "arrow.up", label: "Move Up") { move(selectedColumn, by: -1) }
+                            .disabled(selectedColumn <= 0)
 
-                        Button {
-                            move(selectedColumn, by: 1)
-                        } label: {
-                            Label("Move Down", systemImage: "arrow.down")
-                        }
-                        .labelStyle(.iconOnly)
+                        IconButton(icon: "arrow.down", label: "Move Down") { move(selectedColumn, by: 1) }
                         .disabled(
                             selectedColumn < 0
                                 || selectedColumn >= (controller.edited?.columns.count ?? 0) - 1
@@ -841,7 +826,7 @@ struct PartitionsPane: View {
         if let partitioning = controller.edited?.partitioning {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 12) {
-                    Label(partitioning.strategy.rawValue, systemImage: "square.split.2x1")
+                    Label(partitioning.strategy.rawValue, systemImage: Icon.partition)
                         .font(.callout.weight(.medium))
                     Text(partitioning.key).font(.system(.callout, design: .monospaced))
                     Spacer()
@@ -851,7 +836,8 @@ struct PartitionsPane: View {
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
-                .padding(10)
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .frame(height: DesignTokens.Metrics.barHeight)
                 Divider()
 
                 StructureGrid(
@@ -897,10 +883,10 @@ struct PartitionsPane: View {
                 }
             }
         } else {
-            ContentUnavailableView(
-                "Not partitioned",
-                systemImage: "square.split.2x1",
-                description: Text("Partitioning is declared when the table is created.")
+            EmptyStateView(
+                icon: Icon.partition,
+                title: "Not partitioned",
+                message: "Partitioning is declared when the table is created."
             )
         }
     }
@@ -1018,15 +1004,13 @@ struct PaneFooter<Extra: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             Divider()
-            HStack(spacing: 8) {
-                Button(action: onAdd) { Label(addTitle, systemImage: "plus") }
-                Button(action: onRemove) { Label("Remove", systemImage: "minus") }
-                    .labelStyle(.iconOnly)
+            PaneBar {
+                Button(action: onAdd) { Label(addTitle, systemImage: Icon.add) }
+                IconButton(icon: Icon.remove, label: "Remove the last row", action: onRemove)
                 extra
                 Spacer()
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .controlSize(.small)
         }
     }
 }

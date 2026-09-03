@@ -2,6 +2,13 @@ import DBCore
 import DBGrid
 import SwiftUI
 
+/// The product's names: what the app calls itself, and who made it.
+enum Product {
+    static let name = "Tinker"
+    static let maker = "ThinkFree"
+    static let credit = "Tinker by ThinkFree"
+}
+
 struct DBStudioApp: App {
     @State private var environment = AppEnvironment()
     @State private var settings: AppSettings
@@ -16,15 +23,15 @@ struct DBStudioApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("DBStudio") {
+        WindowGroup(Product.name) {
             WorkspaceView(environment: environment, settings: settings)
-                .frame(minWidth: 900, minHeight: 560)
+                .frame(minWidth: 960, minHeight: 600)
                 .task {
                     await settings.load()
                     await crashReporter.start()
                 }
         }
-        .defaultSize(width: 1_200, height: 760)
+        .defaultSize(width: 1_280, height: 800)
         .commands { DBStudioCommands(updater: updater) }
 
         Settings {
@@ -33,7 +40,7 @@ struct DBStudioApp: App {
     }
 }
 
-/// Every keyboard shortcut in SPEC §10.2, registered so it appears in the menus.
+/// Every keyboard shortcut, registered so it appears in the menus.
 struct DBStudioCommands: Commands {
     let updater: Updater
 
@@ -42,7 +49,16 @@ struct DBStudioCommands: Commands {
     private var workspace: WorkspaceController? { CommandCenter.shared.current }
 
     var body: some Commands {
-        CommandGroup(after: .appInfo) {
+        CommandGroup(replacing: .appInfo) {
+            Button("About \(Product.name)") {
+                NSApp.orderFrontStandardAboutPanel(options: [
+                    .applicationName: Product.name,
+                    .credits: NSAttributedString(
+                        string: "\(Product.credit)\nA native client for PostgreSQL and MySQL.",
+                        attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)]
+                    ),
+                ])
+            }
             Button(updater.menuTitle) { updater.checkForUpdates() }
                 .disabled(!updater.isConfigured)
         }
@@ -60,6 +76,7 @@ struct DBStudioCommands: Commands {
             Button("Save Query…") { workspace?.saveSQLFile() }
                 .keyboardShortcut("s", modifiers: .command)
             Divider()
+            Button("Import from CSV…") { workspace?.importCSV() }
             Button("Export Result…") { workspace?.workspace.isExportPresented = true }
                 .keyboardShortcut("e", modifiers: .command)
         }
@@ -79,6 +96,7 @@ struct DBStudioCommands: Commands {
                 Button("CSV") { workspace?.copySelection(.csv) }
                 Button("JSON") { workspace?.copySelection(.json) }
                 Button("Markdown Table") { workspace?.copySelection(.markdown) }
+                Button("Aligned Text") { workspace?.copySelection(.text) }
                 Button("WHERE-IN List") { workspace?.copySelection(.whereIn) }
             }
             Button("Paste into Grid") { workspace?.paste() }
@@ -91,6 +109,13 @@ struct DBStudioCommands: Commands {
                 .keyboardShortcut("-", modifiers: .command)
         }
 
+        CommandGroup(replacing: .textEditing) {
+            Button("Find…") { workspace?.findInEditor(replace: false) }
+                .keyboardShortcut("f", modifiers: .command)
+            Button("Find and Replace…") { workspace?.findInEditor(replace: true) }
+                .keyboardShortcut("f", modifiers: [.command, .option])
+        }
+
         CommandMenu("Query") {
             Button("Run") { workspace?.run(all: false) }
                 .keyboardShortcut(.return, modifiers: .command)
@@ -99,9 +124,14 @@ struct DBStudioCommands: Commands {
             Button("Cancel") { workspace?.cancel() }
                 .keyboardShortcut(".", modifiers: .command)
             Divider()
+            Button("Explain") { workspace?.explain(analyze: false) }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+            Button("Explain Analyze") { workspace?.explain(analyze: true) }
             Button("Format SQL") { workspace?.formatSQL() }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
             Divider()
+            Button("Snippets…") { workspace?.showSnippets() }
+                .keyboardShortcut("k", modifiers: [.command, .shift])
             Button("History…") { workspace?.workspace.isHistoryPresented = true }
                 .keyboardShortcut("y", modifiers: .command)
             Button("Toggle Read-Only") { workspace?.toggleReadOnly() }
@@ -113,22 +143,30 @@ struct DBStudioCommands: Commands {
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
         }
 
-        CommandGroup(after: .sidebar) {
-            Button("Toggle Sidebar") { workspace?.isSidebarVisible.toggle() }
-                .keyboardShortcut("s", modifiers: [.command, .option])
-            Button("Toggle Cell Inspector") { workspace?.workspace.isInspectorVisible.toggle() }
-                .keyboardShortcut("i", modifiers: [.command, .option])
-            Button("Filter Grid") { workspace?.workspace.isFilterBarVisible.toggle() }
-                .keyboardShortcut("f", modifiers: [.command, .shift])
-            Divider()
-            Button("Refresh") { workspace?.refresh() }
-                .keyboardShortcut("r", modifiers: .command)
+        CommandMenu("Database") {
+            Button("Command Palette…") { workspace?.showCommandPalette() }
+                .keyboardShortcut("k", modifiers: .command)
             Button("Quick Open Table…") { workspace?.workspace.isQuickOpenPresented = true }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             Divider()
+            Button("New Connection…") { workspace?.workspace.presentNewConnection() }
             Button("New Table…") { workspace?.workspace.isNewTablePresented = true }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
             Button("Structure Sync…") { workspace?.workspace.isStructureSyncPresented = true }
+            Divider()
+            Button("Server Activity") { workspace?.showServerActivity() }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
+            Button("Refresh") { workspace?.refresh() }
+                .keyboardShortcut("r", modifiers: .command)
+        }
+
+        CommandGroup(after: .sidebar) {
+            Button("Toggle Sidebar") { workspace?.isSidebarVisible.toggle() }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+            Button("Toggle Inspector") { workspace?.workspace.isInspectorVisible.toggle() }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+            Button("Toggle Filter Bar") { workspace?.workspace.isFilterBarVisible.toggle() }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
             Divider()
             Button("Close Tab") { workspace?.closeSelectedTab() }
                 .keyboardShortcut("w", modifiers: .command)
@@ -144,7 +182,6 @@ struct DBStudioCommands: Commands {
         }
     }
 }
-
 
 /// The process entry point.
 ///

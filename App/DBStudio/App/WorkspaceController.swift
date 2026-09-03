@@ -20,8 +20,12 @@ public final class WorkspaceController {
 
     public private(set) var tableControllers: [UUID: TableTabController] = [:]
     public private(set) var queryControllers: [UUID: QueryTabController] = [:]
-    /// One per Objects tab (SPEC §11.4).
+    /// One per Objects tab.
     public var objectsControllers: [UUID: ObjectsController] = [:]
+    /// One per Server tab.
+    public private(set) var serverControllers: [UUID: ServerActivityController] = [:]
+    /// One per definition tab.
+    public private(set) var sourceControllers: [UUID: SourceController] = [:]
     /// Toggled by the sidebar command; the split view reads it.
     public var isSidebarVisible = true
 
@@ -30,6 +34,61 @@ public final class WorkspaceController {
         self.settings = settings
         workspace = WorkspaceModel(environment: environment)
         sidebar = SidebarModel(environment: environment)
+        workspace.onFollowReference = { [weak self] table, connectionID, filter in
+            self?.openTable(table, connectionID: connectionID, filter: filter)
+        }
+    }
+
+    private func dialect(for connectionID: UUID) -> SQLDialect {
+        environment.connections.first { $0.id == connectionID }?.dialect ?? .postgresql
+    }
+
+    /// Opens a table with a filter already applied, which is how a foreign key is followed.
+    public func openTable(_ table: TableRef, connectionID: UUID, filter: [FilterRule]) {
+        let tab = openTable(table, connectionID: connectionID, forceNew: false)
+        guard let controller = tableControllers[tab.id] else { return }
+        workspace.isFilterBarVisible = true
+        Task {
+            if controller.model == nil { await controller.start() }
+            await controller.applyFilter(filter)
+        }
+    }
+
+    @discardableResult
+    public func openServerActivity(connectionID: UUID) -> WorkspaceTab {
+        let tab = workspace.openServerActivity(connectionID: connectionID)
+        if serverControllers[tab.id] == nil {
+            serverControllers[tab.id] = ServerActivityController(
+                connectionID: connectionID, dialect: dialect(for: connectionID), environment: environment
+            )
+        }
+        return tab
+    }
+
+    public func serverController(for tab: WorkspaceTab) -> ServerActivityController {
+        if let existing = serverControllers[tab.id] { return existing }
+        let made = ServerActivityController(
+            connectionID: tab.connectionID, dialect: dialect(for: tab.connectionID), environment: environment
+        )
+        serverControllers[tab.id] = made
+        return made
+    }
+
+    @discardableResult
+    public func openSource(_ object: SourceObject, connectionID: UUID) -> WorkspaceTab {
+        let tab = workspace.openSource(object, connectionID: connectionID)
+        _ = sourceController(for: tab, object: object)
+        return tab
+    }
+
+    public func sourceController(for tab: WorkspaceTab, object: SourceObject) -> SourceController {
+        if let existing = sourceControllers[tab.id] { return existing }
+        let made = SourceController(
+            object: object, connectionID: tab.connectionID,
+            dialect: dialect(for: tab.connectionID), environment: environment
+        )
+        sourceControllers[tab.id] = made
+        return made
     }
 
     // MARK: - Tabs
@@ -83,7 +142,25 @@ public final class WorkspaceController {
             Task { await controller.releaseHeldConnection() }
         }
         tableControllers.removeValue(forKey: id)
+        objectsControllers.removeValue(forKey: id)
+        serverControllers.removeValue(forKey: id)
+        sourceControllers.removeValue(forKey: id)
         workspace.closeTab(id)
+    }
+
+    /// Drops the controllers of tabs that are no longer open, so a closed tab's grid is
+    /// released rather than kept for the life of the window.
+    public func pruneControllers() {
+        let open = Set(workspace.tabs.map(\.id))
+        for id in queryControllers.keys where !open.contains(id) {
+            if let controller = queryControllers.removeValue(forKey: id) {
+                Task { await controller.releaseHeldConnection() }
+            }
+        }
+        tableControllers = tableControllers.filter { open.contains($0.key) }
+        objectsControllers = objectsControllers.filter { open.contains($0.key) }
+        serverControllers = serverControllers.filter { open.contains($0.key) }
+        sourceControllers = sourceControllers.filter { open.contains($0.key) }
     }
 
     // MARK: - Commands the menus call
@@ -138,6 +215,36 @@ public final class WorkspaceController {
 
     public func formatSQL() {
         activeQueryController?.formatSQL()
+    }
+
+    public func explain(analyze: Bool) {
+        activeQueryController?.explain(analyze: analyze)
+    }
+
+    public func showCommandPalette() { workspace.isCommandPalettePresented = true }
+    public func showSnippets() { workspace.isSnippetsPresented = true }
+
+    public func showServerActivity() {
+        guard let id = workspace.activeConnectionID else { return }
+        openServerActivity(connectionID: id)
+    }
+
+    /// Asks the front table tab to import a CSV file.
+    public func importCSV() {
+        guard let tab = workspace.selectedTab, let table = tab.tableRef else { return }
+        workspace.pendingTableOperation = TableOperationRequest(
+            kind: .importCSV, table: table, connectionID: tab.connectionID
+        )
+    }
+
+    /// Opens the editor's find bar; the text view answers the standard action.
+    public func findInEditor(replace: Bool) {
+        let tag = replace
+            ? NSTextFinder.Action.showReplaceInterface.rawValue
+            : NSTextFinder.Action.showFindInterface.rawValue
+        let item = NSMenuItem()
+        item.tag = tag
+        NSApp.sendAction(#selector(NSTextView.performFindPanelAction(_:)), to: nil, from: item)
     }
 
     public func toggleReadOnly() {

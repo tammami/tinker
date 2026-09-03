@@ -49,6 +49,8 @@ public struct SQLEditorView: NSViewRepresentable {
     public let fontSize: Double
     /// Character offset of a server error, so the token can be marked.
     public let errorPosition: Int?
+    /// False shows a definition with highlighting but takes no typing.
+    public let isEditable: Bool
     public weak var delegate: (any SQLEditorDelegate)?
 
     public init(
@@ -57,6 +59,7 @@ public struct SQLEditorView: NSViewRepresentable {
         fontName: String = "SF Mono",
         fontSize: Double = 13,
         errorPosition: Int? = nil,
+        isEditable: Bool = true,
         delegate: (any SQLEditorDelegate)? = nil
     ) {
         _text = text
@@ -64,6 +67,7 @@ public struct SQLEditorView: NSViewRepresentable {
         self.fontName = fontName
         self.fontSize = fontSize
         self.errorPosition = errorPosition
+        self.isEditable = isEditable
         self.delegate = delegate
     }
 
@@ -105,7 +109,7 @@ public struct SQLEditorView: NSViewRepresentable {
 
         textView.coordinator = context.coordinator
         textView.delegate = context.coordinator
-        textView.isEditable = true
+        textView.isEditable = isEditable
         textView.isSelectable = true
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
@@ -113,6 +117,9 @@ public struct SQLEditorView: NSViewRepresentable {
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.allowsUndo = true
+        // The system find bar: ⌘F, ⌘G and find-and-replace without a custom panel.
+        textView.usesFindBar = true
+        textView.isIncrementalSearchingEnabled = true
         textView.font = DesignTokens.Fonts.editor(name: fontName, size: fontSize)
         textView.textContainerInset = NSSize(width: 6, height: 8)
         textView.setAccessibilityIdentifier("sql-editor")
@@ -161,9 +168,10 @@ public struct SQLEditorView: NSViewRepresentable {
             gutter.needsDisplay = true
         }
         textView.font = DesignTokens.Fonts.editor(name: fontName, size: fontSize)
+        textView.isEditable = isEditable
         // The editor is the point of a query tab, so it takes focus as soon as it is on
         // screen rather than making the user click into it first.
-        if !coordinator.hasTakenFocus, let window = textView.window {
+        if isEditable, !coordinator.hasTakenFocus, let window = textView.window {
             coordinator.hasTakenFocus = true
             window.makeFirstResponder(textView)
         }
@@ -208,13 +216,30 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         self.delegate = delegate
     }
 
-    /// Watches for the tab telling every editor to put its list away.
+    private var caretObserver: (any NSObjectProtocol)?
+
+    /// Watches for the tab telling every editor to put its list away, and for a request
+    /// to move the caret after text was inserted programmatically.
     func observeDismissRequests() {
         guard dismissObserver == nil else { return }
         dismissObserver = NotificationCenter.default.addObserver(
             forName: .dbstudioDismissCompletion, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.completion.dismiss() }
+        }
+        caretObserver = NotificationCenter.default.addObserver(
+            forName: .dbstudioMoveCaret, object: nil, queue: .main
+        ) { [weak self] notification in
+            // Read outside the isolated block: the notification is not Sendable.
+            let offset = notification.userInfo?["offset"] as? Int
+            MainActor.assumeIsolated {
+                guard let self, let textView = self.textView, textView.window?.isKeyWindow == true,
+                      let offset
+                else { return }
+                let clamped = min(max(0, offset), textView.string.utf16.count)
+                textView.setSelectedRange(NSRange(location: clamped, length: 0))
+                textView.scrollRangeToVisible(NSRange(location: clamped, length: 0))
+            }
         }
     }
 
@@ -423,4 +448,6 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
 public extension Notification.Name {
     /// Posted when a query tab runs, so any open suggestion list closes.
     static let dbstudioDismissCompletion = Notification.Name("DBStudioDismissCompletion")
+    /// Posted after text was inserted into the editor's model, with the new caret offset.
+    static let dbstudioMoveCaret = Notification.Name("DBStudioMoveCaret")
 }

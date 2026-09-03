@@ -18,6 +18,8 @@ import SwiftUI
 public final class AppEnvironment {
     public private(set) var connections: [ConnectionConfig] = []
     public private(set) var startupError: String?
+    /// How NULL is written when copied, mirrored from settings so grids need not know them.
+    public var nullDisplayText = ""
 
     public let registry = DriverRegistry([
         .postgresql: PostgresDriver.self,
@@ -133,6 +135,19 @@ public final class AppEnvironment {
 
     public func clearHistory() async {
         try? await store?.clearHistory()
+    }
+
+    public func snippets(dialect: SQLDialect?) async -> [Snippet] {
+        (try? await store?.snippets(dialect: dialect?.rawValue)) ?? []
+    }
+
+    @discardableResult
+    public func saveSnippet(_ snippet: Snippet) async -> Int64 {
+        (try? await store?.saveSnippet(snippet)) ?? 0
+    }
+
+    public func deleteSnippet(id: Int64) async {
+        try? await store?.deleteSnippet(id: id)
     }
 
     public func gridPreferences(connectionID: UUID, table: String) async -> GridPreferences {

@@ -13,8 +13,12 @@ public final class WorkspaceTab: Identifiable {
     public enum Kind: Sendable {
         case table(TableRef)
         case query
-        /// Everything a schema holds, listed (SPEC §11.4).
+        /// Everything a schema holds, listed.
         case objects(SchemaRef)
+        /// The server's sessions, users and variables.
+        case serverActivity
+        /// The definition of a view or routine, read from the catalog.
+        case source(SourceObject)
     }
 
     public let id = UUID()
@@ -49,6 +53,43 @@ public final class WorkspaceTab: Identifiable {
 
     public var selectedResult: QueryResultTab? {
         results.first { $0.id == selectedResultID } ?? results.first
+    }
+
+    /// The symbol the tab strip and the command palette draw for this tab.
+    public var icon: String {
+        switch kind {
+        case .table: Icon.table
+        case .query: Icon.query
+        case .objects: Icon.objects
+        case .serverActivity: Icon.activity
+        case .source: Icon.source
+        }
+    }
+}
+
+/// A catalog object whose definition can be opened as text: a view or a routine.
+public struct SourceObject: Sendable, Hashable {
+    public enum Kind: Sendable, Hashable {
+        case view(TableRef)
+        case routine(schema: SchemaRef, name: String, signature: String, kind: RoutineKind)
+    }
+
+    public let kind: Kind
+
+    public init(kind: Kind) { self.kind = kind }
+
+    public var name: String {
+        switch kind {
+        case let .view(ref): ref.name
+        case let .routine(_, name, _, _): name
+        }
+    }
+
+    public var schema: SchemaRef {
+        switch kind {
+        case let .view(ref): ref.schemaRef
+        case let .routine(schema, _, _, _): schema
+        }
     }
 }
 
@@ -152,11 +193,25 @@ public final class WorkspaceModel {
     public var isEditingNewConnection = false
     public var commitPreview: CommitPreview?
     public var confirmation: DestructiveConfirmation?
+    /// A rename, duplicate, import or maintenance request awaiting its sheet.
+    public var pendingTableOperation: TableOperationRequest?
+    /// The command palette (⌘K).
+    public var isCommandPalettePresented = false
+    /// The snippet library (⌘⇧K).
+    public var isSnippetsPresented = false
 
     public let environment: AppEnvironment
+    /// Installed by the workspace controller, which owns the tab controllers a followed
+    /// reference has to reach.
+    @ObservationIgnored public var onFollowReference: ((TableRef, UUID, [FilterRule]) -> Void)?
 
     public init(environment: AppEnvironment) {
         self.environment = environment
+    }
+
+    /// Opens the table a foreign key points at, filtered to the referenced row.
+    public func followReference(to table: TableRef, connectionID: UUID, filter: [FilterRule]) {
+        onFollowReference?(table, connectionID, filter)
     }
 
     public var selectedTab: WorkspaceTab? {
@@ -223,6 +278,42 @@ public final class WorkspaceModel {
         return tab
     }
 
+    /// Closes every tab but one.
+    public func closeOtherTabs(_ id: UUID) {
+        tabs.removeAll { $0.id != id }
+        selectedTabID = id
+    }
+
+    /// Opens, or brings forward, the server activity tab for a connection.
+    @discardableResult
+    public func openServerActivity(connectionID: UUID) -> WorkspaceTab {
+        if let existing = tabs.first(where: {
+            if case .serverActivity = $0.kind { return $0.connectionID == connectionID }
+            return false
+        }) {
+            selectedTabID = existing.id
+            return existing
+        }
+        let tab = WorkspaceTab(kind: .serverActivity, connectionID: connectionID, title: "Server")
+        open(tab)
+        return tab
+    }
+
+    /// Opens, or brings forward, the definition of a view or routine.
+    @discardableResult
+    public func openSource(_ object: SourceObject, connectionID: UUID) -> WorkspaceTab {
+        if let existing = tabs.first(where: {
+            if case let .source(other) = $0.kind { return other == object && $0.connectionID == connectionID }
+            return false
+        }) {
+            selectedTabID = existing.id
+            return existing
+        }
+        let tab = WorkspaceTab(kind: .source(object), connectionID: connectionID, title: object.name)
+        open(tab)
+        return tab
+    }
+
     public func closeTab(_ id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         tabs.remove(at: index)
@@ -254,7 +345,28 @@ public final class WorkspaceModel {
     }
 }
 
-/// A pending commit awaiting the user's confirmation (SPEC §12.3).
+/// What the table context menu asked for; the workspace opens the matching sheet.
+public struct TableOperationRequest: Identifiable, Sendable, Hashable {
+    public enum Kind: Sendable, Hashable {
+        case rename
+        case duplicate
+        case importCSV
+        case maintenance(MaintenanceAction)
+    }
+
+    public let id = UUID()
+    public let kind: Kind
+    public let table: TableRef
+    public let connectionID: UUID
+
+    public init(kind: Kind, table: TableRef, connectionID: UUID) {
+        self.kind = kind
+        self.table = table
+        self.connectionID = connectionID
+    }
+}
+
+/// A pending commit awaiting the user's confirmation.
 @MainActor
 public struct CommitPreview: Identifiable {
     public let id = UUID()

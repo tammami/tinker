@@ -1,12 +1,14 @@
 import SwiftUI
 
-/// Settings the app remembers (SPEC §16 Phase 4).
+/// Settings the app remembers.
 @MainActor
 @Observable
 public final class AppSettings {
     public var editorFontName = "SF Mono"
     public var editorFontSize = 13.0
-    public var nullDisplayText = ""
+    public var nullDisplayText = "" {
+        didSet { environment.nullDisplayText = nullDisplayText }
+    }
     public var confirmOnProduction = true
     public var showSystemSchemas = false
 
@@ -50,56 +52,80 @@ public struct SettingsView: View {
     public var body: some View {
         TabView {
             Form {
-                Picker("Editor font", selection: $settings.editorFontName) {
-                    ForEach(Self.monospacedFonts, id: \.self) { name in
-                        Text(name).tag(name)
+                Section {
+                    Picker("Font", selection: $settings.editorFontName) {
+                        ForEach(Self.monospacedFonts, id: \.self) { name in
+                            Text(name).tag(name)
+                        }
                     }
-                }
-                Slider(value: $settings.editorFontSize, in: 9 ... 24, step: 1) {
-                    Text("Size \(Int(settings.editorFontSize))")
+                    LabeledContent("Size") {
+                        HStack(spacing: DesignTokens.Spacing.sm) {
+                            Slider(value: $settings.editorFontSize, in: 9 ... 24, step: 1)
+                            Text("\(Int(settings.editorFontSize)) pt").monospacedDigit().frame(width: 40, alignment: .trailing)
+                        }
+                    }
+                    LabeledContent("Preview") {
+                        Text("SELECT id, name FROM users WHERE id = $1;")
+                            .font(Font(DesignTokens.Fonts.editor(name: settings.editorFontName, size: CGFloat(settings.editorFontSize))))
+                    }
+                } header: {
+                    Label("SQL editor", systemImage: Icon.query)
                 }
             }
             .formStyle(.grouped)
-            .tabItem { Label("Editor", systemImage: "text.alignleft") }
+            .tabItem { Label("Editor", systemImage: Icon.query) }
 
             Form {
-                TextField("Show NULL as", text: $settings.nullDisplayText)
-                Text("Leave empty to copy NULL as an empty field, which is what spreadsheets expect.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .formStyle(.grouped)
-            .tabItem { Label("Grid", systemImage: "tablecells") }
-
-            Form {
-                Toggle("Confirm every write on production connections", isOn: $settings.confirmOnProduction)
-                Toggle("Show system schemas in the sidebar", isOn: $settings.showSystemSchemas)
-            }
-            .formStyle(.grouped)
-            .tabItem { Label("Safety", systemImage: "lock.shield") }
-
-            Form {
-                Toggle("Save diagnostic reports on this Mac", isOn: $collectDiagnostics)
-                    .onChange(of: collectDiagnostics) { _, value in
-                        Task { await crashReporter.setEnabled(value) }
-                    }
-                Text("Reports are written to Application Support and never sent anywhere. They record the app version, the system version and a stack trace; never SQL, values or credentials.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                HStack {
-                    Text("\(reportCount) report\(reportCount == 1 ? "" : "s") saved")
-                    Spacer()
-                    Button("Show in Finder") { CrashReporter.revealReportsInFinder() }
-                    Button("Delete All", role: .destructive) {
-                        CrashReporter.deleteAllReports()
-                        reportCount = CrashReporter.existingReports().count
-                    }
-                    .disabled(reportCount == 0)
+                Section {
+                    TextField("Show NULL as", text: $settings.nullDisplayText, prompt: Text("empty"))
+                } header: {
+                    Label("Copy and export", systemImage: Icon.copy)
+                } footer: {
+                    Text("Leave empty to copy NULL as an empty field, which is what spreadsheets expect.")
                 }
-                Divider()
-                LabeledContent("Updates") {
-                    Text(Self.describe(updater.status))
-                        .foregroundStyle(.secondary)
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("Grid", systemImage: Icon.data) }
+
+            Form {
+                Section {
+                    Toggle("Confirm every write on production connections", isOn: $settings.confirmOnProduction)
+                    Toggle("Show system schemas in the sidebar", isOn: $settings.showSystemSchemas)
+                } header: {
+                    Label("Safety", systemImage: Icon.shield)
+                }
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("Safety", systemImage: Icon.shield) }
+
+            Form {
+                Section {
+                    Toggle("Save diagnostic reports on this Mac", isOn: $collectDiagnostics)
+                        .onChange(of: collectDiagnostics) { _, value in
+                            Task { await crashReporter.setEnabled(value) }
+                        }
+                    LabeledContent("Saved reports") {
+                        HStack(spacing: DesignTokens.Spacing.sm) {
+                            Text("\(reportCount)").monospacedDigit()
+                            Button("Show in Finder") { CrashReporter.revealReportsInFinder() }
+                            Button("Delete All", role: .destructive) {
+                                CrashReporter.deleteAllReports()
+                                reportCount = CrashReporter.existingReports().count
+                            }
+                            .disabled(reportCount == 0)
+                        }
+                    }
+                } header: {
+                    Label("Diagnostics", systemImage: "stethoscope")
+                } footer: {
+                    Text("Reports are written to Application Support and never sent anywhere. They record the app version, the system version and a stack trace; never SQL, values or credentials.")
+                }
+                Section {
+                    LabeledContent("Updates") {
+                        Text(Self.describe(updater.status)).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Label("Updates", systemImage: Icon.refresh)
                 }
             }
             .formStyle(.grouped)
@@ -108,7 +134,7 @@ public struct SettingsView: View {
         .task {
             reportCount = CrashReporter.existingReports().count
         }
-        .frame(width: 460, height: 260)
+        .frame(width: 520, height: 320)
         .onChange(of: settings.editorFontName) { _, _ in Task { await settings.save() } }
         .onChange(of: settings.editorFontSize) { _, _ in Task { await settings.save() } }
         .onChange(of: settings.nullDisplayText) { _, _ in Task { await settings.save() } }

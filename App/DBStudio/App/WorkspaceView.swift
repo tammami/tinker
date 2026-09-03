@@ -4,7 +4,7 @@ import DBSQL
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// One workspace window: sidebar, tab bar, tab content, status bar (SPEC §10.1).
+/// One workspace window: sidebar, tab bar, tab content, status bar.
 public struct WorkspaceView: View {
     @State private var controller: WorkspaceController
     @State private var columnVisibility = NavigationSplitViewVisibility.all
@@ -34,14 +34,18 @@ public struct WorkspaceView: View {
                 workspace: workspace,
                 sidebar: sidebar,
                 onOpenTable: openTable,
-                onNewQuery: newQuery
+                onNewQuery: newQuery,
+                onOpenSource: { object, id in controller.openSource(object, connectionID: id) },
+                onOpenActivity: { id in controller.openServerActivity(connectionID: id) }
             )
             .navigationSplitViewColumnWidth(
-                min: DesignTokens.Metrics.sidebarMinWidth, ideal: 260, max: 420
+                min: DesignTokens.Metrics.sidebarMinWidth,
+                ideal: DesignTokens.Metrics.sidebarIdealWidth,
+                max: 460
             )
         } detail: {
             VStack(spacing: 0) {
-                TabBarView(workspace: workspace) {
+                TabBarView(workspace: workspace, hasUnsavedWork: hasUnsavedWork) {
                     if let id = workspace.activeConnectionID { newQuery(id, "") }
                 }
                 Divider()
@@ -49,8 +53,10 @@ public struct WorkspaceView: View {
                 Divider()
                 statusBar
             }
+            .background(Color(nsColor: .controlBackgroundColor))
         }
-        .navigationTitle(workspace.activeConnection?.name ?? "DBStudio")
+        .navigationTitle(workspace.activeConnection?.name ?? Product.name)
+        .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }
         .onAppear { CommandCenter.shared.activate(controller) }
         .onChange(of: controller.isSidebarVisible) { _, visible in
@@ -64,6 +70,7 @@ public struct WorkspaceView: View {
             // Shown once, and only when there is nothing to connect to yet.
             let seen = await environment.setting("firstRun.seen", default: false)
             if !seen, environment.connections.isEmpty { isFirstRunPresented = true }
+            await UIDemo.apply(to: controller)
         }
         .onChange(of: environment.connections.count) { _, _ in sidebar.rebuildRoots() }
         .sheet(item: boundWorkspace.editingConnection) { config in
@@ -107,6 +114,33 @@ public struct WorkspaceView: View {
             QuickOpenView(workspace: workspace, sidebar: sidebar) { table, connectionID in
                 openTable(table, connectionID, false)
             }
+        }
+        .sheet(isPresented: boundWorkspace.isCommandPalettePresented) {
+            CommandPaletteView(controller: controller)
+        }
+        .sheet(isPresented: boundWorkspace.isSnippetsPresented) {
+            SnippetsView(
+                environment: environment,
+                dialect: workspace.activeConnection?.dialect ?? .postgresql,
+                onInsert: { text in
+                    workspace.isSnippetsPresented = false
+                    insertIntoEditor(text)
+                },
+                onDismiss: { workspace.isSnippetsPresented = false }
+            )
+        }
+        .sheet(item: boundWorkspace.pendingTableOperation) { request in
+            TableOperationSheet(
+                request: request,
+                environment: environment,
+                onFinished: { opened in
+                    workspace.pendingTableOperation = nil
+                    if let opened { openTable(opened, request.connectionID, false) }
+                    controller.refresh()
+                    Task { await sidebar.refresh(connectionID: request.connectionID) }
+                },
+                onCancel: { workspace.pendingTableOperation = nil }
+            )
         }
         .sheet(isPresented: boundWorkspace.isNewTablePresented) {
             if let context = designerContext {
@@ -152,12 +186,7 @@ public struct WorkspaceView: View {
                 connectionID: workspace.activeConnectionID,
                 onInsert: { sql in
                     workspace.isHistoryPresented = false
-                    if let tab = workspace.selectedTab, tab.isQueryTab,
-                       let controller = queryControllers[tab.id] {
-                        controller.sql = sql
-                    } else if let id = workspace.activeConnectionID {
-                        newQuery(id, sql)
-                    }
+                    insertIntoEditor(sql)
                 },
                 onDismiss: { workspace.isHistoryPresented = false }
             )
@@ -165,13 +194,7 @@ public struct WorkspaceView: View {
         .sheet(isPresented: boundWorkspace.isExportPresented) { exportSheet }
         .sheet(isPresented: $isFirstRunPresented) {
             FirstRunView(
-                onAddConnection: {
-                    workspace.editingConnection = ConnectionConfig(
-                        name: "New Connection", dialect: .postgresql,
-                        host: "localhost", port: 5_432, user: NSUserName()
-                    )
-                    workspace.isEditingNewConnection = true
-                },
+                onAddConnection: { workspace.presentNewConnection() },
                 onDismiss: {
                     isFirstRunPresented = false
                     Task { await environment.setSetting(true, for: "firstRun.seen") }
@@ -183,65 +206,111 @@ public struct WorkspaceView: View {
         }
     }
 
-    /// The window toolbar (SPEC §10.1).
+    /// Puts text in the front editor, or opens a new tab with it.
+    private func insertIntoEditor(_ sql: String) {
+        if let tab = workspace.selectedTab, tab.isQueryTab,
+           let controller = queryControllers[tab.id] {
+            controller.insertAtCaret(sql)
+        } else if let id = workspace.activeConnectionID {
+            newQuery(id, sql)
+        }
+    }
+
+    private var subtitle: String {
+        guard let config = workspace.activeConnection else { return "" }
+        var parts = ["\(config.user)@\(config.host)"]
+        if let database = config.database { parts.append(database) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The window toolbar.
     @ToolbarContentBuilder
     var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
             Button {
                 if let id = workspace.activeConnectionID { newQuery(id, "") }
             } label: {
-                Label("New Query", systemImage: "plus.square.on.square")
+                Label("New Query", systemImage: Icon.newQuery)
             }
             .help("New query tab (⌘T)")
             .disabled(workspace.activeConnectionID == nil)
         }
 
-        ToolbarItemGroup {
-            Button {
-                queryController?.run(all: false)
-            } label: {
-                Label("Run", systemImage: "play.fill")
-            }
-            .help("Run the statement under the cursor (⌘↩)")
-            .disabled(queryController == nil || queryController?.isRunning == true)
+        ToolbarItemGroup(placement: .principal) {
+            ControlGroup {
+                Button {
+                    queryController?.run(all: false)
+                } label: {
+                    Label("Run", systemImage: Icon.run)
+                }
+                .help("Run the statement under the cursor (⌘↩)")
+                .disabled(queryController == nil || queryController?.isRunning == true)
 
-            Button {
-                queryController?.cancel()
-            } label: {
-                Label("Cancel", systemImage: "stop.fill")
-            }
-            .help("Cancel on the server (⌘.)")
-            .disabled(queryController?.isRunning != true)
+                Button {
+                    queryController?.cancel()
+                } label: {
+                    Label("Stop", systemImage: Icon.stop)
+                }
+                .help("Cancel on the server (⌘.)")
+                .disabled(queryController?.isRunning != true)
 
-            Button {
-                controller.commit()
-            } label: {
-                Label("Commit", systemImage: "checkmark.circle")
+                Button {
+                    queryController?.explain(analyze: false)
+                } label: {
+                    Label("Explain", systemImage: Icon.explain)
+                }
+                .help("Show the plan for the statement under the cursor (⌘⇧E)")
+                .disabled(queryController == nil || queryController?.isRunning == true)
             }
-            .help("Commit (⌘⇧S)")
-            .disabled(!hasPendingWork)
 
-            Button {
-                controller.rollback()
-            } label: {
-                Label("Rollback", systemImage: "arrow.uturn.backward.circle")
+            ControlGroup {
+                Button {
+                    controller.commit()
+                } label: {
+                    Label("Commit", systemImage: Icon.commit)
+                }
+                .help("Commit (⌘⇧S)")
+                .disabled(!hasPendingWork)
+
+                Button {
+                    controller.rollback()
+                } label: {
+                    Label("Rollback", systemImage: Icon.rollback)
+                }
+                .help("Roll back (⌘⇧R)")
+                .disabled(!hasPendingWork)
             }
-            .help("Roll back (⌘⇧R)")
-            .disabled(!hasPendingWork)
+        }
 
+        ToolbarItemGroup(placement: .primaryAction) {
             Button {
                 controller.refresh()
             } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+                Label("Refresh", systemImage: Icon.refresh)
             }
             .help("Refresh (⌘R)")
 
             Button {
+                workspace.isCommandPalettePresented = true
+            } label: {
+                Label("Commands", systemImage: Icon.command)
+            }
+            .help("Command palette (⌘K)")
+
+            Button {
                 workspace.isQuickOpenPresented = true
             } label: {
-                Label("Find Table", systemImage: "magnifyingglass")
+                Label("Find Table", systemImage: Icon.search)
             }
             .help("Quick-open a table (⌘⇧O)")
+
+            Button {
+                workspace.isInspectorVisible.toggle()
+            } label: {
+                Label("Inspector", systemImage: Icon.inspector)
+            }
+            .help("Show or hide the inspector (⌘⌥I)")
+            .disabled(!(workspace.selectedTab.map { !$0.isQueryTab && $0.tableRef != nil } ?? false))
         }
     }
 
@@ -253,6 +322,10 @@ public struct WorkspaceView: View {
     /// True when there is something a commit or rollback would act on.
     var hasPendingWork: Bool {
         guard let tab = workspace.selectedTab else { return false }
+        return hasUnsavedWork(tab)
+    }
+
+    func hasUnsavedWork(_ tab: WorkspaceTab) -> Bool {
         if let controller = queryControllers[tab.id] { return controller.isInTransaction }
         if let controller = tableControllers[tab.id] {
             return (controller.model?.edits.pendingStatementCount ?? 0) > 0
@@ -276,7 +349,8 @@ public struct WorkspaceView: View {
             case let .objects(schema):
                 ObjectsView(
                     controller: objectsController(for: tab, schema: schema),
-                    onOpen: { table in openTable(table, tab.connectionID, false) }
+                    onOpen: { table in openTable(table, tab.connectionID, false) },
+                    onOpenSource: { object in controller.openSource(object, connectionID: tab.connectionID) }
                 )
                 .id(tab.id)
             case .query:
@@ -289,64 +363,119 @@ public struct WorkspaceView: View {
                         fontSize: settings.editorFontSize
                     )
                 }
+            case .serverActivity:
+                ServerActivityView(controller: controller.serverController(for: tab))
+                    .id(tab.id)
+            case let .source(object):
+                SourceView(
+                    controller: controller.sourceController(for: tab, object: object),
+                    fontName: settings.editorFontName,
+                    fontSize: settings.editorFontSize,
+                    onEditInQuery: { sql in newQuery(tab.connectionID, sql) }
+                )
+                .id(tab.id)
             }
         } else {
-            VStack(spacing: 12) {
-                Image(systemName: "cylinder.split.1x2")
-                    .font(.system(size: 40))
-                    .foregroundStyle(.tertiary)
-                if environment.connections.isEmpty {
-                    Text("No connections yet.").foregroundStyle(.secondary)
-                    Button("Add a Connection…") {
-                        workspace.editingConnection = ConnectionConfig(
-                            name: "New Connection", dialect: .postgresql,
-                            host: "localhost", port: 5_432, user: NSUserName()
-                        )
-                        workspace.isEditingNewConnection = true
+            welcome
+        }
+    }
+
+    /// What an empty window says: the two things a person can do next.
+    private var welcome: some View {
+        VStack(spacing: DesignTokens.Spacing.lg) {
+            if environment.connections.isEmpty {
+                EmptyStateView(
+                    icon: Icon.connection,
+                    title: "No connections yet",
+                    message: "Add a PostgreSQL or MySQL server to start browsing tables and running queries."
+                ) {
+                    Button {
+                        workspace.presentNewConnection()
+                    } label: {
+                        Label("Add a Connection…", systemImage: Icon.add)
                     }
-                } else {
-                    Text("Open a table from the sidebar, or start a query.")
-                        .foregroundStyle(.secondary)
-                    Button("New Query Tab") {
+                    .keyboardShortcut(.defaultAction)
+                }
+            } else {
+                EmptyStateView(
+                    icon: Icon.welcome,
+                    title: "Ready when you are",
+                    message: "Open a table from the sidebar, or start a query on the current connection.",
+                    fills: false
+                ) {
+                    Button {
                         if let id = workspace.activeConnectionID { newQuery(id, "") }
+                    } label: {
+                        Label("New Query", systemImage: Icon.newQuery)
                     }
                     .keyboardShortcut("t", modifiers: .command)
+                    Button {
+                        workspace.isQuickOpenPresented = true
+                    } label: {
+                        Label("Find a Table", systemImage: Icon.search)
+                    }
+                    Button {
+                        workspace.isCommandPalettePresented = true
+                    } label: {
+                        Label("Commands", systemImage: Icon.command)
+                    }
                 }
-                if let error = environment.startupError {
-                    Text(error).font(.caption).foregroundStyle(.red)
+                HStack(spacing: DesignTokens.Spacing.lg) {
+                    shortcutHint("⌘T", "New query")
+                    shortcutHint("⌘K", "Commands")
+                    shortcutHint("⌘⇧O", "Find table")
+                    shortcutHint("⌘↩", "Run")
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if let error = environment.startupError {
+                InlineBanner(kind: .error, message: error, onDismiss: {})
+                    .frame(maxWidth: 520)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func shortcutHint(_ keys: String, _ label: String) -> some View {
+        HStack(spacing: DesignTokens.Spacing.xs) {
+            KeyCap(keys: keys)
+            Text(label).font(.caption).foregroundStyle(.secondary)
         }
     }
 
     var statusBar: some View {
-        HStack(spacing: 12) {
+        StatusBarView {
             if let config = workspace.activeConnection {
-                if let color = config.color {
-                    Circle().fill(color.swiftUIColor).frame(width: 7, height: 7)
+                HStack(spacing: DesignTokens.Spacing.xs + 2) {
+                    Circle()
+                        .fill(sidebar.state(of: config.id).indicatorColor)
+                        .frame(width: 7, height: 7)
+                    Text(config.name).foregroundStyle(.primary)
                 }
-                Text(config.name)
                 if let database = config.database {
-                    Text(database).foregroundStyle(.secondary)
+                    Label(database, systemImage: Icon.database)
                 }
                 Text(sidebar.state(of: config.id).describedForStatusBar)
-                    .foregroundStyle(.secondary)
                 if config.readOnly {
-                    Label("read-only", systemImage: "lock")
-                        .foregroundStyle(.orange)
+                    Label("Read-only", systemImage: Icon.readOnly).foregroundStyle(.orange)
+                }
+                if config.isProduction {
+                    Label("Production", systemImage: Icon.production).foregroundStyle(.red)
                 }
             }
             Spacer()
             if let tab = workspace.selectedTab, tab.isQueryTab,
                let controller = queryControllers[tab.id], controller.isInTransaction {
-                Text("Transaction open").foregroundStyle(.orange)
+                Label("Transaction open", systemImage: Icon.transaction).foregroundStyle(.orange)
+            }
+            if let tab = workspace.selectedTab, let controller = tableControllers[tab.id],
+               let model = controller.model, model.edits.pendingStatementCount > 0 {
+                Label(
+                    "\(model.edits.pendingStatementCount) pending change\(model.edits.pendingStatementCount == 1 ? "" : "s")",
+                    systemImage: Icon.edit
+                )
+                .foregroundStyle(.orange)
             }
         }
-        .font(.caption)
-        .padding(.horizontal, 10)
-        .frame(height: 22)
-        .background(.bar)
     }
 
     @ViewBuilder
@@ -364,7 +493,7 @@ public struct WorkspaceView: View {
                 onDismiss: { workspace.isExportPresented = false }
             )
         } else {
-            Text("Nothing to export").padding(30)
+            noConnectionSheet("Nothing to export") { workspace.isExportPresented = false }
         }
     }
 
@@ -372,8 +501,8 @@ public struct WorkspaceView: View {
         switch tab.kind {
         case .table: tableControllers[tab.id]?.model
         case .query: queryControllers[tab.id]?.selectedResult?.grid
-        // The Objects list is not a grid; copy and export act on grids.
-        case .objects: nil
+        // The other tabs are not grids; copy and export act on grids.
+        case .objects, .serverActivity, .source: nil
         }
     }
 
@@ -381,7 +510,7 @@ public struct WorkspaceView: View {
         let selection: GridSelection = switch tab.kind {
         case .table: tableControllers[tab.id]?.selection ?? GridSelection()
         case .query: queryControllers[tab.id]?.selection ?? GridSelection()
-        case .objects: GridSelection()
+        case .objects, .serverActivity, .source: GridSelection()
         }
         let columns = selection.columns(totalColumns: grid.columns.count)
         return selection.rows(totalRows: grid.displayRowCount).map { row in
@@ -470,16 +599,12 @@ public struct WorkspaceView: View {
     }
 
     func noConnectionSheet(_ message: String, dismiss: @escaping () -> Void) -> some View {
-        VStack(spacing: 12) {
-            Text(message).font(.headline)
-            Text("Open a connection first.").font(.callout).foregroundStyle(.secondary)
+        SheetFrame(title: message, icon: Icon.info, subtitle: "Open a connection first.",
+                   width: DesignTokens.Metrics.compactSheetWidth) {
+            EmptyView()
+        } footer: {
+            Spacer()
             Button("OK", action: dismiss).keyboardShortcut(.defaultAction)
         }
-        .padding(24)
-        .frame(minWidth: 320)
     }
-
-    // MARK: - Commands
-
-    // Menu commands live on `WorkspaceController` so the menus reach live objects.
 }

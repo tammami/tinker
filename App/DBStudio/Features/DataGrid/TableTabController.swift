@@ -18,6 +18,10 @@ public final class TableTabController: DataGridDelegate {
     public private(set) var revision = 0
     public var columnWidths: [String: Double] = [:]
     public var filterRules: [FilterRule] = []
+    /// The quick search across every column. Transient: it is not remembered per table.
+    public var quickSearch = ""
+    /// The table's foreign keys, for jumping to the row a cell points at.
+    public private(set) var foreignKeys: [ForeignKeyInfo] = []
     public var statusText = ""
     public var errorText: String?
     public var isLoading = false
@@ -88,6 +92,9 @@ public final class TableTabController: DataGridDelegate {
                 try await $0.approximateRowCount(table)
             }
             columnsInfo = columns
+            foreignKeys = (try? await session.introspection(.foreignKeys(table)) {
+                try await $0.foreignKeys(of: table)
+            }) ?? []
 
             let preferences = await environment.gridPreferences(
                 connectionID: connectionID, table: table.id
@@ -124,7 +131,7 @@ public final class TableTabController: DataGridDelegate {
             model.sort = preferences.sort.map {
                 PagePlanner.SortTerm(column: $0.column, ascending: $0.ascending)
             }
-            model.filter = filterRules
+            model.filter = effectiveFilter
             self.model = model
             await model.load(page: 0)
             bumpRevision()
@@ -215,9 +222,44 @@ public final class TableTabController: DataGridDelegate {
         updateStatus()
     }
 
+    /// The conditions the server sees: the filter rows plus the quick search, if any.
+    private var effectiveFilter: [FilterRule] {
+        let trimmed = quickSearch.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return filterRules }
+        // Every column but binary ones; a hex dump of a blob is not something anyone searches.
+        let searchable = columnsInfo.filter { $0.kind != .bytes }.map(\.name)
+        return filterRules + [FilterRule.search(trimmed, in: searchable)]
+    }
+
+    public func applyQuickSearch(_ text: String) async {
+        quickSearch = text
+        await model?.setFilter(effectiveFilter)
+        surfaceLoadError()
+        bumpRevision()
+        updateStatus()
+    }
+
+    /// The foreign key a column takes part in, and the value the focused row holds for it.
+    ///
+    /// Only single-column keys can be followed from one cell; a composite key needs the
+    /// whole row, which is what `referenceTarget(row:)` handles.
+    public func referenceTarget(row: Int, column: Int) -> (table: TableRef, filter: [FilterRule])? {
+        guard let model, model.columns.indices.contains(column) else { return nil }
+        let name = model.columns[column].name
+        guard let key = foreignKeys.first(where: { $0.columns.contains(name) }) else { return nil }
+        var rules: [FilterRule] = []
+        for (local, remote) in zip(key.columns, key.referencedColumns) {
+            guard let index = model.columns.firstIndex(where: { $0.name == local }),
+                  let value = model.value(row: row, column: index), !value.isNull
+            else { return nil }
+            rules.append(FilterRule(column: remote, op: .equal, values: [value]))
+        }
+        return rules.isEmpty ? nil : (key.referencedTable, rules)
+    }
+
     public func applyFilter(_ rules: [FilterRule]) async {
         filterRules = rules
-        await model?.setFilter(rules)
+        await model?.setFilter(effectiveFilter)
         // A filter that the server refuses used to fail silently: the rows never arrived,
         // and the grid drew the unfiltered estimate as empty rows instead of saying why.
         surfaceLoadError()
@@ -370,51 +412,8 @@ public final class TableTabController: DataGridDelegate {
     }
 
     /// Turns typed text into a value of the column's kind, or nil when it does not fit.
-    ///
-    /// An empty string is NULL; everything the server parses itself — dates, JSON, arrays
-    /// — passes through as text so the server does the coercion (SPEC §7.1).
     public static func coerce(_ text: String, to kind: DBValueKind) -> DBValue? {
-        if text.isEmpty { return .null }
-        switch kind {
-        case .bool:
-            switch text.lowercased() {
-            case "t", "true", "1", "yes", "y": return .bool(true)
-            case "f", "false", "0", "no", "n": return .bool(false)
-            default: return nil
-            }
-        case .int:
-            return Int64(text).map { .int($0) }
-        case .uint:
-            return UInt64(text).map { .uint($0) }
-        case .double:
-            return Double(text).map { .double($0) }
-        case .decimal:
-            // Validated but never parsed, so every digit survives.
-            let allowed = text.allSatisfy { $0.isNumber || $0 == "." || $0 == "-" || $0 == "+" || $0 == "e" || $0 == "E" }
-            return allowed ? .decimal(text) : nil
-        case .uuid:
-            return UUID(uuidString: text).map { .uuid($0) }
-        case .bytes:
-            let hex = text.hasPrefix("\\x") ? String(text.dropFirst(2)) : text
-            guard hex.count % 2 == 0, hex.allSatisfy(\.isHexDigit) else { return nil }
-            var data = Data()
-            var index = hex.startIndex
-            while index < hex.endIndex {
-                let next = hex.index(index, offsetBy: 2)
-                guard let byte = UInt8(hex[index ..< next], radix: 16) else { return nil }
-                data.append(byte)
-                index = next
-            }
-            return .bytes(data)
-        case .json:
-            return .json(text)
-        case .string:
-            return .string(text)
-        case .null:
-            return .null
-        case .date, .time, .timestamp, .array, .raw:
-            return .raw(typeName: kind.rawValue, text: text, bytes: nil)
-        }
+        ValueCoercion.coerce(text, to: kind)
     }
 
     // MARK: - Preferences
@@ -461,7 +460,37 @@ public final class TableTabController: DataGridDelegate {
         updateStatus()
     }
 
-    public func gridDidRequestInspector() {}
+    public func gridDidRequestInspector() {
+        onRequestInspector?()
+    }
+
+    /// Set by the tab view; the grid asks for the inspector with the space bar.
+    @ObservationIgnored public var onRequestInspector: (() -> Void)?
+    /// Set by the tab view; the grid's context menu asks to follow a foreign key.
+    @ObservationIgnored public var onFollowReference: ((TableRef, [FilterRule]) -> Void)?
+
+    public func gridDidRequestFollowReference(row: Int, column: Int) {
+        guard let target = referenceTarget(row: row, column: column) else { return }
+        onFollowReference?(target.table, target.filter)
+    }
+
+    public func gridHasReference(row: Int, column: Int) -> Bool {
+        referenceTarget(row: row, column: column) != nil
+    }
+
+    public func gridDidRequestCopy(format: ClipboardFormat) {
+        copySelection(format: format, nullText: environment.nullDisplayText)
+    }
+
+    public func gridDidRequestSetNull() { setSelectionNull() }
+    public func gridDidRequestDeleteRows() { deleteSelectedRows() }
+    public func gridDidRequestAddRow() { addRow() }
+
+    /// The values of one row as the form view edits them, in column order.
+    public func rowValues(_ row: Int) -> [DBValue]? {
+        guard let model, row >= 0, row < model.displayRowCount else { return nil }
+        return (0 ..< model.columns.count).map { model.value(row: row, column: $0) ?? .null }
+    }
 
     public func gridDidChangeColumnWidths(_ widths: [String: Double]) {
         columnWidths = widths

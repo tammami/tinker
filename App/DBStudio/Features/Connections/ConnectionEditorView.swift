@@ -2,7 +2,7 @@ import DBCore
 import DBStore
 import SwiftUI
 
-/// The connection sheet (SPEC §11.2).
+/// The connection sheet: one column of sections, each with its icon, and a test log.
 public struct ConnectionEditorView: View {
     @State var config: ConnectionConfig
     let isNew: Bool
@@ -19,8 +19,11 @@ public struct ConnectionEditorView: View {
     @State private var jumpHost = ""
     @State private var jumpUser = ""
     @State private var testLog: [String] = []
+    @State private var testOutcome: TestOutcome?
     @State private var isTesting = false
     @State private var validationError: String?
+
+    enum TestOutcome { case success, failure }
 
     enum SSHAuthKind: String, CaseIterable, Identifiable {
         case password, key, agent
@@ -49,123 +52,197 @@ public struct ConnectionEditorView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            Form {
-                Section("General") {
-                    TextField("Name", text: $config.name)
-                    Picker("Colour", selection: $config.color) {
-                        Text("None").tag(ConnectionColor?.none)
-                        ForEach(ConnectionColor.allCases, id: \.self) { color in
-                            Text(color.displayName).tag(ConnectionColor?.some(color))
+        SheetFrame(
+            title: isNew ? "New Connection" : config.name,
+            icon: Icon.connection,
+            subtitle: isNew ? "Passwords go to your Keychain, never to \(Product.name)'s own files." : "\(config.user)@\(config.host):\(config.port)",
+            width: DesignTokens.Metrics.sheetWidth + 40,
+            contentInset: 0
+        ) {
+            VStack(spacing: 0) {
+                Form {
+                    Section {
+                        TextField("Name", text: $config.name)
+                        Picker("Engine", selection: $config.dialect) {
+                            ForEach([SQLDialect.postgresql, .mysql], id: \.self) { dialect in
+                                Label {
+                                    Text(dialect == .postgresql ? "PostgreSQL" : "MySQL / MariaDB")
+                                } icon: {
+                                    EngineMark(dialect: dialect, size: 14)
+                                }
+                                .tag(dialect)
+                            }
                         }
-                    }
-                    TextField("Group", text: Binding(
-                        get: { config.groupPath.joined(separator: "/") },
-                        set: { config.groupPath = $0.isEmpty ? [] : $0.components(separatedBy: "/") }
-                    ))
-                    Picker("Type", selection: $config.dialect) {
-                        Text("PostgreSQL").tag(SQLDialect.postgresql)
-                        Text("MySQL / MariaDB").tag(SQLDialect.mysql)
-                    }
-                    .onChange(of: config.dialect) { _, dialect in
-                        config.port = environment.registry.defaultPort(for: dialect)
-                    }
-                    TextField("Host", text: $config.host)
-                    TextField("Port", value: $config.port, format: .number.grouping(.never))
-                    TextField("User", text: $config.user)
-                    SecureField("Password", text: $password)
-                    TextField("Database", text: Binding(
-                        get: { config.database ?? "" },
-                        set: { config.database = $0.isEmpty ? nil : $0 }
-                    ))
-                }
-
-                Section("TLS") {
-                    Picker("Mode", selection: $config.tls.mode) {
-                        ForEach(TLSMode.allCases, id: \.self) { mode in
-                            Text(mode.rawValue).tag(mode)
+                        .onChange(of: config.dialect) { _, dialect in
+                            config.port = environment.registry.defaultPort(for: dialect)
                         }
+                        HStack(spacing: DesignTokens.Spacing.sm) {
+                            TextField("Host", text: $config.host)
+                            TextField("Port", value: $config.port, format: .number.grouping(.never))
+                                .frame(width: 90)
+                        }
+                        TextField("User", text: $config.user)
+                        SecureField("Password", text: $password)
+                        TextField("Database", text: Binding(
+                            get: { config.database ?? "" },
+                            set: { config.database = $0.isEmpty ? nil : $0 }
+                        ), prompt: Text(config.dialect == .mysql ? "Optional" : "postgres"))
+                    } header: {
+                        Label("Server", systemImage: Icon.database)
                     }
-                    TextField("CA file", text: Binding(
-                        get: { config.tls.caFile ?? "" },
-                        set: { config.tls.caFile = $0.isEmpty ? nil : $0 }
-                    ))
-                    TextField("Server name override", text: Binding(
-                        get: { config.tls.serverNameOverride ?? "" },
-                        set: { config.tls.serverNameOverride = $0.isEmpty ? nil : $0 }
-                    ))
-                }
 
-                Section("SSH") {
-                    Toggle("Connect through an SSH tunnel", isOn: $useSSH)
-                    if useSSH {
-                        SSHFields(
-                            config: $config,
-                            authKind: $sshAuthKind,
-                            keyPath: $sshKeyPath,
-                            password: $sshPassword,
-                            passphrase: $sshPassphrase,
-                            jumpHost: $jumpHost,
-                            jumpUser: $jumpUser
-                        )
+                    Section {
+                        LabeledContent("Colour") {
+                            HStack(spacing: DesignTokens.Spacing.sm) {
+                                colorSwatch(nil)
+                                ForEach(ConnectionColor.allCases, id: \.self) { colorSwatch($0) }
+                            }
+                        }
+                        TextField("Group", text: Binding(
+                            get: { config.groupPath.joined(separator: "/") },
+                            set: { config.groupPath = $0.isEmpty ? [] : $0.components(separatedBy: "/") }
+                        ), prompt: Text("Work/Staging"))
+                        Toggle(isOn: $config.isProduction) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Production")
+                                Text("Every write asks for confirmation, and destructive actions need the name typed.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        Toggle(isOn: $config.readOnly) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Read-only")
+                                Text("Writes are blocked until unlocked with ⌘⇧L.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    } header: {
+                        Label("Appearance and safety", systemImage: Icon.shield)
                     }
-                }
 
-                Section("Advanced") {
-                    TextField("Statement timeout (seconds, 0 for none)", value: Binding(
-                        get: { config.statementTimeout.map { Int($0.components.seconds) } ?? 0 },
-                        set: { config.statementTimeout = $0 <= 0 ? nil : .seconds($0) }
-                    ), format: .number)
-                    TextField("Application name", text: Binding(
-                        get: { config.options[ConnectionConfig.OptionKey.applicationName] ?? "DBStudio" },
-                        set: { config.options[ConnectionConfig.OptionKey.applicationName] = $0 }
-                    ))
-                    if config.dialect == .mysql {
-                        Toggle("Treat tinyint(1) as boolean", isOn: Binding(
-                            get: { config.options[ConnectionConfig.OptionKey.tinyint1IsBool] != "false" },
-                            set: { config.options[ConnectionConfig.OptionKey.tinyint1IsBool] = $0 ? "true" : "false" }
+                    Section {
+                        Picker("Mode", selection: $config.tls.mode) {
+                            ForEach(TLSMode.allCases, id: \.self) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                        if config.tls.mode.verifiesCertificate {
+                            TextField("CA file", text: Binding(
+                                get: { config.tls.caFile ?? "" },
+                                set: { config.tls.caFile = $0.isEmpty ? nil : $0 }
+                            ))
+                            TextField("Server name override", text: Binding(
+                                get: { config.tls.serverNameOverride ?? "" },
+                                set: { config.tls.serverNameOverride = $0.isEmpty ? nil : $0 }
+                            ))
+                        }
+                    } header: {
+                        Label("TLS", systemImage: Icon.lock)
+                    }
+
+                    Section {
+                        Toggle("Connect through an SSH tunnel", isOn: $useSSH)
+                        if useSSH {
+                            SSHFields(
+                                config: $config,
+                                authKind: $sshAuthKind,
+                                keyPath: $sshKeyPath,
+                                password: $sshPassword,
+                                passphrase: $sshPassphrase,
+                                jumpHost: $jumpHost,
+                                jumpUser: $jumpUser
+                            )
+                        }
+                    } header: {
+                        Label("SSH", systemImage: "terminal")
+                    }
+
+                    Section {
+                        TextField("Statement timeout (seconds, 0 for none)", value: Binding(
+                            get: { config.statementTimeout.map { Int($0.components.seconds) } ?? 0 },
+                            set: { config.statementTimeout = $0 <= 0 ? nil : .seconds($0) }
+                        ), format: .number)
+                        TextField("Application name", text: Binding(
+                            get: { config.options[ConnectionConfig.OptionKey.applicationName] ?? Product.name },
+                            set: { config.options[ConnectionConfig.OptionKey.applicationName] = $0 }
                         ))
-                    }
-                    Toggle("Read-only", isOn: $config.readOnly)
-                    Toggle("Production", isOn: $config.isProduction)
-                }
-            }
-            .formStyle(.grouped)
-
-            if !testLog.isEmpty {
-                Divider()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(testLog.enumerated()), id: \.offset) { _, line in
-                            Text(line)
-                                .font(.system(.caption, design: .monospaced))
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                        if config.dialect == .mysql {
+                            Toggle("Treat tinyint(1) as boolean", isOn: Binding(
+                                get: { config.options[ConnectionConfig.OptionKey.tinyint1IsBool] != "false" },
+                                set: { config.options[ConnectionConfig.OptionKey.tinyint1IsBool] = $0 ? "true" : "false" }
+                            ))
                         }
+                    } header: {
+                        Label("Advanced", systemImage: Icon.settings)
                     }
-                    .padding(8)
                 }
-                .frame(height: 110)
-            }
+                .formStyle(.grouped)
+                .frame(height: 440)
 
-            if let validationError {
-                ErrorBanner(message: validationError) { self.validationError = nil }
-            }
+                if !testLog.isEmpty {
+                    Divider()
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(testLog.enumerated()), id: \.offset) { _, line in
+                                Text(line)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .padding(DesignTokens.Spacing.md)
+                    }
+                    .frame(height: 110)
+                    .background(Color(nsColor: .textBackgroundColor))
+                }
 
-            Divider()
-            HStack {
-                Button("Test Connection") { Task { await test() } }
-                    .disabled(isTesting)
-                if isTesting { ProgressView().controlSize(.small) }
-                Spacer()
-                Button("Cancel", role: .cancel, action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-                Button("Save") { save() }
-                    .keyboardShortcut(.defaultAction)
+                if let validationError {
+                    InlineBanner(kind: .error, message: validationError) { self.validationError = nil }
+                }
             }
-            .padding(12)
+        } footer: {
+            Button {
+                Task { await test() }
+            } label: {
+                Label(isTesting ? "Testing…" : "Test Connection", systemImage: Icon.activity)
+            }
+            .disabled(isTesting)
+            if isTesting { ProgressView().controlSize(.small) }
+            if let testOutcome {
+                Image(systemName: testOutcome == .success ? Icon.success : Icon.error)
+                    .foregroundStyle(testOutcome == .success ? .green : .red)
+            }
+            Spacer()
+            Button("Cancel", role: .cancel, action: onCancel)
+                .keyboardShortcut(.cancelAction)
+            Button(isNew ? "Add Connection" : "Save") { save() }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
         }
-        .frame(width: 560, height: 620)
         .task { await loadSecrets() }
+    }
+
+    private func colorSwatch(_ color: ConnectionColor?) -> some View {
+        let isSelected = config.color == color
+        return Button {
+            config.color = color
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(color?.swiftUIColor ?? Color.clear)
+                    .frame(width: 18, height: 18)
+                    .overlay(Circle().strokeBorder(color == nil ? Color.secondary : .clear, lineWidth: 1))
+                if color == nil {
+                    Image(systemName: "slash.circle").font(.caption2).foregroundStyle(.secondary)
+                }
+                if isSelected {
+                    Circle().strokeBorder(Color.primary, lineWidth: 2).frame(width: 24, height: 24)
+                }
+            }
+            .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.plain)
+        .help(color?.displayName ?? "No colour")
+        .accessibilityLabel(color?.displayName ?? "No colour")
     }
 
     func loadSecrets() async {
@@ -200,7 +277,7 @@ public struct ConnectionEditorView: View {
                 if !FileManager.default.fileExists(atPath: expanded) {
                     return "No key file at \(expanded)"
                 }
-                // A world-readable key is a warning, not a refusal (SPEC §11.2).
+                // A world-readable key is a warning, not a refusal.
                 if let attributes = try? FileManager.default.attributesOfItem(atPath: expanded),
                    let permissions = attributes[.posixPermissions] as? NSNumber,
                    permissions.intValue & 0o077 != 0 {
@@ -213,6 +290,8 @@ public struct ConnectionEditorView: View {
 
     func buildConfig() -> ConnectionConfig {
         var result = config
+        result.name = result.name.trimmingCharacters(in: .whitespaces)
+        if result.name.isEmpty { result.name = "\(result.user)@\(result.host)" }
         if password.isEmpty {
             result.passwordRef = nil
         } else {
@@ -281,6 +360,7 @@ public struct ConnectionEditorView: View {
             return
         }
         isTesting = true
+        testOutcome = nil
         testLog = ["Starting…"]
         defer { isTesting = false }
 
@@ -300,8 +380,10 @@ public struct ConnectionEditorView: View {
         switch result {
         case let .success(version):
             testLog.append("✓ \(version.rawString)")
+            testOutcome = .success
         case let .failure(error):
             testLog.append("✗ \(error.errorDescription ?? String(describing: error))")
+            testOutcome = .failure
         }
         await session.disconnect()
     }
@@ -336,8 +418,11 @@ struct SSHFields: View {
     @Binding var jumpUser: String
 
     var body: some View {
-        TextField("Host", text: binding(\.host, default: ""))
-        TextField("Port", value: binding(\.port, default: 22), format: .number.grouping(.never))
+        HStack(spacing: DesignTokens.Spacing.sm) {
+            TextField("Host", text: binding(\.host, default: ""))
+            TextField("Port", value: binding(\.port, default: 22), format: .number.grouping(.never))
+                .frame(width: 90)
+        }
         TextField("User", text: binding(\.user, default: NSUserName()))
         Picker("Authentication", selection: $authKind) {
             ForEach(ConnectionEditorView.SSHAuthKind.allCases) { kind in
@@ -354,7 +439,7 @@ struct SSHFields: View {
             }
             SecureField("Passphrase (if the key has one)", text: $passphrase)
         case .agent:
-            Text("Agent authentication is not available in this build; choose a key file.")
+            Label("Agent authentication is not available in this build; choose a key file.", systemImage: Icon.warning)
                 .font(.caption)
                 .foregroundStyle(.orange)
         }

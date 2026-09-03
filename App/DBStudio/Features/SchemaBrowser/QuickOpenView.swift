@@ -12,54 +12,77 @@ public struct QuickOpenView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            TextField("Table name", text: $workspace.quickOpenQuery)
-                .textFieldStyle(.plain)
-                .font(.title3)
-                .padding(12)
-                .focused($isFieldFocused)
-                .onSubmit(openHighlighted)
+            HStack(spacing: DesignTokens.Spacing.sm) {
+                Image(systemName: Icon.search).foregroundStyle(.secondary)
+                TextField("Table name", text: $workspace.quickOpenQuery)
+                    .textFieldStyle(.plain)
+                    .font(.title3)
+                    .focused($isFieldFocused)
+                    .onSubmit(openHighlighted)
+                KeyCap(keys: "esc")
+            }
+            .padding(DesignTokens.Spacing.md)
             Divider()
             if matches.isEmpty {
-                Text(sidebar.knownTables.isEmpty
-                    ? "Expand a schema in the sidebar first, so there is something to search."
-                    : "No table matches")
-                    .foregroundStyle(.secondary)
-                    .padding(20)
+                EmptyStateView(
+                    icon: Icon.table,
+                    title: sidebar.knownTables.isEmpty ? "Nothing to search yet" : "No table matches",
+                    message: sidebar.knownTables.isEmpty
+                        ? "Expand a schema in the sidebar first, so its tables are known."
+                        : "Try fewer letters; matching is fuzzy, so “usr” finds “users”."
+                )
+                .frame(height: 220)
             } else {
                 ScrollViewReader { proxy in
-                    List(Array(matches.enumerated()), id: \.offset) { index, match in
-                        HStack(spacing: 8) {
-                            Image(systemName: match.table.kind.symbolName)
-                                .foregroundStyle(.secondary)
-                            Text(match.table.name)
-                            Text(match.table.ref.schema)
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                            Spacer()
-                            Text(connectionName(match.connection))
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(matches.enumerated()), id: \.offset) { index, match in
+                                HStack(spacing: DesignTokens.Spacing.sm) {
+                                    Image(systemName: match.table.kind.symbolName)
+                                        .foregroundStyle(index == highlighted ? Color.accentColor : .secondary)
+                                        .frame(width: DesignTokens.Metrics.iconWidth)
+                                    Text(match.table.name)
+                                    Text(match.table.ref.schema)
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                    Spacer()
+                                    if let count = match.table.approximateRowCount {
+                                        Text("~\(count)").font(.caption).foregroundStyle(.tertiary).monospacedDigit()
+                                    }
+                                    Text(connectionName(match.connection))
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                }
+                                .padding(.horizontal, DesignTokens.Spacing.md)
+                                .frame(height: 28)
+                                .background(index == highlighted ? Color.accentColor.opacity(0.14) : .clear)
+                                .contentShape(Rectangle())
+                                .id(index)
+                                .onTapGesture {
+                                    highlighted = index
+                                    openHighlighted()
+                                }
+                            }
                         }
-                        .padding(.vertical, 2)
-                        .listRowBackground(
-                            index == highlighted
-                                ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.3)
-                                : Color.clear
-                        )
-                        .id(index)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            highlighted = index
-                            openHighlighted()
-                        }
+                        .padding(.vertical, DesignTokens.Spacing.xs)
                     }
-                    .listStyle(.plain)
                     .frame(height: 320)
                     .onChange(of: highlighted) { _, new in proxy.scrollTo(new) }
                 }
             }
+            Divider()
+            HStack(spacing: DesignTokens.Spacing.lg) {
+                HStack(spacing: DesignTokens.Spacing.xs) { KeyCap(keys: "↑↓"); Text("move").font(.caption).foregroundStyle(.secondary) }
+                HStack(spacing: DesignTokens.Spacing.xs) { KeyCap(keys: "↩"); Text("open").font(.caption).foregroundStyle(.secondary) }
+                Spacer()
+                Text("\(sidebar.knownTables.count) table\(sidebar.knownTables.count == 1 ? "" : "s") known")
+                    .font(.caption).foregroundStyle(.tertiary).monospacedDigit()
+            }
+            .padding(.horizontal, DesignTokens.Spacing.md)
+            .frame(height: DesignTokens.Metrics.statusHeight)
+            .background(.bar)
         }
-        .frame(width: 520)
+        .frame(width: 560)
         .onAppear { isFieldFocused = true }
         .onChange(of: workspace.quickOpenQuery) { _, _ in highlighted = 0 }
         .onKeyPress(.upArrow) {

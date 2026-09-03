@@ -32,59 +32,55 @@ struct StructureSyncSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Structure sync").font(.headline)
-                Text("Compare \(source.name) against another table and write the DDL that would make that one match.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Form {
-                Section("Source") {
-                    LabeledContent("Table", value: source.id)
-                }
-                Section("Target") {
-                    Picker("Connection", selection: $targetConnectionID) {
-                        Text("Choose…").tag(UUID?.none)
-                        ForEach(connections) { config in
-                            Text(config.name).tag(UUID?.some(config.id))
-                        }
+        SheetFrame(
+            title: "Structure Sync",
+            icon: Icon.structure,
+            subtitle: "Compare \(source.name) against another table and write the DDL that would make that one match. Nothing runs: the script opens in a query tab.",
+            contentInset: 0
+        ) {
+            VStack(spacing: 0) {
+                Form {
+                    Section("Source") {
+                        LabeledContent("Table", value: source.id)
                     }
-                    TextField("Schema", text: $targetSchema)
-                    TextField("Table", text: $targetTable)
+                    Section("Target") {
+                        Picker("Connection", selection: $targetConnectionID) {
+                            Text("Choose…").tag(UUID?.none)
+                            ForEach(connections) { config in
+                                Text(config.name).tag(UUID?.some(config.id))
+                            }
+                        }
+                        TextField("Schema", text: $targetSchema)
+                        TextField("Table", text: $targetTable)
+                    }
+                    Section {
+                        Toggle("Include statements that discard data", isOn: $includeDestructive)
+                    } footer: {
+                        Text("Off by default. A drop is listed commented so nothing is lost by running the script.")
+                    }
                 }
-                Section {
-                    Toggle("Include statements that discard data", isOn: $includeDestructive)
-                } footer: {
-                    Text("Off by default. A drop is listed commented so nothing is lost by running the script.")
-                        .font(.caption)
-                }
-            }
-            .formStyle(.grouped)
+                .formStyle(.grouped)
+                .frame(height: 320)
 
-            if let failure {
-                Text(failure)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-                    .textSelection(.enabled)
-            }
-            if let summary {
-                Text(summary).font(.callout).foregroundStyle(.secondary)
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
-                Button(isWorking ? "Comparing…" : "Compare") {
-                    Task { await generate() }
+                if let failure {
+                    InlineBanner(kind: .error, message: failure) { self.failure = nil }
                 }
-                .keyboardShortcut(.defaultAction)
-                .disabled(isWorking || targetConnectionID == nil || targetTable.isEmpty)
+                if let summary {
+                    InlineBanner(kind: .info, message: summary, onDismiss: { self.summary = nil })
+                }
             }
+        } footer: {
+            Spacer()
+            Button("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
+            Button {
+                Task { await generate() }
+            } label: {
+                Label(isWorking ? "Comparing…" : "Compare", systemImage: Icon.structure)
+            }
+            .keyboardShortcut(.defaultAction)
+            .buttonStyle(.borderedProminent)
+            .disabled(isWorking || targetConnectionID == nil || targetTable.isEmpty)
         }
-        .padding(16)
-        .frame(minWidth: 520, minHeight: 460)
         .onAppear {
             targetSchema = source.schema
             targetTable = source.name

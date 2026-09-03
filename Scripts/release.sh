@@ -36,7 +36,7 @@ fail() { printf '\033[1;31mFAIL:\033[0m %s\n' "$*"; exit 1; }
 BUILD_DIR=".build/release"
 ARCHIVE="$BUILD_DIR/DBStudio.xcarchive"
 EXPORT_DIR="$BUILD_DIR/export"
-APP="$EXPORT_DIR/DBStudio.app"
+APP="$EXPORT_DIR/Tinker.app"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
@@ -112,7 +112,7 @@ xcodebuild "${ARCHIVE_ARGS[@]}" -quiet archive
 bold "Export"
 mkdir -p "$EXPORT_DIR"
 if [[ "$MODE" == "unsigned" ]]; then
-    cp -R "$ARCHIVE/Products/Applications/DBStudio.app" "$EXPORT_DIR/"
+    cp -R "$ARCHIVE/Products/Applications/Tinker.app" "$EXPORT_DIR/"
 else
     cat > "$BUILD_DIR/ExportOptions.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -156,7 +156,7 @@ if [[ "$MODE" == "full" ]]; then
         --apple-id <apple-id> --team-id ${TEAM_ID:-<team-id>} --password <app-specific-password>
   Or run with --skip-notarize."
     fi
-    ZIP="$BUILD_DIR/DBStudio-notarize.zip"
+    ZIP="$BUILD_DIR/Tinker-notarize.zip"
     ditto -c -k --keepParent "$APP" "$ZIP"
     xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
     xcrun stapler staple "$APP"
@@ -167,13 +167,13 @@ fi
 
 # ---------------------------------------------------------------------------
 bold "DMG"
-DMG="$BUILD_DIR/DBStudio-$VERSION.dmg"
+DMG="$BUILD_DIR/Tinker-$VERSION.dmg"
 STAGING="$BUILD_DIR/dmg"
 rm -rf "$STAGING"
 mkdir -p "$STAGING"
 cp -R "$APP" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
-hdiutil create -volname "DBStudio $VERSION" -srcfolder "$STAGING" \
+hdiutil create -volname "Tinker $VERSION" -srcfolder "$STAGING" \
     -ov -format UDZO -fs HFS+ "$DMG" >/dev/null
 if [[ "$MODE" != "unsigned" ]]; then
     codesign --sign "$IDENTITY" --timestamp "$DMG"

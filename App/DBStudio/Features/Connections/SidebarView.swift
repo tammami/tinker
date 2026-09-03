@@ -2,48 +2,68 @@ import DBCore
 import DBSQL
 import SwiftUI
 
-/// The connections and schema tree (SPEC §11.1).
+/// The connections and schema tree.
 public struct SidebarView: View {
     @Bindable var workspace: WorkspaceModel
     @Bindable var sidebar: SidebarModel
     let onOpenTable: (TableRef, UUID, Bool) -> Void
     let onNewQuery: (UUID, String) -> Void
+    let onOpenSource: (SourceObject, UUID) -> Void
+    let onOpenActivity: (UUID) -> Void
 
     @State private var searchText = ""
 
     public var body: some View {
         List(selection: $workspace.sidebarSelection) {
+            if filteredRoots.isEmpty, !searchText.isEmpty {
+                Text("No connection or object matches “\(searchText)”")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, DesignTokens.Spacing.sm)
+            }
             ForEach(filteredRoots) { item in
                 SidebarRow(
                     item: item,
                     sidebar: sidebar,
                     workspace: workspace,
                     onOpenTable: onOpenTable,
-                    onNewQuery: onNewQuery
+                    onNewQuery: onNewQuery,
+                    onOpenSource: onOpenSource,
+                    onOpenActivity: onOpenActivity
                 )
             }
         }
         .listStyle(.sidebar)
-        .searchable(text: $searchText, placement: .sidebar, prompt: "Filter connections")
-        .safeAreaInset(edge: .bottom) {
-            HStack(spacing: 6) {
-                Button {
-                    workspace.editingConnection = ConnectionConfig(
-                        name: "New Connection", dialect: .postgresql,
-                        host: "localhost", port: 5_432, user: NSUserName()
-                    )
-                    workspace.isEditingNewConnection = true
-                } label: {
-                    Label("New Connection", systemImage: "plus")
+        .searchable(text: $searchText, placement: .sidebar, prompt: "Filter connections and tables")
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                HStack(spacing: DesignTokens.Spacing.sm) {
+                    Button {
+                        workspace.presentNewConnection()
+                    } label: {
+                        Label("New Connection", systemImage: Icon.add)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Add a connection")
+                    Spacer()
+                    Text(connectionSummary)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
                 }
-                .buttonStyle(.borderless)
-                .help("Add a connection")
-                Spacer()
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .frame(height: DesignTokens.Metrics.barHeight)
+                .background(.bar)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(.bar)
         }
+    }
+
+    private var connectionSummary: String {
+        let total = workspace.environment.connections.count
+        let live = workspace.environment.connections.count { sidebar.state(of: $0.id).isUsable }
+        guard total > 0 else { return "" }
+        return live > 0 ? "\(live) of \(total) connected" : "\(total) connection\(total == 1 ? "" : "s")"
     }
 
     var filteredRoots: [SidebarItem] {
@@ -64,6 +84,17 @@ public struct SidebarView: View {
     }
 }
 
+extension WorkspaceModel {
+    /// Opens the connection sheet on a fresh PostgreSQL configuration.
+    public func presentNewConnection() {
+        editingConnection = ConnectionConfig(
+            name: "New Connection", dialect: .postgresql,
+            host: "localhost", port: 5_432, user: NSUserName()
+        )
+        isEditingNewConnection = true
+    }
+}
+
 /// One row of the tree, expanded on demand.
 struct SidebarRow: View {
     let item: SidebarItem
@@ -71,6 +102,8 @@ struct SidebarRow: View {
     @Bindable var workspace: WorkspaceModel
     let onOpenTable: (TableRef, UUID, Bool) -> Void
     let onNewQuery: (UUID, String) -> Void
+    let onOpenSource: (SourceObject, UUID) -> Void
+    let onOpenActivity: (UUID) -> Void
 
     var body: some View {
         Group {
@@ -79,7 +112,8 @@ struct SidebarRow: View {
                     ForEach(item.children ?? []) { child in
                         SidebarRow(
                             item: child, sidebar: sidebar, workspace: workspace,
-                            onOpenTable: onOpenTable, onNewQuery: onNewQuery
+                            onOpenTable: onOpenTable, onNewQuery: onNewQuery,
+                            onOpenSource: onOpenSource, onOpenActivity: onOpenActivity
                         )
                     }
                 } label: {
@@ -110,55 +144,101 @@ struct SidebarRow: View {
         )
     }
 
+    private var config: ConnectionConfig? {
+        guard case let .connection(id) = item.kind else { return nil }
+        return workspace.environment.connections.first { $0.id == id }
+    }
+
     @ViewBuilder
     var label: some View {
-        // Eight points between the icon and its text, and a little air after the
-        // disclosure triangle: at six the glyphs crowd the label.
-        HStack(spacing: 8) {
+        HStack(spacing: DesignTokens.Spacing.sm) {
             if case let .connection(id) = item.kind {
-                let config = workspace.environment.connections.first { $0.id == id }
-                Circle()
-                    .fill(sidebar.state(of: id).indicatorColor)
-                    .frame(width: 8, height: 8)
-                // Which engine this is, so a MySQL row is not a PostgreSQL row with a
-                // different name.
-                if let config {
-                    EngineMark(dialect: config.dialect)
-                }
-                if let color = config?.color {
-                    Circle().fill(color.swiftUIColor).frame(width: 6, height: 6)
-                }
+                connectionLabel(id: id)
             } else {
                 Image(systemName: item.symbolName)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 16)
-            }
-            Text(item.title)
-                .lineLimit(1)
-            if let subtitle = item.subtitle {
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(iconColor)
+                    .frame(width: DesignTokens.Metrics.iconWidth)
+                Text(item.title)
                     .lineLimit(1)
+                    .truncationMode(.middle)
+                if let subtitle = item.subtitle {
+                    if case .tableFolder = item.kind {
+                        Spacer(minLength: DesignTokens.Spacing.xs)
+                        Badge(text: subtitle)
+                    } else {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .monospacedDigit()
+                    }
+                }
+                Spacer(minLength: 0)
             }
-            if case let .connection(id) = item.kind,
-               workspace.environment.connections.first(where: { $0.id == id })?.isProduction == true {
-                Text("prod")
-                    .font(.caption2.weight(.bold))
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(Color(nsColor: DesignTokens.Colors.productionBadge).opacity(0.85))
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
-            }
-            Spacer(minLength: 0)
         }
-        .padding(.leading, 4)
+        .frame(height: 22)
         .contentShape(Rectangle())
         // A simultaneous gesture, because the list row and the disclosure control both
         // want the click and a plain `onTapGesture` loses to them.
         .simultaneousGesture(TapGesture(count: 2).onEnded { handleDoubleClick() })
         .simultaneousGesture(TapGesture(count: 1).onEnded { workspace.sidebarSelection = item.id })
+        .help(helpText)
+    }
+
+    /// A connection row: the engine badge, the name, and the connection's own colour and
+    /// state at the trailing edge where they do not push the name around.
+    @ViewBuilder
+    private func connectionLabel(id: UUID) -> some View {
+        if let config {
+            // The connection's colour is a stripe at the leading edge, where the tab strip
+            // shows it too; the trailing dot is only ever the connection's state.
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(config.color?.swiftUIColor ?? .clear)
+                .frame(width: 3, height: 14)
+            EngineMark(dialect: config.dialect, size: DesignTokens.Metrics.iconWidth)
+            Text(config.name)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if config.isProduction {
+                Badge(text: "PROD", color: Color(nsColor: DesignTokens.Colors.productionBadge), isProminent: true)
+            }
+            if config.readOnly {
+                Image(systemName: Icon.readOnly)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .help("Read-only")
+            }
+            Spacer(minLength: DesignTokens.Spacing.xs)
+            Circle()
+                .fill(sidebar.state(of: id).indicatorColor)
+                .frame(width: 7, height: 7)
+                .help(sidebar.state(of: id).describedForStatusBar)
+        } else {
+            Image(systemName: Icon.connection).frame(width: DesignTokens.Metrics.iconWidth)
+            Text(item.title)
+        }
+    }
+
+    private var iconColor: Color {
+        switch item.kind {
+        case .failure: .red
+        case .table(_, let info) where info.kind == .view || info.kind == .materializedView: .purple
+        case .table: .accentColor
+        case .routine: .orange
+        case .database: .secondary
+        case .schema: .teal
+        default: .secondary
+        }
+    }
+
+    private var helpText: String {
+        switch item.kind {
+        case .connection: config.map { "\($0.user)@\($0.host):\($0.port)" } ?? ""
+        case let .table(_, info): info.comment ?? "\(info.kind.displayName) \(info.ref.schema).\(info.ref.name)"
+        case let .routine(_, _, name, signature): "\(name)(\(signature))"
+        case let .failure(_, message): message
+        default: ""
+        }
     }
 
     /// Opens whatever the row points at: a table becomes a tab, anything else toggles.
@@ -188,8 +268,12 @@ struct SidebarRow: View {
             onOpenTable(info.ref, id, NSEvent.modifierFlags.contains(.option))
         case let .schema(id, ref):
             // A schema opens as a list of what it holds, rather than only expanding
-            // one node at a time (SPEC §11.4).
+            // one node at a time.
             _ = workspace.openObjects(ref, connectionID: id)
+        case let .routine(id, schema, name, signature):
+            onOpenSource(SourceObject(kind: .routine(
+                schema: schema, name: name, signature: signature, kind: .function
+            )), id)
         default:
             toggleExpansion()
         }
@@ -203,10 +287,35 @@ struct SidebarRow: View {
         case let .table(id, info):
             tableMenu(connectionID: id, info: info)
         case let .schema(id, ref):
-            Button("Open Objects") { _ = workspace.openObjects(ref, connectionID: id) }
+            Button { _ = workspace.openObjects(ref, connectionID: id) } label: {
+                Label("Open Objects", systemImage: Icon.objects)
+            }
+            Button { onNewQuery(id, "") } label: {
+                Label("New Query", systemImage: Icon.newQuery)
+            }
+            Button {
+                workspace.isNewTablePresented = true
+            } label: {
+                Label("New Table…", systemImage: Icon.add)
+            }
+            Divider()
             Button(sidebar.isExpanded(item.id) ? "Collapse" : "Expand") { toggleExpansion() }
+        case let .routine(id, schema, name, signature):
+            Button {
+                onOpenSource(SourceObject(kind: .routine(
+                    schema: schema, name: name, signature: signature, kind: .function
+                )), id)
+            } label: {
+                Label("Open Definition", systemImage: Icon.source)
+            }
+            Button { copy(name) } label: { Label("Copy Name", systemImage: Icon.copy) }
         case .database, .tableFolder, .routineFolder, .group:
             Button(sidebar.isExpanded(item.id) ? "Collapse" : "Expand") { toggleExpansion() }
+            if case let .database(id, _) = item.kind {
+                Button { onNewQuery(id, "") } label: {
+                    Label("New Query", systemImage: Icon.newQuery)
+                }
+            }
         default:
             EmptyView()
         }
@@ -215,21 +324,32 @@ struct SidebarRow: View {
     @ViewBuilder
     func connectionMenu(_ id: UUID) -> some View {
         if let config = workspace.environment.connections.first(where: { $0.id == id }) {
-            Button("Edit…") { workspace.editingConnection = config }
-            Button("Duplicate") { Task { await workspace.environment.duplicate(config) } }
-            Button("New Query") { onNewQuery(id, "") }
+            Button { onNewQuery(id, "") } label: { Label("New Query", systemImage: Icon.newQuery) }
+                .keyboardShortcut("t", modifiers: .command)
+            Button { onOpenActivity(id) } label: { Label("Server Activity", systemImage: Icon.activity) }
             Divider()
-            Button("Refresh") { Task { await sidebar.refresh(connectionID: id) } }
-            Button("Disconnect") {
-                Task { await workspace.environment.session(for: id)?.disconnect() }
+            Button { workspace.editingConnection = config } label: { Label("Edit…", systemImage: Icon.edit) }
+            Button { Task { await workspace.environment.duplicate(config) } } label: {
+                Label("Duplicate", systemImage: Icon.duplicate)
             }
             Divider()
-            Button("Delete…", role: .destructive) {
+            Button { Task { await sidebar.refresh(connectionID: id) } } label: {
+                Label("Refresh", systemImage: Icon.refresh)
+            }
+            Button {
+                Task { await workspace.environment.session(for: id)?.disconnect() }
+            } label: {
+                Label("Disconnect", systemImage: Icon.disconnect)
+            }
+            Divider()
+            Button(role: .destructive) {
                 workspace.confirmation = DestructiveConfirmation(
                     title: "Delete “\(config.name)”?",
                     message: "The connection, its saved password and everything remembered about it are removed. The database itself is untouched.",
                     action: { await workspace.environment.delete(config) }
                 )
+            } label: {
+                Label("Delete…", systemImage: Icon.delete)
             }
         }
     }
@@ -238,15 +358,30 @@ struct SidebarRow: View {
     func tableMenu(connectionID: UUID, info: TableInfo) -> some View {
         let isProduction = workspace.environment.connections
             .first { $0.id == connectionID }?.isProduction ?? false
-        Button("Open") { onOpenTable(info.ref, connectionID, false) }
-        Button("Open in New Tab") { onOpenTable(info.ref, connectionID, true) }
-        Button("New Query") {
-            onNewQuery(connectionID, "SELECT * FROM \(info.ref.schema).\(info.ref.name) LIMIT 100")
+        let dialect = workspace.environment.connections
+            .first { $0.id == connectionID }?.dialect ?? .postgresql
+        Button { onOpenTable(info.ref, connectionID, false) } label: {
+            Label("Open", systemImage: Icon.table)
+        }
+        Button { onOpenTable(info.ref, connectionID, true) } label: {
+            Label("Open in New Tab", systemImage: Icon.openInNewTab)
+        }
+        if info.kind == .view || info.kind == .materializedView {
+            Button { onOpenSource(SourceObject(kind: .view(info.ref)), connectionID) } label: {
+                Label("Open Definition", systemImage: Icon.source)
+            }
+        }
+        Button {
+            onNewQuery(connectionID, "SELECT * FROM \(Identifier.qualified(info.ref, dialect: dialect)) LIMIT 100;")
+        } label: {
+            Label("Query Rows", systemImage: Icon.newQuery)
         }
         Divider()
-        Button("Copy Name") { copy(info.ref.name) }
-        Button("Copy Qualified Name") { copy("\(info.ref.schema).\(info.ref.name)") }
-        Button("Copy DDL") {
+        Button { copy(info.ref.name) } label: { Label("Copy Name", systemImage: Icon.copy) }
+        Button { copy(Identifier.qualified(info.ref, dialect: dialect)) } label: {
+            Label("Copy Qualified Name", systemImage: Icon.copy)
+        }
+        Button {
             Task { @MainActor in
                 guard let session = workspace.environment.session(for: connectionID) else { return }
                 let ref = info.ref
@@ -254,25 +389,68 @@ struct SidebarRow: View {
                     copy(ddl)
                 }
             }
+        } label: {
+            Label("Copy CREATE Statement", systemImage: Icon.source)
         }
-        Divider()
-        Button("Truncate…", role: .destructive) {
-            workspace.confirmation = DestructiveConfirmation(
-                title: "Truncate “\(info.ref.name)”?",
-                message: "Every row is deleted. This cannot be undone.",
-                requiredTypedName: isProduction ? info.ref.name : nil,
-                confirmTitle: "Truncate",
-                action: { await runDDL("TRUNCATE TABLE", info: info, connectionID: connectionID) }
-            )
+        if info.kind.isEditable {
+            Divider()
+            Button {
+                workspace.pendingTableOperation = TableOperationRequest(
+                    kind: .rename, table: info.ref, connectionID: connectionID
+                )
+            } label: {
+                Label("Rename…", systemImage: Icon.rename)
+            }
+            Button {
+                workspace.pendingTableOperation = TableOperationRequest(
+                    kind: .duplicate, table: info.ref, connectionID: connectionID
+                )
+            } label: {
+                Label("Duplicate…", systemImage: Icon.duplicate)
+            }
+            Button {
+                workspace.pendingTableOperation = TableOperationRequest(
+                    kind: .importCSV, table: info.ref, connectionID: connectionID
+                )
+            } label: {
+                Label("Import from CSV…", systemImage: Icon.importData)
+            }
+            Menu {
+                ForEach(MaintenanceAction.available(for: dialect), id: \.self) { action in
+                    Button(action.title) {
+                        workspace.pendingTableOperation = TableOperationRequest(
+                            kind: .maintenance(action), table: info.ref, connectionID: connectionID
+                        )
+                    }
+                }
+            } label: {
+                Label("Maintenance", systemImage: Icon.maintenance)
+            }
+            Divider()
+            Button(role: .destructive) {
+                workspace.confirmation = DestructiveConfirmation(
+                    title: "Truncate “\(info.ref.name)”?",
+                    message: "Every row is deleted. This cannot be undone.",
+                    requiredTypedName: isProduction ? info.ref.name : nil,
+                    confirmTitle: "Truncate",
+                    action: { await runDDL("TRUNCATE TABLE", info: info, connectionID: connectionID) }
+                )
+            } label: {
+                Label("Truncate…", systemImage: Icon.delete)
+            }
         }
-        Button("Drop…", role: .destructive) {
+        Button(role: .destructive) {
+            let verb = info.kind == .view ? "DROP VIEW"
+                : info.kind == .materializedView ? "DROP MATERIALIZED VIEW" : "DROP TABLE"
             workspace.confirmation = DestructiveConfirmation(
                 title: "Drop “\(info.ref.name)”?",
-                message: "The table and all of its data are removed. This cannot be undone.",
+                message: "The \(info.kind.displayName.lowercased()) and all of its data are removed. This cannot be undone.",
                 requiredTypedName: isProduction ? info.ref.name : nil,
                 confirmTitle: "Drop",
-                action: { await runDDL("DROP TABLE", info: info, connectionID: connectionID) }
+                action: { await runDDL(verb, info: info, connectionID: connectionID) }
             )
+        } label: {
+            Label("Drop…", systemImage: Icon.delete)
         }
     }
 
@@ -288,7 +466,7 @@ struct SidebarRow: View {
             let (lease, connection) = try await session.lease()
             defer { Task { await session.release(lease) } }
             let dialect = session.config.dialect
-            let name = DBSQLIdentifier.qualified(info.ref, dialect: dialect)
+            let name = Identifier.qualified(info.ref, dialect: dialect)
             _ = try await connection.executeCollecting("\(verb) \(name)")
             await session.invalidateIntrospection()
             await sidebar.refresh(connectionID: connectionID)
@@ -300,12 +478,5 @@ struct SidebarRow: View {
                 action: {}
             )
         }
-    }
-}
-
-/// A tiny alias so the view file does not import the whole SQL module namespace.
-enum DBSQLIdentifier {
-    static func qualified(_ table: TableRef, dialect: SQLDialect) -> String {
-        Identifier.qualified(table, dialect: dialect)
     }
 }

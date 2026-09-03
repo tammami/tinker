@@ -71,7 +71,7 @@ public struct WorkspaceView: View {
             }
             .background(Color(nsColor: .controlBackgroundColor))
         }
-        .navigationTitle(workspace.activeConnection?.name ?? Product.name)
+        .navigationTitle(workspace.displayedConnection?.name ?? Product.name)
         .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }
         .onAppear { CommandCenter.shared.activate(controller) }
@@ -239,7 +239,7 @@ public struct WorkspaceView: View {
     }
 
     private var subtitle: String {
-        guard let config = workspace.activeConnection else { return "" }
+        guard let config = workspace.displayedConnection else { return "" }
         var parts = ["\(config.user)@\(config.host)"]
         if let database = config.database { parts.append(database) }
         return parts.joined(separator: " · ")
@@ -477,7 +477,7 @@ public struct WorkspaceView: View {
 
     var statusBar: some View {
         StatusBarView {
-            if let config = workspace.activeConnection {
+            if let config = workspace.displayedConnection {
                 HStack(spacing: DesignTokens.Spacing.xs + 2) {
                     Circle()
                         .fill(sidebar.state(of: config.id).indicatorColor)
@@ -494,6 +494,8 @@ public struct WorkspaceView: View {
                 if config.isProduction {
                     Label("Production", systemImage: Icon.production).foregroundStyle(.red)
                 }
+            } else {
+                Text("No connection selected")
             }
             Spacer()
             if let tab = workspace.selectedTab, tab.isQueryTab,

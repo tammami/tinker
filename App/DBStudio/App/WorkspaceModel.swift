@@ -239,6 +239,14 @@ public final class WorkspaceModel {
         activeConnectionID.flatMap { id in environment.connections.first { $0.id == id } }
     }
 
+    /// The connection the window says it is on: the front tab's, or the one chosen in the
+    /// sidebar. Nothing before either happens — unlike `activeConnection`, which falls back
+    /// to the first configured one so that commands have somewhere to go.
+    public var displayedConnection: ConnectionConfig? {
+        let id = selectedTab?.connectionID ?? sidebarSelection.flatMap(SidebarItem.connectionID(from:))
+        return id.flatMap { id in environment.connections.first { $0.id == id } }
+    }
+
     // MARK: - Tabs
 
     public func open(_ tab: WorkspaceTab) {

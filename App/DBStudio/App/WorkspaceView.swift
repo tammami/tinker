@@ -239,7 +239,7 @@ public struct WorkspaceView: View {
     }
 
     private var subtitle: String {
-        guard let config = workspace.displayedConnection else { return "" }
+        guard let config = workspace.displayedConnection else { return Product.tagline }
         var parts = ["\(config.user)@\(config.host)"]
         if let database = config.database { parts.append(database) }
         return parts.joined(separator: " · ")

@@ -7,6 +7,8 @@ enum Product {
     static let name = "Tinker"
     static let maker = "ThinkFree"
     static let credit = "Tinker by ThinkFree"
+    /// Under the name in the window title while no connection is chosen.
+    static let tagline = "Your databases, close at hand"
 }
 
 struct DBStudioApp: App {

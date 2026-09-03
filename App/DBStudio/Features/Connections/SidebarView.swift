@@ -11,6 +11,9 @@ public struct SidebarView: View {
     let onOpenSource: (SourceObject, UUID) -> Void
     let onOpenActivity: (UUID) -> Void
     let onOpenBuilder: (SchemaRef, UUID) -> Void
+    /// Disconnecting and deleting close the connection's tabs, which the controller owns.
+    let onDisconnect: (UUID) -> Void
+    let onCloseTabs: (UUID) -> Void
 
     @State private var searchText = ""
 
@@ -31,7 +34,9 @@ public struct SidebarView: View {
                     onNewQuery: onNewQuery,
                     onOpenSource: onOpenSource,
                     onOpenActivity: onOpenActivity,
-                    onOpenBuilder: onOpenBuilder
+                    onOpenBuilder: onOpenBuilder,
+                    onDisconnect: onDisconnect,
+                    onCloseTabs: onCloseTabs
                 )
             }
         }
@@ -107,6 +112,8 @@ struct SidebarRow: View {
     let onOpenSource: (SourceObject, UUID) -> Void
     let onOpenActivity: (UUID) -> Void
     let onOpenBuilder: (SchemaRef, UUID) -> Void
+    let onDisconnect: (UUID) -> Void
+    let onCloseTabs: (UUID) -> Void
 
     var body: some View {
         Group {
@@ -117,7 +124,8 @@ struct SidebarRow: View {
                             item: child, sidebar: sidebar, workspace: workspace,
                             onOpenTable: onOpenTable, onNewQuery: onNewQuery,
                             onOpenSource: onOpenSource, onOpenActivity: onOpenActivity,
-                            onOpenBuilder: onOpenBuilder
+                            onOpenBuilder: onOpenBuilder, onDisconnect: onDisconnect,
+                            onCloseTabs: onCloseTabs
                         )
                     }
                 } label: {
@@ -405,16 +413,23 @@ struct SidebarRow: View {
                 Label("Refresh", systemImage: Icon.refresh)
             }
             Button {
-                Task { await workspace.environment.session(for: id)?.disconnect() }
+                onDisconnect(id)
             } label: {
                 Label("Disconnect", systemImage: Icon.disconnect)
             }
+            .disabled(!sidebar.state(of: id).isUsable && workspace.tabs(for: id).isEmpty)
             Divider()
             Button(role: .destructive) {
+                let open = workspace.tabs(for: id).count
                 workspace.confirmation = DestructiveConfirmation(
                     title: "Delete “\(config.name)”?",
-                    message: "The connection, its saved password and everything remembered about it are removed. The database itself is untouched.",
-                    action: { await workspace.environment.delete(config) }
+                    message: "The connection, its saved password and everything remembered about it are removed."
+                        + (open > 0 ? " Its \(open) open tab\(open == 1 ? "" : "s") will be closed." : "")
+                        + " The database itself is untouched.",
+                    action: {
+                        onCloseTabs(id)
+                        await workspace.environment.delete(config)
+                    }
                 )
             } label: {
                 Label("Delete…", systemImage: Icon.delete)

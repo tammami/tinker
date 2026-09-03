@@ -37,7 +37,9 @@ public struct WorkspaceView: View {
                 onNewQuery: newQuery,
                 onOpenSource: { object, id in controller.openSource(object, connectionID: id) },
                 onOpenActivity: { id in controller.openServerActivity(connectionID: id) },
-                onOpenBuilder: { schema, id in controller.openQueryBuilder(schema, connectionID: id) }
+                onOpenBuilder: { schema, id in controller.openQueryBuilder(schema, connectionID: id) },
+                onDisconnect: { id in controller.disconnect(id) },
+                onCloseTabs: { id in controller.closeTabs(for: id) }
             )
             .navigationSplitViewColumnWidth(
                 min: DesignTokens.Metrics.sidebarMinWidth,
@@ -336,11 +338,7 @@ public struct WorkspaceView: View {
     }
 
     func hasUnsavedWork(_ tab: WorkspaceTab) -> Bool {
-        if let controller = queryControllers[tab.id] { return controller.isInTransaction }
-        if let controller = tableControllers[tab.id] {
-            return (controller.model?.edits.pendingStatementCount ?? 0) > 0
-        }
-        return false
+        return controller.hasUnsavedWork(tab)
     }
 
     // MARK: - Content

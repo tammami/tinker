@@ -187,6 +187,49 @@ public final class WorkspaceController {
         pruneControllers()
     }
 
+    /// Closes a connection's tabs and disconnects it, asking first when tabs are open.
+    ///
+    /// A tab may hold uncommitted grid edits or an open transaction; closing it throws
+    /// those away, so the person is told what will go before anything does.
+    public func disconnect(_ connectionID: UUID) {
+        guard let config = environment.connections.first(where: { $0.id == connectionID }) else { return }
+        let open = workspace.tabs(for: connectionID)
+        let unsaved = open.filter { hasUnsavedWork($0) }.count
+        guard !open.isEmpty else {
+            Task { await environment.session(for: connectionID)?.disconnect() }
+            return
+        }
+        var message = "\(open.count) open tab\(open.count == 1 ? "" : "s") on this connection will be closed."
+        if unsaved > 0 {
+            message += " \(unsaved) of them \(unsaved == 1 ? "has" : "have") uncommitted changes or an open transaction, which will be lost."
+        }
+        workspace.confirmation = DestructiveConfirmation(
+            title: "Disconnect from “\(config.name)”?",
+            message: message,
+            confirmTitle: "Disconnect",
+            action: { [weak self] in
+                guard let self else { return }
+                closeTabs(for: connectionID)
+                await environment.session(for: connectionID)?.disconnect()
+            }
+        )
+    }
+
+    /// Closes every tab of a connection and frees what they owned.
+    public func closeTabs(for connectionID: UUID) {
+        workspace.closeTabs(for: connectionID)
+        pruneControllers()
+    }
+
+    /// Whether a tab holds edits or an open transaction.
+    public func hasUnsavedWork(_ tab: WorkspaceTab) -> Bool {
+        if let controller = queryControllers[tab.id] { return controller.isInTransaction }
+        if let controller = tableControllers[tab.id] {
+            return (controller.model?.edits.pendingStatementCount ?? 0) > 0
+        }
+        return false
+    }
+
     /// Drops the controllers of tabs that are no longer open, so a closed tab's grid is
     /// released rather than kept for the life of the window.
     public func pruneControllers() {

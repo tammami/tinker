@@ -283,6 +283,20 @@ public final class WorkspaceModel {
         return tab
     }
 
+    /// The tabs that belong to a connection, in strip order.
+    public func tabs(for connectionID: UUID) -> [WorkspaceTab] {
+        tabs.filter { $0.connectionID == connectionID }
+    }
+
+    /// Closes every tab of a connection, keeping the selection on a neighbour if any tab remains.
+    public func closeTabs(for connectionID: UUID) {
+        let selectedIndex = tabs.firstIndex { $0.id == selectedTabID } ?? 0
+        tabs.removeAll { $0.connectionID == connectionID }
+        if !tabs.contains(where: { $0.id == selectedTabID }) {
+            selectedTabID = tabs.isEmpty ? nil : tabs[min(selectedIndex, tabs.count - 1)].id
+        }
+    }
+
     /// Closes every tab but one.
     public func closeOtherTabs(_ id: UUID) {
         tabs.removeAll { $0.id != id }

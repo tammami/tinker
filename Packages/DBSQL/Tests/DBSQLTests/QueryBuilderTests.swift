@@ -97,6 +97,34 @@ final class QueryBuilderTests: XCTestCase {
         XCTAssertEqual(model.joins.count, 1)
     }
 
+    func testStarOverAJoinIsSpeltOutAndClashingNamesGetAliases() {
+        var model = QueryBuilderModel()
+        let c = model.add(customers)
+        let o = model.add(orders)
+        model.columns = [c: ["id", "name"], o: ["id", "customer_id", "total"]]
+        model.joins.append(.init(leftTable: c, leftColumn: "id", rightTable: o, rightColumn: "customer_id"))
+        // Nothing chosen: every column, both `id`s told apart.
+        XCTAssertEqual(model.sql(dialect: .mysql), """
+        SELECT
+            `customers`.`id` AS `customers_id`,
+            `customers`.`name`,
+            `orders`.`id` AS `orders_id`,
+            `orders`.`customer_id`,
+            `orders`.`total`
+        FROM `db`.`customers`
+        INNER JOIN `db`.`orders`
+            ON `customers`.`id` = `orders`.`customer_id`
+        """)
+        // One star among explicit fields expands too; a chosen alias is kept.
+        model.fields = [.init(table: c, column: "*"), .init(table: o, column: "id", alias: "order_id")]
+        XCTAssertTrue(model.sql(dialect: .postgresql)?.contains(#""orders"."id" AS "order_id""#) ?? false)
+        XCTAssertFalse(model.sql(dialect: .postgresql)?.contains("customers_id") ?? true, "no clash once the other id is aliased")
+        // A single table keeps its plain star.
+        model.remove(table: o)
+        model.fields = []
+        XCTAssertEqual(model.sql(dialect: .postgresql), "SELECT\n    *\nFROM \"public\".\"customers\"")
+    }
+
     func testIncompleteConditionsAreLeftOutAndCreateViewWraps() {
         var model = QueryBuilderModel()
         let c = model.add(customers)

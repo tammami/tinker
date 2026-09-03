@@ -148,6 +148,10 @@ public struct QueryBuilderModel: Sendable, Hashable, Codable {
     public var limit: Int?
     public var offset: Int?
     public var isDistinct = false
+    /// The columns of each placed table, when known. With them, `*` over a join is spelt
+    /// out column by column and clashing names get aliases, so the result — and a view
+    /// made from it — never has two columns called `id`.
+    public var columns: [UUID: [String]] = [:]
 
     public init() {}
 
@@ -240,9 +244,9 @@ public struct QueryBuilderModel: Sendable, Hashable, Codable {
         var lines: [String] = []
 
         // SELECT
-        let selectItems: [String] = fields.isEmpty
+        let selectItems: [String] = expandedFields().isEmpty
             ? ["*"]
-            : fields.map { field in
+            : expandedFields().map { field in
                 var expression = qualified(field.table, field.column)
                 if field.aggregate != .none {
                     expression = "\(field.aggregate.rawValue)(\(field.isStar ? "*" : expression))"
@@ -310,6 +314,43 @@ public struct QueryBuilderModel: Sendable, Hashable, Codable {
             if let offset, offset > 0 { lines.append("OFFSET \(offset)") }
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// The SELECT list with `*` spelt out and clashing names aliased, where the columns
+    /// are known. With one table, or no column knowledge, the fields pass through as is.
+    public func expandedFields() -> [Field] {
+        let base: [Field]
+        if fields.isEmpty {
+            // Nothing chosen: every column of every table, in canvas order.
+            guard tables.count > 1, tables.allSatisfy({ columns[$0.id] != nil }) else { return [] }
+            base = tables.map { Field(table: $0.id, column: "*") }
+        } else {
+            base = fields
+        }
+        guard tables.count > 1 else { return base }
+
+        var expanded: [Field] = []
+        for field in base {
+            if field.isStar, field.aggregate == .none, let names = columns[field.table] {
+                expanded.append(contentsOf: names.map { Field(table: field.table, column: $0) })
+            } else {
+                expanded.append(field)
+            }
+        }
+        // A name that appears twice gets `alias_column`, unless the person named it already.
+        var counts: [String: Int] = [:]
+        for field in expanded where field.aggregate == .none && !field.isStar {
+            counts[field.alias ?? field.column, default: 0] += 1
+        }
+        return expanded.map { field in
+            guard field.aggregate == .none, !field.isStar, field.alias == nil,
+                  counts[field.column, default: 0] > 1,
+                  let alias = table(field.table)?.alias
+            else { return field }
+            var renamed = field
+            renamed.alias = "\(alias)_\(field.column)"
+            return renamed
+        }
     }
 
     /// `CREATE VIEW name AS <select>`; `OR REPLACE` so re-running after a change works.

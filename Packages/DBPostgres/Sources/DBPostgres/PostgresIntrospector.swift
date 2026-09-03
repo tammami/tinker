@@ -591,3 +591,129 @@ extension PostgresIntrospector {
         }
     }
 }
+
+// MARK: - Server monitoring and definitions
+
+extension PostgresIntrospector: ServerIntrospector {
+    public func activity() async throws -> [ServerSessionInfo] {
+        let result = try await query("""
+            SELECT a.pid::text,
+                   a.usename,
+                   a.datname,
+                   COALESCE(host(a.client_addr), 'local'),
+                   a.application_name,
+                   a.state,
+                   CASE WHEN a.state = 'active'
+                        THEN date_trunc('second', clock_timestamp() - a.query_start)::text
+                        ELSE date_trunc('second', clock_timestamp() - a.state_change)::text END,
+                   a.query,
+                   a.pid = pg_backend_pid()
+            FROM pg_catalog.pg_stat_activity a
+            WHERE a.backend_type = 'client backend' OR a.backend_type IS NULL
+            ORDER BY a.pid
+            """)
+        return result.rows.compactMap { row in
+            guard let id = row[0].text else { return nil }
+            return ServerSessionInfo(
+                id: id,
+                user: row[1].text,
+                database: row[2].text,
+                clientAddress: row[3].text,
+                application: row[4].text,
+                state: row[5].text,
+                duration: row[6].text,
+                query: row[7].text,
+                isCurrent: row[8] == .bool(true)
+            )
+        }
+    }
+
+    /// `pg_terminate_backend` needs the role to own the session or be a superuser; when it
+    /// is neither, the server's own message is what the user sees.
+    public func terminateSession(id: String) async throws {
+        guard let pid = Int32(id) else {
+            throw DBError.protocolError("\(id) is not a backend pid")
+        }
+        let result = try await query("SELECT pg_terminate_backend($1)", [.int(Int64(pid))])
+        if result.rows.first?.first != .bool(true) {
+            throw DBError.server(ServerError(message: "The server did not terminate backend \(pid); it may have already ended, or the role lacks permission"))
+        }
+    }
+
+    public func users() async throws -> [ServerUserInfo] {
+        let result = try await query("""
+            SELECT r.rolname, r.rolsuper, r.rolcanlogin, r.rolcreatedb, r.rolcreaterole,
+                   r.rolreplication, r.rolconnlimit, r.rolvaliduntil::text,
+                   ARRAY(SELECT b.rolname FROM pg_catalog.pg_auth_members m
+                         JOIN pg_catalog.pg_roles b ON b.oid = m.roleid
+                         WHERE m.member = r.oid)::text
+            FROM pg_catalog.pg_roles r
+            WHERE r.rolname NOT LIKE 'pg\\_%'
+            ORDER BY r.rolname
+            """)
+        return result.rows.compactMap { row in
+            guard let name = row[0].text else { return nil }
+            var notes: [String] = []
+            if row[5] == .bool(true) { notes.append("replication") }
+            if let limit = row[6].text, limit != "-1" { notes.append("connection limit \(limit)") }
+            if let until = row[7].text { notes.append("valid until \(until)") }
+            if let members = row[8].text, members != "{}" { notes.append("member of \(members)") }
+            return ServerUserInfo(
+                name: name,
+                isSuperuser: row[1] == .bool(true),
+                canLogin: row[2] == .bool(true),
+                canCreateDatabase: row[3] == .bool(true),
+                canCreateRole: row[4] == .bool(true),
+                attributes: notes.isEmpty ? nil : notes.joined(separator: ", ")
+            )
+        }
+    }
+
+    public func variables() async throws -> [ServerVariableInfo] {
+        let result = try await query("""
+            SELECT s.name, s.setting, s.unit, s.category, s.short_desc
+            FROM pg_catalog.pg_settings s
+            ORDER BY s.category, s.name
+            """)
+        return result.rows.compactMap { row in
+            guard let name = row[0].text else { return nil }
+            return ServerVariableInfo(
+                name: name, value: row[1].text ?? "", unit: row[2].text,
+                category: row[3].text, summary: row[4].text
+            )
+        }
+    }
+
+    public func viewDefinition(_ table: TableRef) async throws -> String {
+        let result = try await query("""
+            SELECT c.relkind::text, pg_get_viewdef(c.oid, true)
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('v', 'm')
+            """, [.string(table.schema), .string(table.name)])
+        guard let row = result.rows.first, let body = row[1].text else {
+            throw DBError.server(ServerError(message: "\(table.schema).\(table.name) is not a view"))
+        }
+        let name = Identifier.qualified(table, dialect: .postgresql)
+        let verb = row[0].text == "m" ? "CREATE MATERIALIZED VIEW" : "CREATE OR REPLACE VIEW"
+        return "\(verb) \(name) AS\n\(body.trimmingCharacters(in: .whitespacesAndNewlines))\n"
+    }
+
+    public func routineDefinition(
+        in schema: SchemaRef, name: String, signature: String, kind: RoutineKind
+    ) async throws -> String {
+        // The identity arguments pick one overload; a routine with none has an empty string.
+        let result = try await query("""
+            SELECT pg_get_functiondef(p.oid)
+            FROM pg_catalog.pg_proc p
+            JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = $1 AND p.proname = $2
+              AND pg_get_function_identity_arguments(p.oid) = $3
+            LIMIT 1
+            """, [.string(schema.schema), .string(name), .string(signature)])
+        guard let definition = result.rows.first?.first?.text else {
+            throw DBError.server(ServerError(message: "\(schema.schema).\(name)(\(signature)) was not found"))
+        }
+        return definition
+    }
+}

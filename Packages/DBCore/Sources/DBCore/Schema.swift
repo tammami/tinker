@@ -473,3 +473,121 @@ extension SchemaIntrospector {
         return candidates.first?.columns
     }
 }
+
+// MARK: - Server monitoring and definitions
+
+/// One session the server is currently holding: a backend on PostgreSQL, a thread on MySQL.
+public struct ServerSessionInfo: Sendable, Hashable, Identifiable, Codable {
+    /// The pid or thread id, which is what terminating it needs.
+    public let id: String
+    public let user: String?
+    public let database: String?
+    public let clientAddress: String?
+    public let application: String?
+    /// `active`, `idle`, `Sleep`, `Query`… as the server names it.
+    public let state: String?
+    /// How long the current statement, or the idle wait, has lasted, as the server reports it.
+    public let duration: String?
+    /// The statement being run, or the last one, verbatim.
+    public let query: String?
+    /// True for the session the app itself is reading through.
+    public let isCurrent: Bool
+
+    public init(
+        id: String,
+        user: String? = nil,
+        database: String? = nil,
+        clientAddress: String? = nil,
+        application: String? = nil,
+        state: String? = nil,
+        duration: String? = nil,
+        query: String? = nil,
+        isCurrent: Bool = false
+    ) {
+        self.id = id
+        self.user = user
+        self.database = database
+        self.clientAddress = clientAddress
+        self.application = application
+        self.state = state
+        self.duration = duration
+        self.query = query
+        self.isCurrent = isCurrent
+    }
+}
+
+/// A login role or account, with the rights the catalog exposes to the current user.
+public struct ServerUserInfo: Sendable, Hashable, Identifiable, Codable {
+    public let name: String
+    /// MySQL accounts are `user@host`; PostgreSQL roles have no host.
+    public let host: String?
+    public let isSuperuser: Bool
+    public let canLogin: Bool
+    public let canCreateDatabase: Bool
+    public let canCreateRole: Bool
+    /// Anything else worth showing: connection limit, expiry, granted privileges.
+    public let attributes: String?
+
+    public init(
+        name: String,
+        host: String? = nil,
+        isSuperuser: Bool = false,
+        canLogin: Bool = true,
+        canCreateDatabase: Bool = false,
+        canCreateRole: Bool = false,
+        attributes: String? = nil
+    ) {
+        self.name = name
+        self.host = host
+        self.isSuperuser = isSuperuser
+        self.canLogin = canLogin
+        self.canCreateDatabase = canCreateDatabase
+        self.canCreateRole = canCreateRole
+        self.attributes = attributes
+    }
+
+    public var id: String { host.map { "\(name)@\($0)" } ?? name }
+}
+
+/// One server setting, as `pg_settings` or `SHOW VARIABLES` reports it.
+public struct ServerVariableInfo: Sendable, Hashable, Identifiable, Codable {
+    public let name: String
+    public let value: String
+    public let unit: String?
+    public let category: String?
+    public let summary: String?
+
+    public init(name: String, value: String, unit: String? = nil, category: String? = nil, summary: String? = nil) {
+        self.name = name
+        self.value = value
+        self.unit = unit
+        self.category = category
+        self.summary = summary
+    }
+
+    public var id: String { name }
+}
+
+/// The reads behind the Server tab and the definition tabs.
+///
+/// Defaults throw, so a driver that has not implemented one reports it rather than
+/// pretending; the app shows the message verbatim.
+public protocol ServerIntrospector: Sendable {
+    /// Every session the server will show the current user.
+    func activity() async throws -> [ServerSessionInfo]
+    /// Ends a session. Needs the server's own permission to do so; the error is the server's.
+    func terminateSession(id: String) async throws
+    func users() async throws -> [ServerUserInfo]
+    func variables() async throws -> [ServerVariableInfo]
+    /// The `CREATE VIEW` statement for a view, in the engine's own rendering.
+    func viewDefinition(_ table: TableRef) async throws -> String
+    /// The `CREATE FUNCTION` or `CREATE PROCEDURE` statement for a routine.
+    func routineDefinition(
+        in schema: SchemaRef, name: String, signature: String, kind: RoutineKind
+    ) async throws -> String
+}
+
+extension SchemaIntrospector {
+    /// The server-level reads, when the driver offers them.
+    public var server: (any ServerIntrospector)? { self as? any ServerIntrospector }
+}

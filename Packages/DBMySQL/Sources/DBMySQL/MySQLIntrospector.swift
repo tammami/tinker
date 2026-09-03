@@ -457,3 +457,106 @@ extension MySQLIntrospector {
         }
     }
 }
+
+// MARK: - Server monitoring and definitions
+
+extension MySQLIntrospector: ServerIntrospector {
+    public func activity() async throws -> [ServerSessionInfo] {
+        let result = try await query("""
+            SELECT p.ID, p.USER, p.DB, p.HOST, p.COMMAND, p.STATE, p.TIME, p.INFO,
+                   p.ID = CONNECTION_ID()
+            FROM information_schema.PROCESSLIST p
+            ORDER BY p.ID
+            """)
+        return result.rows.compactMap { row in
+            guard let id = row[0].text else { return nil }
+            let seconds = Self.integer(row[6]) ?? 0
+            return ServerSessionInfo(
+                id: id,
+                user: row[1].text,
+                database: row[2].text,
+                clientAddress: row[3].text,
+                application: nil,
+                state: [row[4].text, row[5].text].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
+                duration: Self.duration(seconds),
+                query: row[7].text,
+                isCurrent: Self.isTrue(row[8])
+            )
+        }
+    }
+
+    /// `KILL` takes no parameters, so the id is parsed as an integer before it is written
+    /// into the statement; nothing the user typed reaches the server as text.
+    public func terminateSession(id: String) async throws {
+        guard let thread = UInt64(id) else {
+            throw DBError.protocolError("\(id) is not a thread id")
+        }
+        _ = try await query("KILL CONNECTION \(thread)")
+    }
+
+    /// `mysql.user` is off limits to most accounts; `USER_PRIVILEGES` shows every account
+    /// the current one is allowed to know about, which for an ordinary user is itself.
+    public func users() async throws -> [ServerUserInfo] {
+        let result = try await query("""
+            SELECT u.GRANTEE, GROUP_CONCAT(u.PRIVILEGE_TYPE ORDER BY u.PRIVILEGE_TYPE SEPARATOR ', ')
+            FROM information_schema.USER_PRIVILEGES u
+            GROUP BY u.GRANTEE
+            ORDER BY u.GRANTEE
+            """)
+        return result.rows.compactMap { row in
+            guard let grantee = row[0].text else { return nil }
+            // `'name'@'host'`
+            let parts = grantee.split(separator: "@", maxSplits: 1).map {
+                $0.trimmingCharacters(in: CharacterSet(charactersIn: "'`\""))
+            }
+            let privileges = row[1].text ?? ""
+            let set = Set(privileges.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+            return ServerUserInfo(
+                name: parts.first ?? grantee,
+                host: parts.count > 1 ? parts[1] : nil,
+                isSuperuser: set.contains("SUPER"),
+                canLogin: true,
+                canCreateDatabase: set.contains("CREATE"),
+                canCreateRole: set.contains("CREATE USER") || set.contains("CREATE ROLE"),
+                attributes: privileges.isEmpty ? nil : privileges
+            )
+        }
+    }
+
+    public func variables() async throws -> [ServerVariableInfo] {
+        let result = try await query("SHOW GLOBAL VARIABLES")
+        return result.rows.compactMap { row in
+            guard let name = row[0].text else { return nil }
+            return ServerVariableInfo(name: name, value: row[1].text ?? "")
+        }
+    }
+
+    public func viewDefinition(_ table: TableRef) async throws -> String {
+        let name = Identifier.qualified(table, dialect: .mysql)
+        let result = try await query("SHOW CREATE VIEW \(name)")
+        guard let row = result.rows.first, row.count >= 2, let ddl = row[1].text else {
+            throw DBError.server(ServerError(message: "\(table.name) is not a view or is not visible"))
+        }
+        return ddl + ";\n"
+    }
+
+    public func routineDefinition(
+        in schema: SchemaRef, name: String, signature: String, kind: RoutineKind
+    ) async throws -> String {
+        let qualified = Identifier.qualify([schema.database, name], dialect: .mysql)
+        let verb = kind == .procedure ? "PROCEDURE" : "FUNCTION"
+        let result = try await query("SHOW CREATE \(verb) \(qualified)")
+        // Columns: Procedure/Function, sql_mode, Create Procedure/Function, …
+        guard let row = result.rows.first, row.count >= 3, let ddl = row[2].text, !ddl.isEmpty else {
+            throw DBError.server(ServerError(message: "\(name) was not found, or its body is not visible to this account"))
+        }
+        return ddl + ";\n"
+    }
+
+    static func duration(_ seconds: Int64) -> String {
+        let hours = seconds / 3_600
+        let minutes = (seconds % 3_600) / 60
+        let rest = seconds % 60
+        return String(format: "%02d:%02d:%02d", hours, minutes, rest)
+    }
+}

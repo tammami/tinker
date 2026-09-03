@@ -103,6 +103,14 @@ public struct DBTimestamp: Sendable, Hashable, Codable, CustomStringConvertible 
 public enum DBValueKind: String, Sendable, Hashable, Codable, CaseIterable {
     case null, bool, int, uint, double, decimal, string, bytes
     case date, time, timestamp, uuid, json, array, raw
+
+    /// Whether values of this kind read as numbers, which is what decides alignment.
+    public var isNumeric: Bool {
+        switch self {
+        case .int, .uint, .double, .decimal: true
+        default: false
+        }
+    }
 }
 
 /// A database value in a driver-neutral representation.

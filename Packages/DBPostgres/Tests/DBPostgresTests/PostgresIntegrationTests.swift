@@ -670,3 +670,70 @@ final class PostgresIntegrationTests: XCTestCase {
         }
     }
 }
+
+// MARK: - Server monitoring and definitions
+
+extension PostgresIntegrationTests {
+    func testActivityListsTheCurrentSessionAndTerminateRefusesNonsense() async throws {
+        try await withEachServer { connection, _ in
+            let server = try XCTUnwrap(connection.introspector.server)
+            let sessions = try await server.activity()
+            let me = try XCTUnwrap(sessions.first { $0.isCurrent })
+            XCTAssertEqual(me.id, connection.backendID)
+            XCTAssertEqual(me.database, "dbstudio_test")
+            XCTAssertNotNil(me.user)
+            // Terminating a pid that does not exist is refused by the server, verbatim.
+            do {
+                try await server.terminateSession(id: "1")
+                XCTFail("expected a refusal")
+            } catch let error as DBError {
+                XCTAssertFalse(error.errorDescription?.isEmpty ?? true)
+            }
+            do {
+                try await server.terminateSession(id: "not-a-pid")
+                XCTFail("expected a refusal")
+            } catch {}
+        }
+    }
+
+    func testUsersAndVariablesAreReadable() async throws {
+        try await withEachServer { connection, server in
+            let introspector = try XCTUnwrap(connection.introspector.server)
+            let users = try await introspector.users()
+            let me = try XCTUnwrap(users.first { $0.name == server.user })
+            XCTAssertFalse(me.isSuperuser)
+            XCTAssertTrue(me.canLogin)
+            let variables = try await introspector.variables()
+            XCTAssertTrue(variables.contains { $0.name == "server_version" })
+            XCTAssertTrue(variables.contains { $0.name == "max_connections" })
+        }
+    }
+
+    func testViewAndRoutineDefinitionsComeFromTheCatalog() async throws {
+        try await withEachServer { connection, server in
+            let introspector = try XCTUnwrap(connection.introspector.server)
+            let view = try await introspector.viewDefinition(
+                TableRef(database: server.database, schema: "public", name: "customer_totals")
+            )
+            XCTAssertTrue(view.hasPrefix("CREATE OR REPLACE VIEW \"public\".\"customer_totals\" AS"), view)
+            XCTAssertTrue(view.lowercased().contains("select"), view)
+
+            let schema = SchemaRef(database: server.database, schema: "public")
+            let function = try await introspector.routineDefinition(
+                in: schema, name: "add_numbers", signature: "a integer, b integer", kind: .function
+            )
+            XCTAssertTrue(function.contains("CREATE OR REPLACE FUNCTION public.add_numbers"), function)
+            let procedure = try await introspector.routineDefinition(
+                in: schema, name: "touch_customer", signature: "IN cid integer", kind: .procedure
+            )
+            XCTAssertTrue(procedure.contains("PROCEDURE public.touch_customer"), procedure)
+
+            do {
+                _ = try await introspector.routineDefinition(in: schema, name: "no_such", signature: "", kind: .function)
+                XCTFail("expected not found")
+            } catch let error as DBError {
+                XCTAssertTrue(error.errorDescription?.contains("no_such") ?? false)
+            }
+        }
+    }
+}

@@ -683,3 +683,68 @@ final class MySQLValueDecoderTests: XCTestCase {
     }
 
 }
+
+// MARK: - Server monitoring and definitions
+
+extension MySQLIntegrationTests {
+    func testActivityListsTheCurrentSessionAndTerminateRefusesNonsense() async throws {
+        try await withEachServer { connection, _ in
+            let server = try XCTUnwrap(connection.introspector.server)
+            let sessions = try await server.activity()
+            let me = try XCTUnwrap(sessions.first { $0.isCurrent })
+            XCTAssertEqual(me.id, connection.backendID)
+            XCTAssertNotNil(me.user)
+            XCTAssertNotNil(me.duration)
+            do {
+                try await server.terminateSession(id: "not-a-thread")
+                XCTFail("expected a refusal")
+            } catch {}
+            do {
+                try await server.terminateSession(id: "4000000000")
+                XCTFail("expected the server to refuse an unknown thread")
+            } catch let error as DBError {
+                XCTAssertFalse(error.errorDescription?.isEmpty ?? true)
+            }
+        }
+    }
+
+    func testUsersAndVariablesAreReadable() async throws {
+        try await withEachServer { connection, server in
+            let introspector = try XCTUnwrap(connection.introspector.server)
+            let users = try await introspector.users()
+            let me = try XCTUnwrap(users.first { $0.name == server.user })
+            XCTAssertFalse(me.isSuperuser)
+            XCTAssertNotNil(me.attributes)
+            let variables = try await introspector.variables()
+            XCTAssertTrue(variables.contains { $0.name == "version" })
+            XCTAssertTrue(variables.contains { $0.name == "max_connections" })
+        }
+    }
+
+    func testViewAndRoutineDefinitionsComeFromTheServer() async throws {
+        try await withEachServer { connection, server in
+            let introspector = try XCTUnwrap(connection.introspector.server)
+            let view = try await introspector.viewDefinition(
+                TableRef(database: server.database, schema: server.database, name: "customer_totals")
+            )
+            XCTAssertTrue(view.uppercased().contains("VIEW"), view)
+            XCTAssertTrue(view.contains("customer_totals"), view)
+
+            let schema = SchemaRef.mysql(server.database)
+            let function = try await introspector.routineDefinition(
+                in: schema, name: "add_numbers", signature: "a int, b int", kind: .function
+            )
+            XCTAssertTrue(function.uppercased().contains("FUNCTION"), function)
+            XCTAssertTrue(function.contains("add_numbers"), function)
+            let procedure = try await introspector.routineDefinition(
+                in: schema, name: "touch_customer", signature: "cid int", kind: .procedure
+            )
+            XCTAssertTrue(procedure.uppercased().contains("PROCEDURE"), procedure)
+
+            do {
+                _ = try await introspector.routineDefinition(in: schema, name: "no_such", signature: "", kind: .function)
+                XCTFail("expected not found")
+            } catch {}
+        }
+    }
+}

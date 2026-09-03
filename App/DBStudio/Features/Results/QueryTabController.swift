@@ -180,6 +180,9 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             if failed { break }
         }
         statusText = summary()
+        // Several statements: show the first result, so the page reads top to bottom and
+        // it is plain that every statement ran; the strip switches between the rest.
+        if results.count > 1 { selectedResultID = results.first?.id }
         bumpRevision()
     }
 
@@ -545,19 +548,20 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         selectedRange = selection
         switch scope {
         case .all:
-            statusText = "Running every statement…"
-            run(all: true)
-        case .selection:
-            runSelection()
-        case .current:
-            // A highlighted block is what the person means; otherwise the statement at the caret.
+            // Run: the highlighted block when there is one, otherwise the whole page — the
+            // way Navicat reads it, and what a person with two statements expects.
             if let selection, !selection.isEmpty {
                 statusText = "Running the selection…"
                 run(all: false, selectedRange: selection)
             } else {
-                statusText = "Running…"
-                run(all: false)
+                statusText = "Running every statement…"
+                run(all: true)
             }
+        case .selection:
+            runSelection()
+        case .current:
+            statusText = "Running the statement under the cursor…"
+            run(all: false)
         }
     }
 

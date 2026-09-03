@@ -325,6 +325,10 @@ public final class WorkspaceController {
         controller.editorDidRequestRun(all ? .all : .current, selection: controller.selectedRange)
     }
 
+    public func runCurrentStatement() {
+        activeQueryController?.editorDidRequestRun(.current, selection: nil)
+    }
+
     public func runSelection() {
         activeQueryController?.runSelection()
     }

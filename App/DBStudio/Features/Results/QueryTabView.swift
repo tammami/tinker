@@ -72,12 +72,12 @@ public struct QueryTabView: View {
     var editorToolbar: some View {
         PaneBar {
             Button {
-                controller.editorDidRequestRun(.current, selection: controller.selectedRange)
+                controller.editorDidRequestRun(.all, selection: controller.selectedRange)
             } label: {
                 Label("Run", systemImage: Icon.run)
             }
             .disabled(controller.isRunning)
-            .help("Run the highlighted block, or the statement under the cursor (⌘R)")
+            .help("Run every statement on the page, or the highlighted block (⌘R)")
 
             Button {
                 controller.runSelection()
@@ -88,12 +88,12 @@ public struct QueryTabView: View {
             .help("Run only the highlighted text (⌘⇧R)")
 
             Button {
-                controller.run(all: true)
+                controller.editorDidRequestRun(.current, selection: nil)
             } label: {
-                Label("Run All", systemImage: Icon.runAll)
+                Label("Run Current", systemImage: "text.insert")
             }
             .disabled(controller.isRunning)
-            .help("Run every statement on the page (⌘⌥R)")
+            .help("Run only the statement under the cursor (⌘⌥R)")
 
             Button {
                 controller.explain(analyze: false)
@@ -287,7 +287,7 @@ public struct QueryTabView: View {
             EmptyStateView(
                 icon: Icon.run,
                 title: "No results yet",
-                message: "Run the statement under the cursor with ⌘R, or every statement with ⌘⌥R."
+                message: "Run the page with ⌘R, the highlighted text with ⌘⇧R, or the statement under the cursor with ⌘⌥R."
             )
         }
     }

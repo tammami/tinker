@@ -252,7 +252,7 @@ public struct DDLGenerator: Sendable {
     }
 
     /// The column as it appears inside `CREATE TABLE` or after `ADD COLUMN`.
-    func columnClause(_ column: ColumnDefinition) -> String {
+    public func columnClause(_ column: ColumnDefinition) -> String {
         var parts = [quote(column.name), column.type]
         if let characterSet = column.characterSet, dialect == .mysql {
             parts.append("CHARACTER SET \(characterSet)")
@@ -333,7 +333,7 @@ public struct DDLGenerator: Sendable {
         }
     }
 
-    func createIndexSQL(_ index: IndexDefinition, on table: TableRef) -> String {
+    public func createIndexSQL(_ index: IndexDefinition, on table: TableRef) -> String {
         let columns = index.columns.map { indexColumnClause($0) }.joined(separator: ", ")
         switch dialect {
         case .postgresql:
@@ -504,7 +504,7 @@ public struct DDLGenerator: Sendable {
         }
     }
 
-    func createTriggerSQL(_ trigger: TriggerInfo, on table: TableRef) -> String {
+    public func createTriggerSQL(_ trigger: TriggerInfo, on table: TableRef) -> String {
         let events = trigger.events.map(\.rawValue).joined(separator: " OR ")
         var sql = "CREATE TRIGGER \(quote(trigger.name)) \(trigger.timing.rawValue) "
         sql += dialect == .mysql

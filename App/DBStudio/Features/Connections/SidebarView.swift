@@ -289,6 +289,12 @@ struct SidebarRow: View {
             // A schema opens as a list of what it holds, rather than only expanding
             // one node at a time.
             _ = workspace.openObjects(ref, connectionID: id)
+        case let .database(id, name):
+            if let ref = mysqlSchema(connectionID: id, database: name) {
+                _ = workspace.openObjects(ref, connectionID: id)
+            } else {
+                toggleExpansion()
+            }
         case let .routine(id, schema, name, signature):
             onOpenSource(SourceObject(kind: .routine(
                 schema: schema, name: name, signature: signature, kind: .function
@@ -352,25 +358,43 @@ struct SidebarRow: View {
             }
             Divider()
             collapseItem
-        case let .database(id, _):
+        case let .database(id, name):
             Button { onNewQuery(id, "") } label: {
                 Label("New Query", systemImage: Icon.newQuery)
             }
-            Divider()
-            if sidebar.isExpanded(item.id) {
-                // Closes this database like Navicat does: its tabs go (after asking) and
-                // everything opened beneath it folds; the connection itself stays up.
-                Button { onCloseDatabase(id, item.title, item.id) } label: {
-                    Label("Close Database", systemImage: Icon.collapse)
+            if let ref = mysqlSchema(connectionID: id, database: name) {
+                // On MySQL the database is the schema, so its actions live here.
+                Button { _ = workspace.openObjects(ref, connectionID: id) } label: {
+                    Label("Open Objects", systemImage: Icon.objects)
                 }
-            } else {
+                Button { onOpenBuilder(ref, id) } label: {
+                    Label("Query Builder", systemImage: Icon.builder)
+                }
+                Divider()
+                newObjectItems(connectionID: id, schema: ref)
+            }
+            Divider()
+            if !sidebar.isExpanded(item.id) {
                 Button("Open Database") { toggleExpansion() }
+            }
+            // Closes this database like Navicat does: its tabs go (after asking) and
+            // everything opened beneath it folds; the connection itself stays up.
+            Button { onCloseDatabase(id, name, item.id) } label: {
+                Label("Close Database", systemImage: Icon.collapse)
             }
         case .group:
             collapseItem
         default:
             EmptyView()
         }
+    }
+
+    /// The pseudo-schema a MySQL database is, or nil on PostgreSQL where schemas are rows.
+    private func mysqlSchema(connectionID: UUID, database: String) -> SchemaRef? {
+        guard workspace.environment.connections.first(where: { $0.id == connectionID })?.dialect == .mysql else {
+            return nil
+        }
+        return SchemaRef.mysql(database)
     }
 
     /// Collapse closes the whole branch, not just the one triangle.

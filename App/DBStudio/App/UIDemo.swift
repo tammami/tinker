@@ -15,6 +15,15 @@ enum UIDemo {
         return arguments[index + 1]
     }
 
+    /// The schema a tree row stands for: a schema row's own, or a MySQL database's pseudo-schema.
+    static func demoSchemaRef(_ item: SidebarItem) -> SchemaRef? {
+        switch item.kind {
+        case let .schema(_, ref): ref
+        case let .database(_, name): SchemaRef.mysql(name)
+        default: nil
+        }
+    }
+
     static func apply(to controller: WorkspaceController) async {
         guard let scene = requestedScene else { return }
         let environment = controller.environment
@@ -35,8 +44,15 @@ enum UIDemo {
         let databases = sidebar.find(id: root.id)?.children ?? []
         guard let database = databases.first(where: { $0.title == (config.database ?? "") }) ?? databases.first else { return }
         await sidebar.expand(database)
-        guard let schema = sidebar.find(id: database.id)?.children?.first else { return }
-        await sidebar.expand(schema)
+        guard let firstChild = sidebar.find(id: database.id)?.children?.first else { return }
+        // PostgreSQL shows schemas under a database; MySQL shows the folders directly.
+        let schema: SidebarItem
+        if case .schema = firstChild.kind {
+            schema = firstChild
+            await sidebar.expand(schema)
+        } else {
+            schema = database
+        }
         for folder in sidebar.find(id: schema.id)?.children ?? [] { sidebar.markExpanded(folder.id) }
         let tables = sidebar.knownTables.filter { $0.connection == config.id }.map(\.table)
         let preferred = tables.first { $0.name == "orders" } ?? tables.first { $0.kind == .table } ?? tables.first
@@ -75,11 +91,12 @@ enum UIDemo {
                     NotificationCenter.default.post(name: .dbstudioOfferCompletion, object: nil)
                 }
             case "objects":
-                if case let .schema(id, ref) = schema.kind { _ = workspace.openObjects(ref, connectionID: id) }
+                if let ref = demoSchemaRef(schema) { _ = workspace.openObjects(ref, connectionID: config.id) }
             case "server":
                 controller.openServerActivity(connectionID: config.id)
             case "builder":
-                if case let .schema(id, ref) = schema.kind {
+                if let ref = demoSchemaRef(schema) {
+                    let id = config.id
                     let tab = controller.openQueryBuilder(ref, connectionID: id)
                     let builder = controller.builderController(for: tab, schema: ref)
                     await builder.loadTables()

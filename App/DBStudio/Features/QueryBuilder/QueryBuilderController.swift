@@ -143,7 +143,9 @@ public final class QueryBuilderController {
     public func add(_ ref: TableRef, at point: CGPoint) async {
         let id = model.add(ref, at: (Double(point.x), Double(point.y)))
         selectedTable = id
-        columns[id] = await loadColumns(of: ref)
+        let loaded = await loadColumns(of: ref)
+        columns[id] = loaded
+        model.columns[id] = loaded.map(\.name)
         // Keys from the new table to placed ones, and from placed ones to the new table.
         let own = await loadForeignKeys(of: ref)
         model.addJoins(fromForeignKeys: own, of: id)
@@ -156,6 +158,7 @@ public final class QueryBuilderController {
 
     public func remove(table id: UUID) {
         model.remove(table: id)
+        model.columns[id] = nil
         columns[id] = nil
         if selectedTable == id { selectedTable = model.tables.first?.id }
     }

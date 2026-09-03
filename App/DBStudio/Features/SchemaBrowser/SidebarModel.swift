@@ -226,6 +226,18 @@ public final class SidebarModel {
 
         case let .database(id, name):
             guard let session = environment.session(for: id) else { return [] }
+            // MySQL has no schema layer: a database holds its tables directly, so the
+            // folders hang off the database row rather than off a schema of the same name.
+            if session.config.dialect == .mysql {
+                let ref = SchemaRef.mysql(name)
+                return try await children(of: SidebarItem(
+                    id: "\(item.id)/schema/\(name)",
+                    kind: .schema(connection: id, ref: ref),
+                    title: name,
+                    symbolName: Icon.schema,
+                    children: []
+                ))
+            }
             let schemas = try await session.introspection(.schemas(database: name)) {
                 try await $0.schemas(in: name)
             }

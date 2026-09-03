@@ -1,5 +1,6 @@
 import DBCore
 import DBSQL
+import AppKit
 import Foundation
 
 /// Opens a scene on launch when `--ui-demo <scene>` is passed, for screenshots and review.
@@ -63,6 +64,15 @@ enum UIDemo {
                 if let query = controller.queryController(for: tab) {
                     try? await Task.sleep(for: .milliseconds(400))
                     query.run(all: true)
+                }
+            case "completion":
+                let tab = controller.newQueryTab(connectionID: config.id, sql: "SELECT * FROM cus")
+                if let query = controller.queryController(for: tab) {
+                    await query.loadCompletionSources()
+                    query.caretOffset = query.sql.utf16.count
+                    try? await Task.sleep(for: .milliseconds(800))
+                    NSApp.activate(ignoringOtherApps: true)
+                    NotificationCenter.default.post(name: .dbstudioOfferCompletion, object: nil)
                 }
             case "objects":
                 if case let .schema(id, ref) = schema.kind { _ = workspace.openObjects(ref, connectionID: id) }

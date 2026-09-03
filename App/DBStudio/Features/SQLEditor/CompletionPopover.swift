@@ -18,6 +18,10 @@ final class CompletionPopover: NSObject, NSTableViewDataSource, NSTableViewDeleg
 
     var isVisible: Bool { panel.isVisible }
 
+    static let rowHeight: CGFloat = 24
+    static let verticalInset: CGFloat = 6
+    static let width: CGFloat = 380
+
     /// The row the arrow keys have moved to.
     var selectedCandidate: CompletionCandidate? {
         let row = tableView.selectedRow
@@ -35,7 +39,7 @@ final class CompletionPopover: NSObject, NSTableViewDataSource, NSTableViewDeleg
 
     override init() {
         panel = NonKeyPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 220),
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 120),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: true
@@ -58,7 +62,10 @@ final class CompletionPopover: NSObject, NSTableViewDataSource, NSTableViewDeleg
         container.layer?.masksToBounds = true
 
         tableView.headerView = nil
-        tableView.rowHeight = 22
+        // Plain style: the default inset style pads every row and pushes the first one
+        // below the panel's edge, which is how a one-row list ended up half hidden.
+        tableView.style = .plain
+        tableView.rowHeight = Self.rowHeight
         tableView.intercellSpacing = NSSize(width: 0, height: 0)
         tableView.backgroundColor = .clear
         tableView.selectionHighlightStyle = .regular
@@ -73,12 +80,15 @@ final class CompletionPopover: NSObject, NSTableViewDataSource, NSTableViewDeleg
 
         scrollView.documentView = tableView
         scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsetsZero
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(scrollView)
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: container.topAnchor, constant: 4),
-            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -4),
+            scrollView.topAnchor.constraint(equalTo: container.topAnchor, constant: Self.verticalInset),
+            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -Self.verticalInset),
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
         ])
@@ -103,10 +113,11 @@ final class CompletionPopover: NSObject, NSTableViewDataSource, NSTableViewDeleg
         tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
 
         let rows = min(candidates.count, 10)
-        // The content is what has to be `rows` tall; a borderless panel's frame includes
-        // nothing else, but sizing the content first is what keeps the last row whole.
-        let height = CGFloat(rows) * tableView.rowHeight + 8
-        panel.setContentSize(NSSize(width: 380, height: height))
+        // The rows, plus the inset above and below them, is exactly the panel's height.
+        let height = CGFloat(rows) * Self.rowHeight + Self.verticalInset * 2
+        panel.setContentSize(NSSize(width: Self.width, height: height))
+        panel.contentView?.layoutSubtreeIfNeeded()
+        tableView.scrollRowToVisible(0)
 
         let onScreen = window.convertToScreen(textView.convert(caretRect, to: nil))
         var top = NSPoint(x: onScreen.minX, y: onScreen.minY - 4)
@@ -210,28 +221,20 @@ private final class CompletionRowView: NSView {
         )
         icon.contentTintColor = Self.tint(for: candidate.kind)
         label.attributedStringValue = Self.highlighted(candidate.text, matching: prefix)
+        label.textColor = .labelColor
         detail.stringValue = candidate.detail ?? ""
     }
 
-    /// Picks out the letters the user has typed, the way every other editor does.
+    /// Picks out the letters the user has typed in bold. Only the weight changes, so the
+    /// text keeps the label colour and turns white with the selection like any other row.
     private static func highlighted(_ text: String, matching prefix: String) -> NSAttributedString {
-        let attributed = NSMutableAttributedString(
-            string: text,
-            attributes: [
-                .font: DesignTokens.Fonts.editor(size: 12),
-                .foregroundColor: NSColor.labelColor,
-            ]
-        )
+        let font = DesignTokens.Fonts.editor(size: 12)
+        let attributed = NSMutableAttributedString(string: text, attributes: [.font: font])
         // Only the leading run is marked: candidates are offered by prefix.
         let tail = prefix.split(separator: ".").last.map(String.init) ?? prefix
-        guard !tail.isEmpty,
-              text.lowercased().hasPrefix(tail.lowercased())
-        else { return attributed }
-        attributed.addAttributes(
-            [
-                .foregroundColor: NSColor.systemYellow,
-                .backgroundColor: NSColor.systemYellow.withAlphaComponent(0.18),
-            ],
+        guard !tail.isEmpty, text.lowercased().hasPrefix(tail.lowercased()) else { return attributed }
+        attributed.addAttribute(
+            .font, value: NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask),
             range: NSRange(location: 0, length: (tail as NSString).length)
         )
         return attributed

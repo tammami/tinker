@@ -217,6 +217,7 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
     }
 
     private var caretObserver: (any NSObjectProtocol)?
+    private var offerObserver: (any NSObjectProtocol)?
 
     /// Watches for the tab telling every editor to put its list away, and for a request
     /// to move the caret after text was inserted programmatically.
@@ -226,6 +227,16 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
             forName: .dbstudioDismissCompletion, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.completion.dismiss() }
+        }
+        offerObserver = NotificationCenter.default.addObserver(
+            forName: .dbstudioOfferCompletion, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let textView = self.textView, textView.window != nil else { return }
+                textView.window?.makeFirstResponder(textView)
+                textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+                self.offerCompletions()
+            }
         }
         caretObserver = NotificationCenter.default.addObserver(
             forName: .dbstudioMoveCaret, object: nil, queue: .main
@@ -450,4 +461,6 @@ public extension Notification.Name {
     static let dbstudioDismissCompletion = Notification.Name("DBStudioDismissCompletion")
     /// Posted after text was inserted into the editor's model, with the new caret offset.
     static let dbstudioMoveCaret = Notification.Name("DBStudioMoveCaret")
+    /// Asks the front editor to show its suggestion list, as ⌃Space does.
+    static let dbstudioOfferCompletion = Notification.Name("DBStudioOfferCompletion")
 }

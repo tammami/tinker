@@ -43,6 +43,7 @@ public struct DataGridView: NSViewRepresentable {
     public func makeNSView(context: Context) -> NSScrollView {
         let tableView = GridTableView()
         tableView.controller = context.coordinator
+        tableView.setAccessibilityIdentifier("result-grid")
         // Uniform row heights are what make a million rows scrollable; automatic heights
         // would measure every row (SPEC §12).
         tableView.rowHeight = DesignTokens.Metrics.gridRowHeight
@@ -50,6 +51,11 @@ public struct DataGridView: NSViewRepresentable {
         tableView.usesAlternatingRowBackgroundColors = true
         tableView.style = .plain
         tableView.gridStyleMask = []
+        // The cells draw their own column separators at their trailing edge, and the
+        // header draws its at the column boundary. Any horizontal intercell spacing sits
+        // between the two, so the body's lines land left of the header's and the grid
+        // looks bent. Zero the horizontal gap; the cells carry their own text padding.
+        tableView.intercellSpacing = NSSize(width: 0, height: tableView.intercellSpacing.height)
         tableView.allowsColumnReordering = true
         tableView.allowsColumnResizing = true
         tableView.allowsMultipleSelection = true
@@ -86,6 +92,7 @@ public struct DataGridView: NSViewRepresentable {
         if coordinator.revision != revision {
             coordinator.revision = revision
             coordinator.rebuildColumnsIfNeeded()
+            coordinator.updateGutterWidth()
             coordinator.tableView?.reloadData()
         } else {
             coordinator.redrawVisibleCells()
@@ -127,11 +134,62 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         rebuildColumns()
     }
 
+    /// Identifies the row gutter, which is a control rather than one of the model's columns.
+    static let rowNumberColumnID = NSUserInterfaceItemIdentifier("DBStudio.RowNumberColumn")
+
+    /// The model column a table position refers to, or nil when it is the row gutter.
+    ///
+    /// Columns are reorderable, so a position is not an index into `model.columns`; going
+    /// through the identifier is what keeps a click on a moved column honest.
+    func modelColumn(atPosition position: Int) -> Int? {
+        guard let tableView, tableView.tableColumns.indices.contains(position) else { return nil }
+        let identifier = tableView.tableColumns[position].identifier
+        guard identifier != Self.rowNumberColumnID else { return nil }
+        return model.columns.firstIndex { $0.name == identifier.rawValue }
+    }
+
+    /// Where a model column currently sits in the table.
+    func position(ofModelColumn index: Int) -> Int? {
+        guard let tableView, model.columns.indices.contains(index) else { return nil }
+        let name = model.columns[index].name
+        return tableView.tableColumns.firstIndex { $0.identifier.rawValue == name }
+    }
+
+    /// Wide enough for the highest row number the grid can currently show.
+    func gutterWidth() -> CGFloat {
+        let digits = max(2, String(max(1, model.displayRowCount)).count)
+        return CGFloat(digits) * 8 + 16
+    }
+
+    func updateGutterWidth() {
+        guard let tableView,
+              let gutter = tableView.tableColumns.first(where: { $0.identifier == Self.rowNumberColumnID })
+        else { return }
+        let width = gutterWidth()
+        guard gutter.width != width else { return }
+        gutter.minWidth = width
+        gutter.maxWidth = width
+        gutter.width = width
+    }
+
     func rebuildColumns() {
         guard let tableView else { return }
         for column in tableView.tableColumns { tableView.removeTableColumn(column) }
+
+        // The gutter comes first: a whole-row selection needs something to click on that
+        // is not a value, exactly as a spreadsheet's row numbers are (SPEC §12.4).
+        let gutter = NSTableColumn(identifier: Self.rowNumberColumnID)
+        gutter.headerCell = GridHeaderCell(textCell: "")
+        gutter.title = ""
+        gutter.width = gutterWidth()
+        gutter.minWidth = gutter.width
+        gutter.maxWidth = gutter.width
+        gutter.resizingMask = []
+        tableView.addTableColumn(gutter)
+
         for meta in model.columns {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(meta.name))
+            column.headerCell = GridHeaderCell(textCell: meta.name)
             column.title = meta.name
             column.headerToolTip = "\(meta.name) — \(meta.nativeTypeName)"
             column.minWidth = DesignTokens.Metrics.minimumColumnWidth
@@ -182,9 +240,9 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
 
     func reportColumnWidths() {
         guard let tableView else { return }
-        let widths = Dictionary(uniqueKeysWithValues: tableView.tableColumns.map {
-            ($0.identifier.rawValue, Double($0.width))
-        })
+        let widths = Dictionary(uniqueKeysWithValues: tableView.tableColumns
+            .filter { $0.identifier != Self.rowNumberColumnID }
+            .map { ($0.identifier.rawValue, Double($0.width)) })
         delegate?.gridDidChangeColumnWidths(widths)
     }
 
@@ -199,9 +257,23 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         viewFor tableColumn: NSTableColumn?,
         row: Int
     ) -> NSView? {
-        guard let tableColumn,
-              let columnIndex = model.columns.firstIndex(where: { $0.name == tableColumn.identifier.rawValue })
-        else { return nil }
+        guard let tableColumn else { return nil }
+
+        if tableColumn.identifier == Self.rowNumberColumnID {
+            let view = tableView.makeView(withIdentifier: GridRowNumberView.reuseIdentifier, owner: self)
+                as? GridRowNumberView
+                ?? {
+                    let fresh = GridRowNumberView()
+                    fresh.identifier = GridRowNumberView.reuseIdentifier
+                    return fresh
+                }()
+            view.configure(row: row, isSelected: selection.containsRow(row))
+            return view
+        }
+
+        guard let columnIndex = model.columns.firstIndex(where: {
+            $0.name == tableColumn.identifier.rawValue
+        }) else { return nil }
 
         let view = tableView.makeView(withIdentifier: GridCellView.reuseIdentifier, owner: self) as? GridCellView
             ?? {
@@ -210,7 +282,11 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
                 return fresh
             }()
 
-        let isFocused = selection.focusRow == row && selection.focusColumn == columnIndex
+        // Only a cell selection has a focused cell. Drawing the ring during a whole-row
+        // selection puts a box around one arbitrary value inside the highlighted row.
+        let isFocused = selection.mode == .cells
+            && selection.focusRow == row
+            && selection.focusColumn == columnIndex
         view.configure(
             value: model.value(row: row, column: columnIndex),
             changeState: model.changeState(row: row, column: columnIndex),
@@ -223,6 +299,18 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
 
     public func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
         false   // selection is drawn by the cells, from the grid's own model
+    }
+
+    /// The gutter stays at the left edge; nothing reorders it and nothing moves in front
+    /// of it, because it is the grid's row control rather than one of its columns.
+    public func tableView(
+        _ tableView: NSTableView,
+        shouldReorderColumn columnIndex: Int,
+        toColumn newColumnIndex: Int
+    ) -> Bool {
+        guard tableView.tableColumns.indices.contains(columnIndex) else { return false }
+        if tableView.tableColumns[columnIndex].identifier == Self.rowNumberColumnID { return false }
+        return newColumnIndex > 0
     }
 
     public func tableViewColumnDidResize(_ notification: Notification) {
@@ -286,11 +374,24 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
     func scrollToFocus() {
         guard let tableView, model.displayRowCount > 0 else { return }
         let row = min(max(0, selection.focusRow), model.displayRowCount - 1)
-        let column = min(max(0, selection.focusColumn), max(0, tableView.tableColumns.count - 1))
         tableView.scrollRowToVisible(row)
-        if tableView.tableColumns.indices.contains(column) {
-            tableView.scrollColumnToVisible(column)
+        if let position = position(ofModelColumn: selection.focusColumn) {
+            tableView.scrollColumnToVisible(position)
         }
+    }
+
+    /// Selects a whole row, or extends the row selection when shift is held, so one click
+    /// takes one row and shift-click takes the span (SPEC §12.4).
+    func handleRowClick(row: Int, extending: Bool) {
+        var new = selection
+        if extending, new.mode == .rows {
+            new.focusRow = row
+        } else {
+            new = GridSelection(row: row, column: 0, mode: .rows)
+        }
+        new.focusColumn = max(0, model.columns.count - 1)
+        new.anchorColumn = 0
+        setSelection(new)
     }
 
     func handleClick(row: Int, column: Int, extending: Bool) {
@@ -316,9 +417,9 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         let row = selection.focusRow
         let column = selection.focusColumn
         guard model.columns.indices.contains(column), row < model.displayRowCount else { return }
-        guard let cell = tableView.view(atColumn: column, row: row, makeIfNecessary: false) as? GridCellView else {
-            return
-        }
+        guard let position = position(ofModelColumn: column),
+              let cell = tableView.view(atColumn: position, row: row, makeIfNecessary: false) as? GridCellView
+        else { return }
         let current = model.value(row: row, column: column)
         let editor = GridInlineEditor(frame: cell.bounds)
         editor.stringValue = current.map { value in
@@ -385,18 +486,26 @@ public final class GridTableView: NSTableView {
     public override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         let row = row(at: point)
-        let column = column(at: point)
-        guard row >= 0, column >= 0 else {
+        let position = column(at: point)
+        guard row >= 0, position >= 0 else {
             super.mouseDown(with: event)
             return
         }
         window?.makeFirstResponder(self)
-        MainActor.assumeIsolated {
-            controller?.handleClick(
-                row: row, column: column,
-                extending: event.modifierFlags.contains(.shift)
-            )
+        let extending = event.modifierFlags.contains(.shift)
+        let isRowGutter = MainActor.assumeIsolated {
+            controller?.modelColumn(atPosition: position) == nil
         }
+        MainActor.assumeIsolated {
+            guard let controller else { return }
+            if isRowGutter {
+                controller.handleRowClick(row: row, extending: extending)
+            } else if let column = controller.modelColumn(atPosition: position) {
+                controller.handleClick(row: row, column: column, extending: extending)
+            }
+        }
+        // Dragging from the gutter extends the row selection, the way a spreadsheet does.
+        if isRowGutter { return }
         if event.clickCount == 2 {
             MainActor.assumeIsolated { controller?.beginEditingFocusedCell() }
         }

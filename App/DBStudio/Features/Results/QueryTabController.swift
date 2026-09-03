@@ -548,20 +548,20 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         selectedRange = selection
         switch scope {
         case .all:
-            // Run: the highlighted block when there is one, otherwise the whole page — the
-            // way Navicat reads it, and what a person with two statements expects.
+            statusText = "Running every statement…"
+            run(all: true)
+        case .selection:
+            runSelection()
+        case .current:
+            // Run: the highlighted block when there is one, otherwise the statement at the
+            // caret. Run All is its own button for the whole page.
             if let selection, !selection.isEmpty {
                 statusText = "Running the selection…"
                 run(all: false, selectedRange: selection)
             } else {
-                statusText = "Running every statement…"
-                run(all: true)
+                statusText = "Running the statement under the cursor…"
+                run(all: false)
             }
-        case .selection:
-            runSelection()
-        case .current:
-            statusText = "Running the statement under the cursor…"
-            run(all: false)
         }
     }
 

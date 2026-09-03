@@ -65,14 +65,14 @@ enum SmokeTest {
             )
             partial.sql = "SELECT 1 AS first;\nSELECT 2 AS second;"
             let secondStart = partial.sql.utf16.count - "SELECT 2 AS second;".utf16.count
-            partial.editorDidRequestRun(.all, selection: secondStart ..< partial.sql.utf16.count)
+            partial.editorDidRequestRun(.current, selection: secondStart ..< partial.sql.utf16.count)
             try await waitUntil(timeout: .seconds(20)) { !partial.isRunning && !partial.results.isEmpty }
             check("run selection runs one statement", partial.results.count == 1)
             check(
                 "run selection runs the highlighted one", partial.results.first?.grid?.columns.first?.name == "second")
             partial.editorDidRequestRun(.all, selection: nil)
             try await waitUntil(timeout: .seconds(20)) { !partial.isRunning && partial.results.count == 2 }
-            check("run with no selection runs the whole page", partial.results.count == 2)
+            check("run all runs the whole page", partial.results.count == 2)
             check("and shows the first result first", partial.selectedResult?.grid?.columns.first?.name == "first")
             partial.caretOffset = partial.sql.utf16.count
             partial.editorDidRequestRun(.current, selection: nil)

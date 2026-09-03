@@ -261,19 +261,19 @@ public struct WorkspaceView: View {
         ToolbarItemGroup(placement: .principal) {
             ControlGroup {
                 Button {
-                    controller.run(all: true)
+                    controller.run(all: false)
                 } label: {
                     Label("Run", systemImage: Icon.run)
                 }
-                .help("Run every statement on the page, or the highlighted block (⌘R)")
+                .help("Run the statement under the cursor, or the highlighted block (⌘R)")
                 .disabled(queryController == nil || queryController?.isRunning == true)
 
                 Button {
-                    controller.runCurrentStatement()
+                    controller.run(all: true)
                 } label: {
-                    Label("Run Current", systemImage: "text.insert")
+                    Label("Run All", systemImage: Icon.runAll)
                 }
-                .help("Run only the statement under the cursor (⌘⌥R)")
+                .help("Run every statement on the page (⌘⌥R)")
                 .disabled(queryController == nil || queryController?.isRunning == true)
 
                 Button {

@@ -9,8 +9,8 @@ public protocol SQLEditorDelegate: AnyObject {
     func editorDidChangeText(_ text: String)
     /// The caret, and how much is selected after it (0 when nothing is).
     func editorDidChangeSelection(offset: Int, length: Int)
-    /// `.all` runs the page (or the highlighted text when there is some — that is Run),
-    /// `.selection` only the highlighted text, `.current` the statement under the cursor.
+    /// `.current` is Run: the highlighted text when there is some, else the statement under
+    /// the cursor. `.selection` is only the highlighted text; `.all` the whole page.
     func editorDidRequestRun(_ scope: SQLRunScope, selection: Range<Int>?)
     func editorCompletionCandidates(prefix: String, statement: String) -> [CompletionCandidate]
 }

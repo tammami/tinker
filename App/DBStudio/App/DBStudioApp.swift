@@ -125,11 +125,11 @@ struct DBStudioCommands: Commands {
         CommandMenu("Query") {
             // ⌘R, not ⌘↩: the system claims ⌘↩ for the window, and Return with modifiers
             // is what every other text view expects to keep.
-            Button("Run") { workspace?.run(all: true) }
+            Button("Run") { workspace?.run(all: false) }
                 .keyboardShortcut("r", modifiers: .command)
             Button("Run Selected") { workspace?.runSelection() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
-            Button("Run Current Statement") { workspace?.runCurrentStatement() }
+            Button("Run All") { workspace?.run(all: true) }
                 .keyboardShortcut("r", modifiers: [.command, .option])
             Button("Cancel") { workspace?.cancel() }
                 .keyboardShortcut(".", modifiers: .command)

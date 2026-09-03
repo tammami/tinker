@@ -43,7 +43,7 @@ public final class SQLTextView: NSTextView {
         lineRect.fill()
     }
 
-    /// `⌘R` runs the page, `⌘⌥R` the statement at the cursor, `⌘/` toggles line comments and `⌘D` duplicates
+    /// `⌘R` runs the statement at the cursor, `⌘⌥R` the page, `⌘/` toggles line comments and `⌘D` duplicates
     /// the line (SPEC §10.2).
     ///
     /// These are answered here rather than left to the Query menu because the window's
@@ -55,12 +55,12 @@ public final class SQLTextView: NSTextView {
         guard event.modifierFlags.contains(.command) else {
             return super.performKeyEquivalent(with: event)
         }
-        // ⌘R runs the page (or the highlighted block), ⌘⇧R only the selection, ⌘⌥R the
-        // statement under the cursor. Answered here because the editor sees key
+        // ⌘R runs the statement at the cursor (or the highlighted block), ⌘⇧R only the
+        // selection, ⌘⌥R the whole page. Answered here because the editor sees key
         // equivalents before the menu does; the menu carries the same three.
         if event.charactersIgnoringModifiers?.lowercased() == "r" {
             let scope: SQLRunScope =
-                event.modifierFlags.contains(.option) ? .current : event.modifierFlags.contains(.shift) ? .selection : .all
+                event.modifierFlags.contains(.option) ? .all : event.modifierFlags.contains(.shift) ? .selection : .current
             let selected = selectedRange()
             let selection: Range<Int>? = selected.length > 0 ? selected.location..<NSMaxRange(selected) : nil
             MainActor.assumeIsolated {

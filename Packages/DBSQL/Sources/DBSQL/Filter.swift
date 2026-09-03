@@ -7,6 +7,8 @@ public enum FilterOperator: String, Sendable, Hashable, Codable, CaseIterable {
     case contains, startsWith, endsWith
     case isNull, isNotNull
     case inList, between
+    /// Matches when any of the rule's `targets` contains the text: the quick search.
+    case anyContains
 
     /// How the operator reads in the picker.
     public var symbol: String {
@@ -24,6 +26,7 @@ public enum FilterOperator: String, Sendable, Hashable, Codable, CaseIterable {
         case .isNotNull: "is not null"
         case .inList: "in (…)"
         case .between: "between"
+        case .anyContains: "any column contains"
         }
     }
 
@@ -45,12 +48,26 @@ public struct FilterRule: Sendable, Hashable, Codable, Identifiable {
     public var op: FilterOperator
     /// Operands in the order the operator expects them.
     public var values: [DBValue]
+    /// For `.anyContains`, the columns searched. Other operators use `column` alone.
+    public var targets: [String]?
 
-    public init(id: UUID = UUID(), column: String, op: FilterOperator, values: [DBValue] = []) {
+    public init(
+        id: UUID = UUID(),
+        column: String,
+        op: FilterOperator,
+        values: [DBValue] = [],
+        targets: [String]? = nil
+    ) {
         self.id = id
         self.column = column
         self.op = op
         self.values = values
+        self.targets = targets
+    }
+
+    /// The quick-search rule: `text` anywhere in any of `columns`.
+    public static func search(_ text: String, in columns: [String]) -> FilterRule {
+        FilterRule(column: columns.first ?? "", op: .anyContains, values: [.string(text)], targets: columns)
     }
 }
 
@@ -117,7 +134,7 @@ public enum FilterCompiler {
                 }
                 // Casting to text lets the same filter work on numeric and date columns.
                 let lhs = dialect == .postgresql ? "\(column)::text" : "CAST(\(column) AS CHAR)"
-                clauses.append("\(lhs) LIKE \(placeholder(.string(pattern))) ESCAPE '\\'")
+                clauses.append("\(lhs) LIKE \(placeholder(.string(pattern))) ESCAPE '!'")
             case .inList:
                 guard !rule.values.isEmpty else { continue }
                 let items = rule.values.map { placeholder($0) }.joined(separator: ", ")
@@ -127,6 +144,20 @@ public enum FilterCompiler {
                 let low = placeholder(rule.values[0])
                 let high = placeholder(rule.values[1])
                 clauses.append("\(column) BETWEEN \(low) AND \(high)")
+            case .anyContains:
+                guard let value = rule.values.first, let text = value.text, !text.isEmpty else { continue }
+                let targets = (rule.targets ?? [rule.column]).filter { !$0.isEmpty }
+                guard !targets.isEmpty else { continue }
+                // The pattern is bound once per column: MySQL's placeholders are positional,
+                // so a value cannot be referenced twice. The columns are quoted identifiers.
+                let pattern = "%\(escapeLikePattern(text))%"
+                let parts = targets.map { name -> String in
+                    let quoted = Identifier.quote(name, dialect: dialect)
+                    let lhs = dialect == .postgresql ? "\(quoted)::text" : "CAST(\(quoted) AS CHAR)"
+                    let op = dialect == .postgresql ? "ILIKE" : "LIKE"
+                    return "\(lhs) \(op) \(placeholder(.string(pattern))) ESCAPE '!'"
+                }
+                clauses.append("(" + parts.joined(separator: " OR ") + ")")
             }
         }
 
@@ -137,11 +168,16 @@ public enum FilterCompiler {
     }
 
     /// Escapes the wildcards so a user's `%` or `_` matches itself.
+    ///
+    /// The escape character is `!` rather than a backslash: MySQL reads a backslash inside
+    /// a string literal as an escape unless `NO_BACKSLASH_ESCAPES` is on, so `ESCAPE '\'`
+    /// is a syntax error on one server and a two-character escape on another. `!` means
+    /// the same thing on every engine and in every SQL mode.
     static func escapeLikePattern(_ text: String) -> String {
         var output = ""
         output.reserveCapacity(text.count)
         for character in text {
-            if character == "%" || character == "_" || character == "\\" { output.append("\\") }
+            if character == "%" || character == "_" || character == "!" { output.append("!") }
             output.append(character)
         }
         return output

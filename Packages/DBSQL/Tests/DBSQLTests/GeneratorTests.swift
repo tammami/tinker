@@ -148,8 +148,8 @@ final class FilterCompilerTests: XCTestCase {
             [FilterRule(column: "name", op: .contains, values: [.string("50%_off")])],
             dialect: .postgresql
         )
-        XCTAssertEqual(compiled.whereClause, "\"name\"::text LIKE $1 ESCAPE '\\'")
-        XCTAssertEqual(compiled.parameters, [.string("%50\\%\\_off%")])
+        XCTAssertEqual(compiled.whereClause, "\"name\"::text LIKE $1 ESCAPE '!'")
+        XCTAssertEqual(compiled.parameters, [.string("%50!%!_off%")])
     }
 
     func testStartsWithAndEndsWith() {
@@ -157,7 +157,7 @@ final class FilterCompilerTests: XCTestCase {
             [FilterRule(column: "n", op: .startsWith, values: [.string("ab")])], dialect: .mysql
         )
         XCTAssertEqual(starts.parameters, [.string("ab%")])
-        XCTAssertEqual(starts.whereClause, "CAST(`n` AS CHAR) LIKE ? ESCAPE '\\'")
+        XCTAssertEqual(starts.whereClause, "CAST(`n` AS CHAR) LIKE ? ESCAPE '!'")
         let ends = FilterCompiler.compile(
             [FilterRule(column: "n", op: .endsWith, values: [.string("ab")])], dialect: .mysql
         )

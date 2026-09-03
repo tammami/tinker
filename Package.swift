@@ -38,6 +38,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.0"),
         .package(url: "https://github.com/vapor/postgres-nio.git", from: "1.21.0"),
         .package(url: "https://github.com/orlandos-nl/Citadel.git", from: "0.7.0"),
+        .package(url: "https://github.com/vapor/mysql-nio.git", from: "1.7.0"),
     ],
     targets: [
         // MARK: Libraries
@@ -66,7 +67,11 @@ let package = Package(
         ),
         .target(
             name: "DBMySQL",
-            dependencies: ["DBCore"],
+            dependencies: [
+                "DBCore",
+                "DBSQL",
+                .product(name: "MySQLNIO", package: "mysql-nio"),
+            ],
             path: "Packages/DBMySQL/Sources/DBMySQL",
             swiftSettings: strict
         ),
@@ -154,7 +159,7 @@ let package = Package(
             // DBPostgres is a test-only dependency: the grid's acceptance criteria are
             // about a real million-row table, which needs a real driver. The DBGrid
             // library itself never imports one, and Scripts/ci.sh checks that.
-            dependencies: ["DBGrid", "DBTestKit", "DBPostgres"],
+            dependencies: ["DBGrid", "DBTestKit", "DBPostgres", "DBMySQL"],
             path: "Packages/DBGrid/Tests/DBGridTests",
             swiftSettings: strict
         ),

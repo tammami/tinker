@@ -179,3 +179,30 @@ Date: 2026-09-03 (Phase 3–5)
 **Decision.** `DBStudio --smoke-test` runs the same sequence headlessly against the objects the views drive: `AppEnvironment` opens the store, `ConnectionSession` connects, `QueryTabController` runs a statement and reads its rows, cancels a `pg_sleep(30)` and checks it returned in under five seconds, and `TableTabController` introspects and pages a real table. `Scripts/ci.sh` runs it after building the app.
 
 **Consequences.** Every layer below the views is covered end to end on each CI run, and the checks are readable and fast. What is *not* covered is the view layer itself: menu items, focus, drawing, mouse and keyboard handling in the grid and editor. Those remain manual, and PROGRESS.md says so.
+
+## ADR-0020 — MySQL uses the prepared-statement protocol, with a text fallback
+Date: 2026-09-03 (Phase 6)
+
+**Context.** mysql-nio offers two paths. `query()` prepares the statement, binds parameters server-side and reports the OK packet, which is where `affectedRows` and `lastInsertID` come from — both required by SPEC §7.3 and by the grid's commit check. `simpleQuery()` uses the text protocol, accepts any statement, and reports no metadata at all.
+
+**Decision.** Everything goes through `query()`. When the server answers 1295, "not supported in the prepared statement protocol yet", the statement is retried on `simpleQuery()`.
+
+**Consequences.** Statements that need the fallback — `SHOW GRANTS`, `ANALYZE`, several administrative commands — report no affected-row count, which none of them has. Every statement the grid generates takes the prepared path, so the affected-row check always reads a real count. Rows arrive in binary format on the prepared path and text on the fallback, and the decoder handles both.
+
+## ADR-0021 — mysql-nio's own error cases are mapped back to server errors
+Date: 2026-09-03 (Phase 6)
+
+**Context.** mysql-nio unwraps two common server errors into cases of its own: 1064 becomes `.invalidSyntax(String)` and 1062 becomes `.duplicateEntry(String)`. Both lose the numeric code and the SQLSTATE, which SPEC §6 requires the UI to show.
+
+**Decision.** The mapper puts them back: `.invalidSyntax` becomes SQLSTATE 42000 code 1064, `.duplicateEntry` becomes 23000 code 1062, and the message travels through untouched.
+
+**Consequences.** A MySQL syntax error reads the same as a PostgreSQL one — code, SQLSTATE and the server's own words — instead of appearing as an internal protocol error. The reconstruction is exact for these two codes; a future mysql-nio release that unwraps more errors would need the same treatment.
+
+## ADR-0022 — No Server Name Indication for an IP address
+Date: 2026-09-03 (Phase 6)
+
+**Context.** TLS to `127.0.0.1` failed with `NIOSSLExtraError.cannotUseIPAddressInSNI`. SNI carries a host name, and NIOSSL refuses an address.
+
+**Decision.** The driver sends a server name only when the host is not an IPv4 or IPv6 literal.
+
+**Consequences.** `require` mode works against a server reached by address, which is the common local case. `verify-full` against an address cannot check a host name, so it verifies the chain only — the same thing `mysql --ssl-mode=VERIFY_IDENTITY` does with an address.

@@ -1,4 +1,5 @@
 import DBCore
+import DBMySQL
 import DBPostgres
 import DBStore
 import DBTunnel
@@ -18,9 +19,10 @@ public final class AppEnvironment {
     public private(set) var connections: [ConnectionConfig] = []
     public private(set) var startupError: String?
 
-    // MySQL joins the registry in Phase 6; until then a MySQL connection reports that
-    // no driver is registered rather than failing obscurely.
-    public let registry = DriverRegistry([.postgresql: PostgresDriver.self])
+    public let registry = DriverRegistry([
+        .postgresql: PostgresDriver.self,
+        .mysql: MySQLDriver.self,
+    ])
     public let secrets: any SecretStore
     public let tunnelProvider: any TunnelProvider = SSHTunnelProvider()
 

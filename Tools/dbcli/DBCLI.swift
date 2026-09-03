@@ -7,6 +7,7 @@
 //
 // URLs look like postgresql://user:password@host:port/database or mysql://…
 import DBCore
+import DBMySQL
 import DBPostgres
 import DBSQL
 import DBTunnel
@@ -85,7 +86,7 @@ struct DBCLI {
             defer { if let tunnel { Task { await tunnel.close() } } }
             let connection: any SQLConnection = switch config.dialect {
             case .postgresql: try await PostgresDriver.connect(config, logger: logger)
-            case .mysql: throw CLIError("The MySQL driver lands in Phase 6")
+            case .mysql: try await MySQLDriver.connect(config, logger: logger)
             }
             defer { Task { await connection.close() } }
 
@@ -124,7 +125,8 @@ struct DBCLI {
     // MARK: - Running statements
 
     static func run(sql: String, on connection: any SQLConnection, options: Options) async throws {
-        let dialect = await connection.serverVersion.flavor == .postgresql ? SQLDialect.postgresql : .mysql
+        let dialect: SQLDialect = await connection.serverVersion.flavor == .postgresql
+            ? .postgresql : .mysql
         let statements = StatementSplitter.split(sql, dialect: dialect)
         guard !statements.isEmpty else {
             standardError("no statements to run\n")

@@ -1,4 +1,5 @@
 import DBCore
+import DBMySQL
 import DBPostgres
 import DBSQL
 import DBTestKit
@@ -6,8 +7,12 @@ import Logging
 import XCTest
 @testable import DBGrid
 
-/// The grid's data path against a real PostgreSQL: paging, sorting, filtering, editing and
-/// the commit rules that protect the user's data (SPEC §12.6).
+/// The grid's data path against every configured server: paging, sorting, filtering,
+/// editing and the commit rules that protect the user's data (SPEC §12.6).
+///
+/// Both engines run the same checks, which is how SPEC §16 Phase 6's "identical feature
+/// matrix, zero UI changes" requirement is verified: the grid is handed a different driver
+/// and nothing else changes.
 @MainActor
 final class GridIntegrationTests: XCTestCase {
     var logger: Logger {
@@ -16,13 +21,28 @@ final class GridIntegrationTests: XCTestCase {
         return logger
     }
 
+    /// Every configured server of either engine. Skips only when neither is configured.
+    static var registry: DriverRegistry {
+        DriverRegistry([.postgresql: PostgresDriver.self, .mysql: MySQLDriver.self])
+    }
+
+    func allServers() throws -> [TestServer] {
+        let postgres = (try? TestEnvironment.servers(for: .postgresql)) ?? []
+        let mysql = (try? TestEnvironment.servers(for: .mysql)) ?? []
+        let all = postgres + mysql
+        if all.isEmpty {
+            throw XCTSkip("neither DBSTUDIO_TEST_PG_URL nor DBSTUDIO_TEST_MYSQL_URL is set")
+        }
+        return all
+    }
+
     func withSession(
         _ body: (ConnectionSession, TestServer) async throws -> Void
     ) async throws {
-        let servers = try TestEnvironment.requireServers(for: .postgresql)
-        for server in servers {
+        for server in try allServers() {
+            let dialect: SQLDialect = server.engine == .postgresql ? .postgresql : .mysql
             let config = ConnectionConfig(
-                name: "grid-test", dialect: .postgresql,
+                name: "grid-test", dialect: dialect,
                 host: server.host, port: server.port, user: server.user,
                 database: server.database
             )
@@ -35,7 +55,7 @@ final class GridIntegrationTests: XCTestCase {
             }
             let session = ConnectionSession(
                 config: withPassword,
-                registry: DriverRegistry([.postgresql: PostgresDriver.self]),
+                registry: Self.registry,
                 secrets: secrets,
                 logger: logger
             )
@@ -55,13 +75,22 @@ final class GridIntegrationTests: XCTestCase {
         identity: [String],
         identityKind: DBValueKind? = .int
     ) -> GridModel {
-        GridModel(
+        let dialect = session.config.dialect
+        return GridModel(
             source: .table(table),
-            dialect: .postgresql,
-            loader: SessionGridLoader(session: session, table: table, dialect: .postgresql),
+            dialect: dialect,
+            loader: SessionGridLoader(session: session, table: table, dialect: dialect),
             identityColumns: identity,
             identityKind: identityKind
         )
+    }
+
+    /// A table reference for whichever engine the session speaks: MySQL has no schema
+    /// layer, so its pseudo-schema is the database's own name.
+    func table(_ name: String, in server: TestServer) -> TableRef {
+        server.engine == .postgresql
+            ? TableRef(database: server.database, schema: "public", name: name)
+            : TableRef(schema: SchemaRef.mysql(server.database), name: name)
     }
 
     // MARK: - Paging
@@ -69,7 +98,7 @@ final class GridIntegrationTests: XCTestCase {
     /// SPEC §12.6: the first page of a million-row table arrives quickly.
     func testFirstPageOfAMillionRowsIsFast() async throws {
         try await withSession { session, server in
-            let table = TableRef(database: server.database, schema: "public", name: "big_table")
+            let table = self.table("big_table", in: server)
             let model = self.makeModel(session: session, table: table, identity: ["id"])
             let started = ContinuousClock.now
             await model.load(page: 0)
@@ -78,16 +107,17 @@ final class GridIntegrationTests: XCTestCase {
             XCTAssertNil(model.lastError)
             XCTAssertEqual(model.rowCount, 1_000)
             XCTAssertEqual(model.columns.map(\.name), ["id", "name", "amount", "flag", "created"])
+            XCTAssertNotNil(model.value(row: 0, column: 3), "the boolean column decoded")
             XCTAssertEqual(model.value(row: 0, column: 0), .int(1))
             XCTAssertLessThan(elapsed, .milliseconds(500), "first page took \(elapsed)")
-            TestLog.note("grid: first page of big_table in \(elapsed)")
+            TestLog.note("grid: first page of big_table on \(server.engine.rawValue) in \(elapsed)")
         }
     }
 
     /// Scrolling deep into the table stays constant-cost by switching to a keyset cursor.
     func testDeepPagingUsesAKeysetCursorAndStaysCorrect() async throws {
         try await withSession { session, server in
-            let table = TableRef(database: server.database, schema: "public", name: "big_table")
+            let table = self.table("big_table", in: server)
             let model = self.makeModel(session: session, table: table, identity: ["id"])
             for page in 0 ... 52 { await model.load(page: page) }
 
@@ -101,22 +131,27 @@ final class GridIntegrationTests: XCTestCase {
 
     func testMemoryStaysBoundedWhileScrollingTheWholeTable() async throws {
         try await withSession { session, server in
-            let table = TableRef(database: server.database, schema: "public", name: "big_table")
+            let table = self.table("big_table", in: server)
+            let dialect = session.config.dialect
             let model = GridModel(
-                source: .table(table), dialect: .postgresql,
-                loader: SessionGridLoader(session: session, table: table, dialect: .postgresql),
+                source: .table(table), dialect: dialect,
+                loader: SessionGridLoader(session: session, table: table, dialect: dialect),
                 identityColumns: ["id"], identityKind: .int,
                 buffer: RowBuffer(pageSize: 1_000, rowCapacity: 20_000, residentPageRadius: 5)
             )
             for page in stride(from: 0, to: 120, by: 1) {
                 await model.load(page: page)
             }
+            XCTAssertNil(model.lastError)
             XCTAssertLessThanOrEqual(
                 model.buffer.count, 20_000,
                 "the buffer held \(model.buffer.count) rows, past its cap"
             )
             // What was just loaded is still there, so scrolling never shows blanks.
-            XCTAssertNotNil(model.buffer.row(at: 119_000))
+            XCTAssertNotNil(
+                model.buffer.row(at: 119_000),
+                "on \(server.engine.rawValue), resident pages are \(model.buffer.loadedPages.sorted())"
+            )
         }
     }
 
@@ -124,7 +159,7 @@ final class GridIntegrationTests: XCTestCase {
 
     func testServerSideSortAndFilter() async throws {
         try await withSession { session, server in
-            let table = TableRef(database: server.database, schema: "public", name: "big_table")
+            let table = self.table("big_table", in: server)
             let model = self.makeModel(session: session, table: table, identity: ["id"])
             await model.load(page: 0)
 
@@ -142,7 +177,7 @@ final class GridIntegrationTests: XCTestCase {
 
     func testFilterValuesAreBoundNotInterpolated() async throws {
         try await withSession { session, server in
-            let table = TableRef(database: server.database, schema: "public", name: "big_table")
+            let table = self.table("big_table", in: server)
             let model = self.makeModel(session: session, table: table, identity: ["id"])
             await model.setFilter([
                 FilterRule(column: "name", op: .equal, values: [.string("'; DROP TABLE big_table; --")]),
@@ -164,17 +199,17 @@ final class GridIntegrationTests: XCTestCase {
         try await withSession { session, server in
             let (setupLease, setup) = try await session.lease()
             _ = try await setup.executeCollecting("DROP TABLE IF EXISTS grid_edit_probe")
-            _ = try await setup.executeCollecting("""
-                CREATE TABLE grid_edit_probe (
-                    id integer PRIMARY KEY, name text, age integer
-                )
-                """)
+            _ = try await setup.executeCollecting(
+                server.engine == .postgresql
+                    ? "CREATE TABLE grid_edit_probe (id integer PRIMARY KEY, name text, age integer)"
+                    : "CREATE TABLE grid_edit_probe (id INT PRIMARY KEY, name VARCHAR(50), age INT)"
+            )
             _ = try await setup.executeCollecting(
                 "INSERT INTO grid_edit_probe VALUES (1, 'a', 29), (2, 'b', 41)"
             )
             await session.release(setupLease)
 
-            let table = TableRef(database: server.database, schema: "public", name: "grid_edit_probe")
+            let table = self.table("grid_edit_probe", in: server)
             let model = self.makeModel(session: session, table: table, identity: ["id"])
             await model.load(page: 0)
             XCTAssertTrue(model.isEditable)
@@ -210,14 +245,16 @@ final class GridIntegrationTests: XCTestCase {
             let (setupLease, setup) = try await session.lease()
             _ = try await setup.executeCollecting("DROP TABLE IF EXISTS grid_conflict_probe")
             _ = try await setup.executeCollecting(
-                "CREATE TABLE grid_conflict_probe (id integer PRIMARY KEY, name text)"
+                server.engine == .postgresql
+                    ? "CREATE TABLE grid_conflict_probe (id integer PRIMARY KEY, name text)"
+                    : "CREATE TABLE grid_conflict_probe (id INT PRIMARY KEY, name VARCHAR(50))"
             )
             _ = try await setup.executeCollecting(
                 "INSERT INTO grid_conflict_probe VALUES (1, 'original'), (2, 'other')"
             )
             await session.release(setupLease)
 
-            let table = TableRef(database: server.database, schema: "public", name: "grid_conflict_probe")
+            let table = self.table("grid_conflict_probe", in: server)
             let model = self.makeModel(session: session, table: table, identity: ["id"])
             await model.load(page: 0)
             model.setValue(.string("mine"), row: 0, column: 1)
@@ -261,16 +298,25 @@ final class GridIntegrationTests: XCTestCase {
         try await withSession { session, server in
             let (setupLease, setup) = try await session.lease()
             _ = try await setup.executeCollecting("DROP TABLE IF EXISTS grid_insert_probe")
-            _ = try await setup.executeCollecting("""
-                CREATE TABLE grid_insert_probe (
-                    id integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-                    name text NOT NULL DEFAULT 'unnamed'
-                )
-                """)
+            _ = try await setup.executeCollecting(
+                server.engine == .postgresql
+                    ? """
+                      CREATE TABLE grid_insert_probe (
+                          id integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                          name text NOT NULL DEFAULT 'unnamed'
+                      )
+                      """
+                    : """
+                      CREATE TABLE grid_insert_probe (
+                          id INT AUTO_INCREMENT PRIMARY KEY,
+                          name VARCHAR(50) NOT NULL DEFAULT 'unnamed'
+                      )
+                      """
+            )
             _ = try await setup.executeCollecting("INSERT INTO grid_insert_probe (name) VALUES ('first')")
             await session.release(setupLease)
 
-            let table = TableRef(database: server.database, schema: "public", name: "grid_insert_probe")
+            let table = self.table("grid_insert_probe", in: server)
             let model = self.makeModel(session: session, table: table, identity: ["id"])
             await model.load(page: 0)
 
@@ -295,12 +341,8 @@ final class GridIntegrationTests: XCTestCase {
     /// SPEC §12.6: composite, UUID and missing keys each behave per spec.
     func testKeyShapes() async throws {
         try await withSession { session, server in
-            func table(_ name: String) -> TableRef {
-                TableRef(database: server.database, schema: "public", name: name)
-            }
-
             let composite = self.makeModel(
-                session: session, table: table("composite_pk"),
+                session: session, table: self.table("composite_pk", in: server),
                 identity: ["org_id", "user_id"], identityKind: nil
             )
             await composite.load(page: 0)
@@ -308,27 +350,37 @@ final class GridIntegrationTests: XCTestCase {
             composite.setValue(.string("editor"), row: 0, column: 2)
             let compositeStatements = try composite.pendingStatements()
             XCTAssertEqual(compositeStatements.count, 1)
+            let expectedPredicate = server.engine == .postgresql
+                ? "\"org_id\" = $2 AND \"user_id\" = $3"
+                : "`org_id` = ? AND `user_id` = ?"
             XCTAssertTrue(
-                compositeStatements[0].sql.contains("\"org_id\" = $2 AND \"user_id\" = $3"),
+                compositeStatements[0].sql.contains(expectedPredicate),
                 compositeStatements[0].sql
             )
             // A composite key cannot drive a keyset cursor.
             XCTAssertEqual(composite.strategy(forPage: 100), .offset)
 
             let uuid = self.makeModel(
-                session: session, table: table("uuid_pk"), identity: ["id"], identityKind: .uuid
+                session: session, table: self.table("uuid_pk", in: server),
+                identity: ["id"], identityKind: .uuid
             )
             await uuid.load(page: 0)
             uuid.setValue(.string("renamed"), row: 0, column: 1)
             let uuidStatements = try uuid.pendingStatements()
             XCTAssertEqual(uuidStatements.count, 1)
-            guard case .uuid? = uuidStatements[0].parameters.last else {
-                return XCTFail("the WHERE clause should bind a UUID, got \(uuidStatements[0].parameters)")
+            // PostgreSQL has a `uuid` type; MySQL stores one as `char(36)`. Either way the
+            // WHERE clause binds the row's own identifier, not a rewritten form of it.
+            let boundKey = try XCTUnwrap(uuidStatements[0].parameters.last)
+            XCTAssertEqual(boundKey.text, "11111111-1111-1111-1111-111111111111")
+            if server.engine == .postgresql {
+                guard case .uuid = boundKey else {
+                    return XCTFail("PostgreSQL should bind a UUID, got \(boundKey)")
+                }
             }
             XCTAssertEqual(uuid.strategy(forPage: 100), .offset)
 
             let none = self.makeModel(
-                session: session, table: table("no_pk"), identity: [], identityKind: nil
+                session: session, table: self.table("no_pk", in: server), identity: [], identityKind: nil
             )
             await none.load(page: 0)
             XCTAssertFalse(none.isEditable)
@@ -339,7 +391,7 @@ final class GridIntegrationTests: XCTestCase {
 
     func testExactCountMatchesTheFixture() async throws {
         try await withSession { session, server in
-            let table = TableRef(database: server.database, schema: "public", name: "big_table")
+            let table = self.table("big_table", in: server)
             let model = self.makeModel(session: session, table: table, identity: ["id"])
             await model.loadExactCount()
             XCTAssertEqual(model.totalCount, 1_000_000)

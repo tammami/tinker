@@ -1,6 +1,6 @@
 # PROGRESS.md — per-phase log
 
-Current phase: **Phase 6 — MySQL driver** (Phases 0–5 complete).
+Current phase: **Phase 7 — Release hardening** (Phases 0–6 complete).
 
 ---
 
@@ -130,3 +130,26 @@ plumbing and none of the three is testable in isolation.
 - **`GridPlayground`**, the synthetic-data target SPEC §16 lists for performance iteration, was not built. Its purpose — iterating on grid performance without a database — is served by `GridIntegrationTests` against the real million-row table.
 - **Editing a single-table query result** (SPEC §12.3, "Phase 2") is not implemented; query results are read-only. Recorded as a deliberate deferral.
 - **Client-certificate TLS** is wired through `TLSConfig` and the driver but has no fixture to test against.
+
+---
+
+## Phase 6 — MySQL driver (2026-09-03)
+
+### Done
+- **`DBMySQL`** over mysql-nio 1.9.1: `MySQLDriver` with all five TLS modes and a plaintext fallback for `prefer`; `MySQLSQLConnection` actor streaming rows in the batch sizes SPEC §4 sets, reporting the OK packet's `affectedRows` and `lastInsertID`, cancelling with `KILL QUERY` from a connection kept for the purpose, and tracking transactions.
+- **`MySQLValueDecoder`** covering every type in §7.3 across both wire formats: signed and unsigned integers of every width, `tinyint(1)` as boolean behind a per-connection toggle, `FLOAT`/`DOUBLE`, `DECIMAL` read as the exact characters MySQL sent, every string and binary type separated by character set, `DATE`, `TIME`, `DATETIME`, `TIMESTAMP`, `YEAR`, `JSON`, `ENUM`, `SET`, `BIT` rendered as bits, and `GEOMETRY` as raw bytes.
+- **`MySQLIntrospector`** over `information_schema`, with version branching for generated columns, MySQL's single pseudo-schema per database, enum and set labels parsed from the declared type, and `SHOW CREATE TABLE` for DDL.
+- `caching_sha2_password` — MySQL 8 and later's default — works with TLS off through the RSA public-key exchange, so no escalation to `libmysqlclient` was needed.
+- **Zero UI changes.** MySQL was added to the driver registry and nothing else: no view, controller or grid code was touched. `GridIntegrationTests` proves it by running the same ten checks against both engines.
+
+### Tests (30 added; 348 total, 1 skipped)
+- `MySQLIntegrationTests` (24): connect and version, TCP-stage failure, wrong password, TLS `require` and `disable`, every mapped type round-tripping including `BIGINT UNSIGNED` at its maximum and `DECIMAL(65,30)`, `DATETIME` and `TIMESTAMP` both arriving without a zone, NULLs, extremes and Unicode, a 1 MB string, JSON nested 50 deep, zero dates under a permissive `sql_mode`, event ordering and batching, `affectedRows` and `lastInsertID`, parameters bound against an injection attempt, server errors with code and SQLSTATE, reuse after an error, `KILL QUERY` stopping a statement in well under a second, transactions on InnoDB, introspection of databases/tables/views/columns/indexes/foreign keys/routines/DDL/row estimates, and a full 1,000,000-row stream.
+- `MySQLValueDecoderTests` (6): bit rendering, enum and set label parsing including a doubled quote, declared-type to kind for every family, the `tinyint(1)` toggle, IP-address detection for SNI, and command-tag shape.
+- `GridIntegrationTests` now runs on both engines: the first page of MySQL's million-row fixture arrives in **67 ms**.
+
+### Gaps that did not run, and why
+- **`mysql_native_password` is untested.** MySQL 9.4 removed the plugin, and it is the only server available here. Add a MySQL 5.7 or 8.0 URL to `DBSTUDIO_TEST_MYSQL_URLS` to cover it.
+- **MariaDB is untested**, so its `information_schema` differences — routine parameters, index statistics, `GENERATION_EXPRESSION` — ran only on their MySQL branch.
+- **`sha256_password` is untested**, for the same reason: no server offers it here.
+- **Encrypted MySQL connections are untested.** The local server refused the TLS handshake, so `require` exercised only its failure path, and `verify-ca` and `verify-identity` never ran.
+- **The authentication plugin in use was not asserted**: reading `mysql.user` needs a privilege the test account correctly lacks. The suite reports what it could read and moves on.

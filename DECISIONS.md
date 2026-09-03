@@ -224,3 +224,30 @@ Date: 2026-09-03 (Phase 7)
 **Decision.** `Scripts/release.sh` implements the whole path — archive, export with `developer-id`, verify the hardened runtime, notarize, staple, `spctl` assess, build and notarize the DMG — and refuses to run with a message naming exactly what is missing and how to create it. `--unsigned` runs everything except signing and notarization, which is what was verified here.
 
 **Consequences.** The build, packaging and installation path is proven: `--unsigned` produces a 7.2 MB DMG whose app passes the smoke test when run from the mounted image. Signing, notarization, stapling and Gatekeeper's verdict are untested and recorded as a gap in PROGRESS.md. Whoever holds the certificate runs `Scripts/release.sh` unchanged.
+
+## ADR-0025 — Menu commands route through a shared workspace reference, not `@FocusedValue`
+Date: 2026-09-03
+
+**Context.** The Query and View menus act on the frontmost workspace. `@FocusedValue` is the SwiftUI way to express that, and it works until an AppKit view takes first responder: while `SQLTextView` has focus the focused value goes missing, SwiftUI disables the menu item, and its keyboard shortcut is swallowed with nothing happening. The SQL editor is exactly where ⌘↩ matters, so the mechanism failed in the one place it was needed.
+
+**Decision.** `CommandCenter.shared` holds a reference to whichever `WorkspaceController` is frontmost; each workspace registers on appear and deregisters on disappear. The menus read from it instead of from the focus system.
+
+**Consequences.** Run, Run All, Cancel, Format, History and the tab commands stay enabled while the editor has focus, which `WorkspaceUITests.testQueryMenuRunItem` checks by clicking the item and asserting it is enabled. The cost is one piece of global state; it is confined to menu routing and holds only the frontmost controller.
+
+## ADR-0026 — Engine badges are drawn, not vendor logos
+Date: 2026-09-03
+
+**Context.** A sidebar of connections should say at a glance which are PostgreSQL and which are MySQL. The obvious answer is each project's logo, but those are trademarks, and bundling them in a shipped application is not ours to do.
+
+**Decision.** `EngineMark` draws the badge in the app's own hand: what each engine is known by — an elephant, a dolphin — as a plain silhouette on a plate in that project's colour. No vendor artwork is copied or shipped.
+
+**Consequences.** A developer reads the row instantly, and the app carries no third-party marks. The shapes are `Shape` implementations rather than assets, so they stay sharp at any size and need no catalogue entries. If the marks are ever judged too close to the originals, only this one file changes.
+
+## ADR-0027 — macOS 26 adaptive icons need Icon Composer, so the catalogue keeps the fixed set
+Date: 2026-09-03
+
+**Context.** macOS 26 draws app icons in light, dark, tinted and clear appearances. Authoring them means an Icon Composer `.icon` document — a layered bundle produced by the GUI app that ships inside Xcode. The asset catalogue cannot express it: `actool` rejects `appearances` entries under the `mac` idiom ("the app icon set has 3 unassigned children") and does not recognise a `platform` key there. Both single-size layouts were tried and both warned, which fails `Scripts/ci.sh`.
+
+**Decision.** `Scripts/make-icon.swift` renders the artwork and writes the ten fixed sizes the catalogue asks for. It keeps a light, dark and tinted palette in `Appearance` even though only the default is written, because those are the three renderings an `.icon` document would be built from.
+
+**Consequences.** The icon builds without warnings and looks right in every appearance the system composites itself, but it does not participate in the system's tinting or in the clear appearance. Finishing that is a GUI step: open the artwork in Icon Composer, export `DBStudio.icon`, and point the target at it. Recorded as a gap in PROGRESS.md rather than left implied.

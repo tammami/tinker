@@ -27,7 +27,9 @@ public struct QueryTabView: View {
                 Divider()
                 editorToolbar
             }
-            .frame(minHeight: 120, idealHeight: 240)
+            // The editor pane fills the split view's width. Without this it is laid out at
+            // the ideal width of what is beside it and sits centred in a narrow column.
+            .frame(maxWidth: .infinity, minHeight: 120, idealHeight: 240)
 
             VStack(spacing: 0) {
                 if let banner = controller.errorBanner {
@@ -51,7 +53,7 @@ public struct QueryTabView: View {
 
                 resultContent
             }
-            .frame(minHeight: 120)
+            .frame(maxWidth: .infinity, minHeight: 120)
         }
         .task(id: tab.id) {
             controller.sql = tab.sql

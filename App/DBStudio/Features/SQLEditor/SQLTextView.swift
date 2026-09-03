@@ -123,8 +123,23 @@ public struct SQLEditorView: NSViewRepresentable {
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = true
 
+        // The line numbers live in the scroll view's own left inset: the content is
+        // shifted by exactly the gutter's width, so the text can never be drawn under it.
+        // Positioned by autoresizing rather than constraints — an `NSScrollView` tiles its
+        // own subviews, and a constrained one drags the whole subtree into auto layout.
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets(
+            top: 0, left: SQLGutterView.width, bottom: 0, right: 0
+        )
+        let gutter = SQLGutterView(textView: textView, clipView: scrollView.contentView)
+        gutter.frame = NSRect(
+            x: 0, y: 0, width: SQLGutterView.width, height: scrollView.bounds.height
+        )
+        gutter.autoresizingMask = [.height]
+        // Above the clip view, or the scrolled content draws over it.
+        scrollView.addSubview(gutter, positioned: .above, relativeTo: scrollView.contentView)
 
-
+        context.coordinator.gutter = gutter
         context.coordinator.textView = textView
         context.coordinator.observeDismissRequests()
         context.coordinator.applyHighlighting()
@@ -137,6 +152,14 @@ public struct SQLEditorView: NSViewRepresentable {
         coordinator.dialect = dialect
         coordinator.errorPosition = errorPosition
         guard let textView = coordinator.textView else { return }
+        // The scroll view has no size when the gutter is created, so its height is set
+        // here, once SwiftUI has laid the editor out.
+        if let gutter = coordinator.gutter {
+            gutter.frame = NSRect(
+                x: 0, y: 0, width: SQLGutterView.width, height: scrollView.bounds.height
+            )
+            gutter.needsDisplay = true
+        }
         textView.font = DesignTokens.Fonts.editor(name: fontName, size: fontSize)
         // The editor is the point of a query tab, so it takes focus as soon as it is on
         // screen rather than making the user click into it first.
@@ -175,6 +198,7 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
     let completion = CompletionPopover()
     /// Closed when the tab runs a statement, which is the end of typing.
     private var dismissObserver: (any NSObjectProtocol)?
+    weak var gutter: SQLGutterView?
     var hasTakenFocus = false
     private var highlightTask: Task<Void, Never>?
 
@@ -199,6 +223,7 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         text = textView.string
         delegate?.editorDidChangeText(textView.string)
         textView.needsDisplay = true
+        gutter?.needsDisplay = true
         scheduleHighlighting()
         offerCompletions()
     }
@@ -273,6 +298,8 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         guard let textView else { return }
         delegate?.editorDidChangeSelection(offset: textView.selectedRange().location)
         textView.needsDisplay = true
+        // The current line is marked in the gutter too, so it follows the caret.
+        gutter?.needsDisplay = true
         highlightMatchingBracket()
         // Moving the caret off the word being completed makes the list about nothing.
         if completion.isVisible, (completionPrefixRange()?.length ?? 0) == 0 {
@@ -343,6 +370,7 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         }
         storage.endEditing()
         textView.needsDisplay = true
+        gutter?.needsDisplay = true
     }
 
     /// Underlines the bracket matching the one next to the cursor.

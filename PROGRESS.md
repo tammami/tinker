@@ -417,9 +417,22 @@ panes), plus Phase 9 in §16 and ADR-0029/0030.
   2), the Objects list of `public` with 17 objects, and the four result panes including
   PostgreSQL's `pg_stat_database` in Status.
 
+### Also fixed
+
+- **The query tab was laying its editor out at the ideal width of what sat beside it**, so
+  the editor and its toolbar appeared as a narrow centred column while the results below
+  filled the pane. Introduced by the result-panes change and found while fixing the gutter;
+  both split-view panes now fill the width.
+
 ### Not done
 
-- **The editor's line-number gutter** is still missing, as recorded in Phase 8.
+- ~~The editor's line-number gutter~~ **Done.** It lives in the scroll view's own left
+  content inset, so the text is shifted by exactly its width and can never be drawn under
+  it, and it is positioned by autoresizing rather than constraints — an `NSScrollView` tiles
+  its own subviews and a constrained one drags the whole subtree into auto layout, which
+  left the editor with no width at all. Its height is set once SwiftUI has laid the editor
+  out, because the scroll view has none when the gutter is made. Verified scrolled: lines
+  27–38 track their text.
 - **Profile on PostgreSQL** is a message rather than a measurement, by choice.
 - Paging and the Objects list have no integration test of their own; they are covered by
   unit tests over a fixture loader and by hand against the local servers.

@@ -185,3 +185,107 @@ public final class SQLTextView: NSTextView {
 }
 
 /// Draws line numbers beside the editor, with the current line emphasised.
+
+/// The line numbers beside the editor (SPEC §13.1).
+///
+/// A plain view laid out next to the scroll view, not an `NSRulerView`. Inside a SwiftUI
+/// `NSViewRepresentable` a ruler never took the width it reserved and painted across the
+/// text instead of beside it; here the layout is the container's and every coordinate is
+/// this view's own.
+public final class SQLGutterView: NSView {
+    public static let width: CGFloat = 46
+
+    weak var textView: NSTextView?
+    weak var clipView: NSClipView?
+    private var scrollObserver: (any NSObjectProtocol)?
+
+    public override var isFlipped: Bool { true }
+
+    init(textView: NSTextView, clipView: NSClipView) {
+        self.textView = textView
+        self.clipView = clipView
+        super.init(frame: .zero)
+        wantsLayer = true
+
+        clipView.postsBoundsChangedNotifications = true
+        scrollObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification, object: clipView, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.needsDisplay = true }
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    /// The observer goes when the view leaves the window. `deinit` cannot touch it: it is
+    /// not isolated to the main actor and the token is not `Sendable`.
+    public override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window == nil, let scrollObserver else { return }
+        NotificationCenter.default.removeObserver(scrollObserver)
+        self.scrollObserver = nil
+    }
+
+    public override func draw(_ dirtyRect: NSRect) {
+        NSColor.controlBackgroundColor.setFill()
+        bounds.fill()
+        NSColor.separatorColor.setStroke()
+        let border = NSBezierPath()
+        border.move(to: NSPoint(x: bounds.maxX - 0.5, y: bounds.minY))
+        border.line(to: NSPoint(x: bounds.maxX - 0.5, y: bounds.maxY))
+        border.stroke()
+
+        guard let textView,
+              let layoutManager = textView.layoutManager,
+              let container = textView.textContainer,
+              let clipView
+        else { return }
+
+        let text = textView.string as NSString
+        // What the scroll view is showing, in the text view's coordinates.
+        let visible = clipView.documentVisibleRect
+        let caretLine = text.lineRange(
+            for: NSRange(location: min(textView.selectedRange().location, text.length), length: 0)
+        )
+
+        let regular = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        let bold = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .bold)
+        var index = 0
+        var lineNumber = 1
+
+        while true {
+            let lineRange = text.lineRange(for: NSRange(location: index, length: 0))
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: lineRange, actualCharacterRange: nil
+            )
+            var lineRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: container)
+            lineRect.origin.y += textView.textContainerInset.height
+            // Into this view's coordinates: the same y, less however far it has scrolled.
+            let y = lineRect.minY - visible.minY
+
+            if y + lineRect.height >= 0, y <= bounds.height {
+                let isCurrent = NSEqualRanges(lineRange, caretLine)
+                let attributes: [NSAttributedString.Key: Any] = [
+                    .font: isCurrent ? bold : regular,
+                    .foregroundColor: isCurrent ? NSColor.labelColor : NSColor.tertiaryLabelColor,
+                ]
+                let label = "\(lineNumber)" as NSString
+                let size = label.size(withAttributes: attributes)
+                label.draw(
+                    at: NSPoint(
+                        x: bounds.maxX - size.width - 8,
+                        y: y + (lineRect.height - size.height) / 2
+                    ),
+                    withAttributes: attributes
+                )
+            }
+
+            let next = NSMaxRange(lineRange)
+            if lineRange.length == 0 || next >= text.length { break }
+            index = next
+            lineNumber += 1
+            if y > bounds.height { break }
+        }
+    }
+}

@@ -71,7 +71,7 @@ public struct WorkspaceView: View {
             }
             .background(Color(nsColor: .controlBackgroundColor))
         }
-        .navigationTitle(workspace.displayedConnection?.name ?? Product.name)
+        .navigationTitle(workspace.displayedConnection?.name ?? Product.credit)
         .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }
         .onAppear { CommandCenter.shared.activate(controller) }
@@ -462,6 +462,10 @@ public struct WorkspaceView: View {
                     shortcutHint("⌘⇧O", "Find table")
                     shortcutHint("⌘R", "Run")
                 }
+                Text(Product.credit)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, DesignTokens.Spacing.lg)
             }
             if let error = environment.startupError {
                 InlineBanner(kind: .error, message: error, onDismiss: {})
@@ -495,7 +499,7 @@ public struct WorkspaceView: View {
                     Label("Production", systemImage: Icon.production).foregroundStyle(.red)
                 }
             } else {
-                Text("No connection selected")
+                Text("No connection selected · \(Product.credit)")
             }
             Spacer()
             if let tab = workspace.selectedTab, tab.isQueryTab,

@@ -115,9 +115,10 @@ public actor ConnectionSession {
             return await existing.connection.serverVersion
         }
         let connection = try await makeConnection()
-        pool.append(PooledConnection(
-            id: nextConnectionID(), connection: connection, leasedTo: nil, lastUsed: .now
-        ))
+        pool.append(
+            PooledConnection(
+                id: nextConnectionID(), connection: connection, leasedTo: nil, lastUsed: .now
+            ))
         setState(.connected)
         return await connection.serverVersion
     }
@@ -258,9 +259,10 @@ public actor ConnectionSession {
             let connection = try await makeConnection()
             let id = nextConnectionID()
             let newLease = Lease(id: UUID(), connectionID: id)
-            pool.append(PooledConnection(
-                id: id, connection: connection, leasedTo: newLease.id, lastUsed: .now
-            ))
+            pool.append(
+                PooledConnection(
+                    id: id, connection: connection, leasedTo: newLease.id, lastUsed: .now
+                ))
             setState(.connected)
             return (newLease, connection)
         }
@@ -307,9 +309,11 @@ public actor ConnectionSession {
             let removed = pool.remove(at: index)
             await removed.connection.close()
         }
-        setState(.degraded(reason: hadOpenTransaction
-            ? "The connection dropped while a transaction was open. Reconnect to continue; uncommitted work is lost."
-            : "The connection dropped. It will be reopened on next use."))
+        setState(
+            .degraded(
+                reason: hadOpenTransaction
+                    ? "The connection dropped while a transaction was open. Reconnect to continue; uncommitted work is lost."
+                    : "The connection dropped. It will be reopened on next use."))
     }
 
     /// Closes the tunnel and every connection.
@@ -372,9 +376,9 @@ public struct IntrospectionCache: Sendable {
         public var table: TableRef? {
             switch self {
             case let .columns(table), let .indexes(table), let .foreignKeys(table),
-                 let .primaryKey(table), let .ddl(table), let .rowCount(table),
-                 let .checkConstraints(table), let .triggers(table), let .partitioning(table),
-                 let .viewDefinition(table):
+                let .primaryKey(table), let .ddl(table), let .rowCount(table),
+                let .checkConstraints(table), let .triggers(table), let .partitioning(table),
+                let .viewDefinition(table):
                 table
             default:
                 nil

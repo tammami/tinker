@@ -61,12 +61,16 @@ public struct SettingsView: View {
                     LabeledContent("Size") {
                         HStack(spacing: DesignTokens.Spacing.sm) {
                             Slider(value: $settings.editorFontSize, in: 9 ... 24, step: 1)
-                            Text("\(Int(settings.editorFontSize)) pt").monospacedDigit().frame(width: 40, alignment: .trailing)
+                            Text("\(Int(settings.editorFontSize)) pt").monospacedDigit().frame(
+                                width: 40, alignment: .trailing)
                         }
                     }
                     LabeledContent("Preview") {
                         Text("SELECT id, name FROM users WHERE id = $1;")
-                            .font(Font(DesignTokens.Fonts.editor(name: settings.editorFontName, size: CGFloat(settings.editorFontSize))))
+                            .font(
+                                Font(
+                                    DesignTokens.Fonts.editor(
+                                        name: settings.editorFontName, size: CGFloat(settings.editorFontSize))))
                     }
                 } header: {
                     Label("SQL editor", systemImage: Icon.query)
@@ -118,7 +122,9 @@ public struct SettingsView: View {
                 } header: {
                     Label("Diagnostics", systemImage: "stethoscope")
                 } footer: {
-                    Text("Reports are written to Application Support and never sent anywhere. They record the app version, the system version and a stack trace; never SQL, values or credentials.")
+                    Text(
+                        "Reports are written to Application Support and never sent anywhere. They record the app version, the system version and a stack trace; never SQL, values or credentials."
+                    )
                 }
                 Section {
                     LabeledContent("Updates") {
@@ -155,8 +161,9 @@ public struct SettingsView: View {
     static var monospacedFonts: [String] {
         let names = NSFontManager.shared.availableFontNames(with: .fixedPitchFontMask) ?? []
         let preferred = ["SF Mono", "Menlo", "Monaco", "Courier New"]
-        return preferred.filter { NSFont(name: $0, size: 12) != nil } + names.prefix(40).filter {
-            !preferred.contains($0)
-        }
+        return preferred.filter { NSFont(name: $0, size: 12) != nil }
+            + names.prefix(40).filter {
+                !preferred.contains($0)
+            }
     }
 }

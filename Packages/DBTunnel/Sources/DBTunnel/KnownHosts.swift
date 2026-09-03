@@ -109,8 +109,8 @@ extension KnownHostsFile.Entry {
         // `|1|<base64 salt>|<base64 HMAC-SHA1 of the host name>`
         let parts = hostPattern.split(separator: "|", omittingEmptySubsequences: true)
         guard parts.count >= 3,
-              let salt = Data(base64Encoded: String(parts[1])),
-              let expected = Data(base64Encoded: String(parts[2]))
+            let salt = Data(base64Encoded: String(parts[1])),
+            let expected = Data(base64Encoded: String(parts[2]))
         else { return false }
         let digest = Crypto.HMAC<Insecure.SHA1>.authenticationCode(
             for: Data(host.utf8), using: SymmetricKey(data: salt)

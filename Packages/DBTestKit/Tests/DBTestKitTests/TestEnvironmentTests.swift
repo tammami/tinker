@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import DBTestKit
 
 final class TestEnvironmentTests: XCTestCase {
@@ -10,12 +11,14 @@ final class TestEnvironmentTests: XCTestCase {
     func testPrimaryAndAdditionalURLsAreOrdered() throws {
         let env = [
             "DBSTUDIO_TEST_PG_URL": "postgresql://dbstudio_test:pw@localhost:5432/dbstudio_test",
-            "DBSTUDIO_TEST_PG_URLS": " postgres://dbstudio_test@10.0.0.2/dbstudio_test , ,postgresql://dbstudio_test@10.0.0.3:5433/dbstudio_test",
+            "DBSTUDIO_TEST_PG_URLS":
+                " postgres://dbstudio_test@10.0.0.2/dbstudio_test , ,postgresql://dbstudio_test@10.0.0.3:5433/dbstudio_test",
         ]
         let servers = try TestEnvironment.servers(for: .postgresql, environment: env)
         XCTAssertEqual(servers.map(\.host), ["localhost", "10.0.0.2", "10.0.0.3"])
         XCTAssertEqual(servers.map(\.port), [5432, 5432, 5433])
-        XCTAssertEqual(servers.map(\.source), ["DBSTUDIO_TEST_PG_URL", "DBSTUDIO_TEST_PG_URLS", "DBSTUDIO_TEST_PG_URLS"])
+        XCTAssertEqual(
+            servers.map(\.source), ["DBSTUDIO_TEST_PG_URL", "DBSTUDIO_TEST_PG_URLS", "DBSTUDIO_TEST_PG_URLS"])
         XCTAssertEqual(servers[0].password, "pw")
         XCTAssertEqual(servers[0].database, "dbstudio_test")
     }
@@ -23,7 +26,8 @@ final class TestEnvironmentTests: XCTestCase {
     func testRefusesOtherDatabases() {
         let env = ["DBSTUDIO_TEST_MYSQL_URL": "mysql://dbstudio_test:pw@127.0.0.1:3306/production"]
         XCTAssertThrowsError(try TestEnvironment.servers(for: .mysql, environment: env)) { error in
-            guard case let TestEnvironmentError.wrongDatabase(_, database, expected)? = error as? TestEnvironmentError else {
+            guard case let TestEnvironmentError.wrongDatabase(_, database, expected)? = error as? TestEnvironmentError
+            else {
                 return XCTFail("unexpected error \(error)")
             }
             XCTAssertEqual(database, "production")

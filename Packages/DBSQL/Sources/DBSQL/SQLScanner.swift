@@ -115,7 +115,7 @@ struct SQLScanner {
 
     /// Consumes `'…'`-style text. A doubled terminator is an escaped terminator.
     private mutating func consumeQuoted(terminator: Unicode.Scalar, backslashEscapes: Bool) {
-        advance() // opening quote
+        advance()  // opening quote
         while let scalar = peek() {
             if backslashEscapes, scalar == "\\" {
                 advance()
@@ -127,7 +127,7 @@ struct SQLScanner {
                     advance(2)
                     continue
                 }
-                advance() // closing quote
+                advance()  // closing quote
                 return
             }
             advance()
@@ -140,7 +140,7 @@ struct SQLScanner {
     }
 
     private mutating func consumeBlockComment(nested: Bool) {
-        advance(2) // `/*`
+        advance(2)  // `/*`
         var depth = 1
         while depth > 0, let scalar = peek() {
             if nested, scalar == "/", peek(1) == "*" {
@@ -165,7 +165,8 @@ struct SQLScanner {
         while probe < scalars.count {
             let scalar = scalars[probe]
             if scalar == "$" { break }
-            let isTagScalar = scalar == "_" || scalar.properties.isAlphabetic
+            let isTagScalar =
+                scalar == "_" || scalar.properties.isAlphabetic
                 || (!tag.isEmpty && scalar.value >= 0x30 && scalar.value <= 0x39)
             guard isTagScalar else { return false }
             tag.append(scalar)
@@ -182,7 +183,7 @@ struct SQLScanner {
             }
             advance()
         }
-        return true // unterminated: the rest of the input is inside the body
+        return true  // unterminated: the rest of the input is inside the body
     }
 
     private func matchesLiteral(_ literal: [Unicode.Scalar], at position: Int) -> Bool {

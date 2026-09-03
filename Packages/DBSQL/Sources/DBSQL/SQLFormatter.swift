@@ -40,15 +40,16 @@ public enum SQLTokenizer {
             let startUTF16 = scanner.utf16Offset
 
             if let consumed = scanner.consumeQuotedOrComment(dialect: dialect) {
-                let kind: SQLToken.Kind = if consumed.hasPrefix("--") || consumed.hasPrefix("/*") || consumed.hasPrefix("#") {
-                    .comment
-                } else if consumed.hasPrefix("'") || consumed.hasPrefix("$") {
-                    .string
-                } else if dialect == .mysql, consumed.hasPrefix("\"") {
-                    .string
-                } else {
-                    .quotedIdentifier
-                }
+                let kind: SQLToken.Kind =
+                    if consumed.hasPrefix("--") || consumed.hasPrefix("/*") || consumed.hasPrefix("#") {
+                        .comment
+                    } else if consumed.hasPrefix("'") || consumed.hasPrefix("$") {
+                        .string
+                    } else if dialect == .mysql, consumed.hasPrefix("\"") {
+                        .string
+                    } else {
+                        .quotedIdentifier
+                    }
                 tokens.append(SQLToken(kind: kind, text: consumed, utf16Range: startUTF16 ..< scanner.utf16Offset))
                 continue
             }
@@ -57,24 +58,27 @@ public enum SQLTokenizer {
 
             if scalar.properties.isWhitespace {
                 while let next = scanner.peek(), next.properties.isWhitespace { scanner.advance() }
-                tokens.append(SQLToken(
-                    kind: .whitespace, text: scanner.text(from: start),
-                    utf16Range: startUTF16 ..< scanner.utf16Offset
-                ))
+                tokens.append(
+                    SQLToken(
+                        kind: .whitespace, text: scanner.text(from: start),
+                        utf16Range: startUTF16 ..< scanner.utf16Offset
+                    ))
                 continue
             }
 
-            if scalar == "$", dialect == .postgresql, let next = scanner.peek(1), next.value >= 0x30, next.value <= 0x39 {
+            if scalar == "$", dialect == .postgresql, let next = scanner.peek(1), next.value >= 0x30, next.value <= 0x39
+            {
                 scanner.advance()
                 while let next = scanner.peek(), next.value >= 0x30, next.value <= 0x39 { scanner.advance() }
-                tokens.append(SQLToken(
-                    kind: .parameter, text: scanner.text(from: start),
-                    utf16Range: startUTF16 ..< scanner.utf16Offset
-                ))
+                tokens.append(
+                    SQLToken(
+                        kind: .parameter, text: scanner.text(from: start),
+                        utf16Range: startUTF16 ..< scanner.utf16Offset
+                    ))
                 continue
             }
 
-            if scalar == "?" , dialect == .mysql {
+            if scalar == "?", dialect == .mysql {
                 scanner.advance()
                 tokens.append(SQLToken(kind: .parameter, text: "?", utf16Range: startUTF16 ..< scanner.utf16Offset))
                 continue
@@ -82,13 +86,15 @@ public enum SQLTokenizer {
 
             if scalar.value >= 0x30, scalar.value <= 0x39 {
                 while let next = scanner.peek(),
-                      (next.value >= 0x30 && next.value <= 0x39) || next == "." || next == "e" || next == "E" {
+                    (next.value >= 0x30 && next.value <= 0x39) || next == "." || next == "e" || next == "E"
+                {
                     scanner.advance()
                 }
-                tokens.append(SQLToken(
-                    kind: .number, text: scanner.text(from: start),
-                    utf16Range: startUTF16 ..< scanner.utf16Offset
-                ))
+                tokens.append(
+                    SQLToken(
+                        kind: .number, text: scanner.text(from: start),
+                        utf16Range: startUTF16 ..< scanner.utf16Offset
+                    ))
                 continue
             }
 
@@ -101,10 +107,11 @@ public enum SQLTokenizer {
             }
 
             scanner.advance()
-            tokens.append(SQLToken(
-                kind: .punctuation, text: scanner.text(from: start),
-                utf16Range: startUTF16 ..< scanner.utf16Offset
-            ))
+            tokens.append(
+                SQLToken(
+                    kind: .punctuation, text: scanner.text(from: start),
+                    utf16Range: startUTF16 ..< scanner.utf16Offset
+                ))
         }
         return tokens
     }
@@ -147,7 +154,9 @@ public enum SQLFormatter {
         "JOIN", "ON", "USING", "WITH",
     ]
     /// Keywords that begin a clause only together with the word after them.
-    static let clausePairs: Set<String> = ["GROUP", "ORDER", "INSERT", "DELETE", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "NATURAL"]
+    static let clausePairs: Set<String> = [
+        "GROUP", "ORDER", "INSERT", "DELETE", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "NATURAL",
+    ]
 
     public static func format(_ sql: String, dialect: SQLDialect, indentWidth: Int = 4) -> String {
         let statements = StatementSplitter.split(sql, dialect: dialect)
@@ -180,7 +189,8 @@ public enum SQLFormatter {
 
         /// Appends `text`, inserting a separating space unless one would be wrong.
         func append(_ text: String) {
-            let needsSpace = !output.isEmpty
+            let needsSpace =
+                !output.isEmpty
                 && !output.hasSuffix(" ")
                 && !output.hasSuffix("\n")
                 && !output.hasSuffix("(")
@@ -195,7 +205,8 @@ public enum SQLFormatter {
             if token.kind == .punctuation {
                 switch text {
                 case "(":
-                    let opensSubSelect = next?.kind == .keyword
+                    let opensSubSelect =
+                        next?.kind == .keyword
                         && ["SELECT", "WITH", "VALUES"].contains(next?.text.uppercased() ?? "")
                     // A function call binds tightly to its name; a keyword takes a space.
                     if previous?.kind == .keyword || previous == nil {
@@ -235,7 +246,8 @@ public enum SQLFormatter {
             }
 
             if token.kind == .keyword {
-                let startsClause = clauseStarters.contains(text)
+                let startsClause =
+                    clauseStarters.contains(text)
                     || (clausePairs.contains(text) && next?.kind == .keyword)
                     || text == "INSERT" || text == "DELETE"
                 if startsClause, !output.isEmpty {

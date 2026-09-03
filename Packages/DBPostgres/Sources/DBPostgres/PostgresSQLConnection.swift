@@ -71,7 +71,8 @@ public actor PostgresSQLConnection: SQLConnection {
         )
 
         if let timeout = config.statementTimeout {
-            let milliseconds = timeout.components.seconds * 1_000
+            let milliseconds =
+                timeout.components.seconds * 1_000
                 + Int64(timeout.components.attoseconds / 1_000_000_000_000_000)
             _ = try? await Self.rawQuery(
                 "SET statement_timeout = \(milliseconds)",
@@ -178,7 +179,8 @@ public actor PostgresSQLConnection: SQLConnection {
         } catch {
             let mapped = PostgresErrorMapper.map(error, user: config.user)
             if case .server(let serverError) = mapped,
-               serverError.sqlState == PostgresErrorMapper.adminShutdownSQLState {
+                serverError.sqlState == PostgresErrorMapper.adminShutdownSQLState
+            {
                 closed = true
             }
             continuation.finish(throwing: mapped)
@@ -235,11 +237,13 @@ public actor PostgresSQLConnection: SQLConnection {
         if !emittedColumns { continuation.yield(.columns([])) }
 
         let keyword = SQLStatement(text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil).leadingKeyword
-        continuation.yield(.complete(QueryCompletion(
-            affectedRows: Int64(delivered),
-            serverTag: "\(keyword.isEmpty ? "SELECT" : keyword) \(delivered)",
-            durationTotal: started.duration(to: .now)
-        )))
+        continuation.yield(
+            .complete(
+                QueryCompletion(
+                    affectedRows: Int64(delivered),
+                    serverTag: "\(keyword.isEmpty ? "SELECT" : keyword) \(delivered)",
+                    durationTotal: started.duration(to: .now)
+                )))
     }
 
     private func runCollecting(
@@ -261,11 +265,13 @@ public actor PostgresSQLConnection: SQLConnection {
         if !state.rows.isEmpty {
             continuation.yield(.rows(RowBatch(rows: state.rows, startIndex: 0)))
         }
-        continuation.yield(.complete(QueryCompletion(
-            affectedRows: metadata.rows.map(Int64.init) ?? Int64(state.rows.count),
-            serverTag: Self.tag(from: metadata),
-            durationTotal: started.duration(to: .now)
-        )))
+        continuation.yield(
+            .complete(
+                QueryCompletion(
+                    affectedRows: metadata.rows.map(Int64.init) ?? Int64(state.rows.count),
+                    serverTag: Self.tag(from: metadata),
+                    durationTotal: started.duration(to: .now)
+                )))
     }
 
     /// Keeps ``isInTransaction`` honest when the user types `BEGIN` or `COMMIT`

@@ -2,18 +2,21 @@ import DBCore
 import DBSQL
 import Foundation
 import XCTest
+
 @testable import DBGrid
 
 final class CSVImportTests: XCTestCase {
     func testReaderHandlesQuotesNewlinesAndBOM() {
         let text = "\u{FEFF}id,name,note\r\n1,\"Smith, John\",\"line one\nline two\"\n2,\"say \"\"hi\"\"\",\n\n3,x,y"
         let rows = CSVReader.parse(text)
-        XCTAssertEqual(rows, [
-            ["id", "name", "note"],
-            ["1", "Smith, John", "line one\nline two"],
-            ["2", "say \"hi\"", ""],
-            ["3", "x", "y"],
-        ])
+        XCTAssertEqual(
+            rows,
+            [
+                ["id", "name", "note"],
+                ["1", "Smith, John", "line one\nline two"],
+                ["2", "say \"hi\"", ""],
+                ["3", "x", "y"],
+            ])
     }
 
     func testReaderAcceptsOtherDelimitersAndCountsRecords() {
@@ -95,12 +98,14 @@ final class CSVImportTests: XCTestCase {
             format: .text,
             options: .init(includeHeader: true)
         )
-        XCTAssertEqual(text, """
-         id | name
-        ----+-----
-          1 | a   
-        100 | NULL
+        XCTAssertEqual(
+            text,
+            """
+             id | name
+            ----+-----
+              1 | a   
+            100 | NULL
 
-        """)
+            """)
     }
 }

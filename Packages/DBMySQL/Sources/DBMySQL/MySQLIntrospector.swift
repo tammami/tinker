@@ -42,7 +42,8 @@ public struct MySQLIntrospector: SchemaIntrospector {
 
     /// Databases the user can see, minus the server's own.
     public func databases() async throws -> [DatabaseInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT s.SCHEMA_NAME,
                    s.SCHEMA_NAME = DATABASE(),
                    s.DEFAULT_CHARACTER_SET_NAME,
@@ -64,12 +65,14 @@ public struct MySQLIntrospector: SchemaIntrospector {
 
     /// MySQL's single pseudo-schema per database (SPEC §8).
     public func schemas(in database: String) async throws -> [SchemaInfo] {
-        [SchemaInfo(
-            ref: SchemaRef.mysql(database),
-            owner: nil,
-            comment: nil,
-            isSystem: Self.systemDatabases.contains(database.lowercased())
-        )]
+        [
+            SchemaInfo(
+                ref: SchemaRef.mysql(database),
+                owner: nil,
+                comment: nil,
+                isSystem: Self.systemDatabases.contains(database.lowercased())
+            )
+        ]
     }
 
     static let systemDatabases: Set<String> = [
@@ -77,7 +80,8 @@ public struct MySQLIntrospector: SchemaIntrospector {
     ]
 
     public func tables(in schema: SchemaRef) async throws -> [TableInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT t.TABLE_NAME, t.TABLE_TYPE, t.TABLE_COMMENT,
                    t.DATA_LENGTH + t.INDEX_LENGTH, t.TABLE_ROWS,
                    t.ENGINE, t.TABLE_COLLATION
@@ -87,11 +91,12 @@ public struct MySQLIntrospector: SchemaIntrospector {
             """, [.string(schema.database)])
         return result.rows.compactMap { row in
             guard let name = row[0].text else { return nil }
-            let kind: TableKind = switch (row[1].text ?? "BASE TABLE").uppercased() {
-            case "VIEW": .view
-            case "SYSTEM VIEW": .systemTable
-            default: .table
-            }
+            let kind: TableKind =
+                switch (row[1].text ?? "BASE TABLE").uppercased() {
+                case "VIEW": .view
+                case "SYSTEM VIEW": .systemTable
+                default: .table
+                }
             let size = Self.integer(row[3])
             let rows = Self.integer(row[4])
             let comment = row[2].text
@@ -112,7 +117,8 @@ public struct MySQLIntrospector: SchemaIntrospector {
         // `GENERATION_EXPRESSION` arrived in MySQL 5.7 and MariaDB 10.2.
         let hasGenerated = version.flavor == .mariadb ? version.isAtLeast(10, 2) : version.isAtLeast(5, 7)
         let generatedColumn = hasGenerated ? "c.GENERATION_EXPRESSION" : "''"
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT c.ORDINAL_POSITION, c.COLUMN_NAME, c.COLUMN_TYPE, c.DATA_TYPE,
                    c.IS_NULLABLE, c.COLUMN_DEFAULT, c.COLUMN_KEY, c.EXTRA,
                    \(generatedColumn), c.COLUMN_COMMENT,
@@ -175,8 +181,8 @@ public struct MySQLIntrospector: SchemaIntrospector {
     static func enumLabels(from columnType: String, dataType: String) -> [String]? {
         let lowered = dataType.lowercased()
         guard lowered == "enum" || lowered == "set",
-              let open = columnType.firstIndex(of: "("),
-              let close = columnType.lastIndex(of: ")")
+            let open = columnType.firstIndex(of: "("),
+            let close = columnType.lastIndex(of: ")")
         else { return nil }
         let inner = columnType[columnType.index(after: open) ..< close]
         var labels: [String] = []
@@ -203,7 +209,8 @@ public struct MySQLIntrospector: SchemaIntrospector {
     }
 
     public func indexes(of table: TableRef) async throws -> [IndexInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT s.INDEX_NAME,
                    MIN(s.NON_UNIQUE) = 0,
                    MIN(s.INDEX_TYPE),
@@ -231,7 +238,8 @@ public struct MySQLIntrospector: SchemaIntrospector {
     }
 
     public func foreignKeys(of table: TableRef) async throws -> [ForeignKeyInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT k.CONSTRAINT_NAME,
                    GROUP_CONCAT(k.COLUMN_NAME ORDER BY k.ORDINAL_POSITION SEPARATOR ','),
                    MIN(k.REFERENCED_TABLE_SCHEMA),
@@ -263,7 +271,8 @@ public struct MySQLIntrospector: SchemaIntrospector {
     }
 
     public func primaryKey(of table: TableRef) async throws -> [String]? {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT GROUP_CONCAT(s.COLUMN_NAME ORDER BY s.SEQ_IN_INDEX SEPARATOR ',')
             FROM information_schema.STATISTICS s
             WHERE s.TABLE_SCHEMA = ? AND s.TABLE_NAME = ? AND s.INDEX_NAME = 'PRIMARY'
@@ -273,7 +282,8 @@ public struct MySQLIntrospector: SchemaIntrospector {
     }
 
     public func routines(in schema: SchemaRef) async throws -> [RoutineInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT r.ROUTINE_NAME, r.ROUTINE_TYPE, r.DTD_IDENTIFIER,
                    r.EXTERNAL_LANGUAGE, r.ROUTINE_COMMENT
             FROM information_schema.ROUTINES r
@@ -284,11 +294,13 @@ public struct MySQLIntrospector: SchemaIntrospector {
         var routines: [RoutineInfo] = []
         for row in result.rows {
             guard let name = row[0].text else { continue }
-            let kind: RoutineKind = (row[1].text ?? "FUNCTION").uppercased() == "PROCEDURE"
+            let kind: RoutineKind =
+                (row[1].text ?? "FUNCTION").uppercased() == "PROCEDURE"
                 ? .procedure : .function
             // Parameters live in a separate view; one query per routine is acceptable
             // because the sidebar reads this level only when it is expanded.
-            let parameters = try await query("""
+            let parameters = try await query(
+                """
                 SELECT GROUP_CONCAT(
                            CONCAT(COALESCE(p.PARAMETER_NAME, ''), ' ', p.DTD_IDENTIFIER)
                            ORDER BY p.ORDINAL_POSITION SEPARATOR ', '
@@ -297,14 +309,15 @@ public struct MySQLIntrospector: SchemaIntrospector {
                 WHERE p.SPECIFIC_SCHEMA = ? AND p.SPECIFIC_NAME = ? AND p.ORDINAL_POSITION > 0
                 """, [.string(schema.database), .string(name)])
             let comment = row[4].text
-            routines.append(RoutineInfo(
-                name: name,
-                kind: kind,
-                signature: parameters.rows.first?.first?.text ?? "",
-                returnType: row[2].text,
-                language: row[3].text ?? "SQL",
-                comment: (comment?.isEmpty ?? true) ? nil : comment
-            ))
+            routines.append(
+                RoutineInfo(
+                    name: name,
+                    kind: kind,
+                    signature: parameters.rows.first?.first?.text ?? "",
+                    returnType: row[2].text,
+                    language: row[3].text ?? "SQL",
+                    comment: (comment?.isEmpty ?? true) ? nil : comment
+                ))
         }
         return routines
     }
@@ -320,7 +333,8 @@ public struct MySQLIntrospector: SchemaIntrospector {
     }
 
     public func approximateRowCount(_ table: TableRef) async throws -> Int64? {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT t.TABLE_ROWS FROM information_schema.TABLES t
             WHERE t.TABLE_SCHEMA = ? AND t.TABLE_NAME = ?
             """, [.string(table.database), .string(table.name)])
@@ -360,7 +374,8 @@ extension MySQLIntrospector {
         // MySQL only grew CHECK constraints in 8.0.16; before that the parser accepted
         // them and threw them away, so there is nothing to read rather than nothing to say.
         guard supportsCheckConstraints else { return [] }
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT tc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
             FROM information_schema.TABLE_CONSTRAINTS tc
             JOIN information_schema.CHECK_CONSTRAINTS cc
@@ -377,7 +392,8 @@ extension MySQLIntrospector {
     }
 
     public func triggers(of table: TableRef) async throws -> [TriggerInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT TRIGGER_NAME,
                    ACTION_TIMING,
                    EVENT_MANIPULATION,
@@ -390,8 +406,8 @@ extension MySQLIntrospector {
 
         return result.rows.compactMap { row in
             guard let name = row[0].text,
-                  let timing = row[1].text.flatMap({ TriggerTiming(rawValue: $0.uppercased()) }),
-                  let event = row[2].text.flatMap({ TriggerEvent(rawValue: $0.uppercased()) })
+                let timing = row[1].text.flatMap({ TriggerTiming(rawValue: $0.uppercased()) }),
+                let event = row[2].text.flatMap({ TriggerEvent(rawValue: $0.uppercased()) })
             else { return nil }
             // A MySQL trigger fires on exactly one event and is always row-level.
             return TriggerInfo(
@@ -405,7 +421,8 @@ extension MySQLIntrospector {
     }
 
     public func partitioning(of table: TableRef) async throws -> PartitioningInfo? {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT PARTITION_NAME,
                    PARTITION_METHOD,
                    PARTITION_EXPRESSION,
@@ -419,8 +436,8 @@ extension MySQLIntrospector {
         // An unpartitioned table has one row here with a null PARTITION_NAME, which the
         // WHERE clause above has already removed.
         guard let first = result.rows.first,
-              let method = first[1].text.flatMap({ PartitionStrategy(rawValue: $0.uppercased()) }),
-              let key = first[2].text
+            let method = first[1].text.flatMap({ PartitionStrategy(rawValue: $0.uppercased()) }),
+            let key = first[2].text
         else { return nil }
 
         let partitions = result.rows.compactMap { row -> PartitionInfo? in
@@ -442,7 +459,8 @@ extension MySQLIntrospector {
     }
 
     public func collations(in database: String) async throws -> [CollationInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT COLLATION_NAME, CHARACTER_SET_NAME, IS_DEFAULT
             FROM information_schema.COLLATIONS
             ORDER BY CHARACTER_SET_NAME, COLLATION_NAME
@@ -462,7 +480,8 @@ extension MySQLIntrospector {
 
 extension MySQLIntrospector: ServerIntrospector {
     public func activity() async throws -> [ServerSessionInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT p.ID, p.USER, p.DB, p.HOST, p.COMMAND, p.STATE, p.TIME, p.INFO,
                    p.ID = CONNECTION_ID()
             FROM information_schema.PROCESSLIST p
@@ -497,7 +516,8 @@ extension MySQLIntrospector: ServerIntrospector {
     /// `mysql.user` is off limits to most accounts; `USER_PRIVILEGES` shows every account
     /// the current one is allowed to know about, which for an ordinary user is itself.
     public func users() async throws -> [ServerUserInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT u.GRANTEE, GROUP_CONCAT(u.PRIVILEGE_TYPE ORDER BY u.PRIVILEGE_TYPE SEPARATOR ', ')
             FROM information_schema.USER_PRIVILEGES u
             GROUP BY u.GRANTEE
@@ -533,7 +553,8 @@ extension MySQLIntrospector: ServerIntrospector {
 
     /// `SHOW GRANTS`, one statement per line, exactly as the server writes them.
     public func grants(for user: ServerUserInfo) async throws -> [String] {
-        let account = "\(SQLLiteral.quoteString(user.name, dialect: .mysql))@\(SQLLiteral.quoteString(user.host ?? "%", dialect: .mysql))"
+        let account =
+            "\(SQLLiteral.quoteString(user.name, dialect: .mysql))@\(SQLLiteral.quoteString(user.host ?? "%", dialect: .mysql))"
         let result = try await query("SHOW GRANTS FOR \(account)")
         return result.rows.compactMap { $0.first?.text }
     }
@@ -555,7 +576,8 @@ extension MySQLIntrospector: ServerIntrospector {
         let result = try await query("SHOW CREATE \(verb) \(qualified)")
         // Columns: Procedure/Function, sql_mode, Create Procedure/Function, …
         guard let row = result.rows.first, row.count >= 3, let ddl = row[2].text, !ddl.isEmpty else {
-            throw DBError.server(ServerError(message: "\(name) was not found, or its body is not visible to this account"))
+            throw DBError.server(
+                ServerError(message: "\(name) was not found, or its body is not visible to this account"))
         }
         return ddl + ";\n"
     }

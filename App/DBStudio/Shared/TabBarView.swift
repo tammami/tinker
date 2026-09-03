@@ -31,7 +31,7 @@ public struct TabBarView: View {
                         }
                         .dropDestination(for: String.self) { items, _ in
                             guard let moved = items.first,
-                                  let from = workspace.tabs.firstIndex(where: { $0.id.uuidString == moved })
+                                let from = workspace.tabs.firstIndex(where: { $0.id.uuidString == moved })
                             else { return false }
                             workspace.moveTab(from: from, to: index)
                             return true

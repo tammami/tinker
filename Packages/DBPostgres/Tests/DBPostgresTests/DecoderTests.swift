@@ -1,6 +1,7 @@
 import DBCore
 import NIOCore
 import XCTest
+
 @testable import DBPostgres
 
 /// Decoder tests that need no server: hand-built wire payloads in, `DBValue` out.
@@ -47,13 +48,13 @@ final class PostgresBinaryDecoderTests: XCTestCase {
     func testNumericKeepsEveryDigit() {
         // 12345.6789 → digits [1, 2345, 6789], weight 1, scale 4.
         let payload: [UInt8] = [
-            0x00, 0x03,             // 3 digit groups
-            0x00, 0x01,             // weight 1
-            0x00, 0x00,             // positive
-            0x00, 0x04,             // display scale 4
-            0x00, 0x01,             // 1
-            0x09, 0x29,             // 2345
-            0x1A, 0x85,             // 6789
+            0x00, 0x03,  // 3 digit groups
+            0x00, 0x01,  // weight 1
+            0x00, 0x00,  // positive
+            0x00, 0x04,  // display scale 4
+            0x00, 0x01,  // 1
+            0x09, 0x29,  // 2345
+            0x1A, 0x85,  // 6789
         ]
         XCTAssertEqual(decoder.decode(oid: PGOID.numeric, bytes: buffer(payload)), .decimal("12345.6789"))
     }
@@ -109,7 +110,7 @@ final class PostgresBinaryDecoderTests: XCTestCase {
 
         var timetz = ByteBufferAllocator().buffer(capacity: 12)
         timetz.writeInteger(Int64(2 * 3_600) * 1_000_000)
-        timetz.writeInteger(Int32(-7 * 3_600))   // stored west of UTC, so this prints as +07
+        timetz.writeInteger(Int32(-7 * 3_600))  // stored west of UTC, so this prints as +07
         XCTAssertEqual(decoder.decode(oid: PGOID.timetz, bytes: timetz).text, "02:00:00+07")
     }
 
@@ -129,10 +130,11 @@ final class PostgresBinaryDecoderTests: XCTestCase {
     func testTimestamptzIsRenderedInTheSessionZone() {
         let jakarta = PostgresBinaryDecoder(
             catalog: PostgresTypeCatalog(),
-            settings: PostgresSessionSettings(timeZone: TimeZone(identifier: "Asia/Jakarta"), timeZoneName: "Asia/Jakarta")
+            settings: PostgresSessionSettings(
+                timeZone: TimeZone(identifier: "Asia/Jakarta"), timeZoneName: "Asia/Jakarta")
         )
         var buffer = ByteBufferAllocator().buffer(capacity: 8)
-        buffer.writeInteger(Int64(0))   // exactly 2000-01-01 00:00:00 UTC
+        buffer.writeInteger(Int64(0))  // exactly 2000-01-01 00:00:00 UTC
         guard case let .timestamp(value) = jakarta.decode(oid: PGOID.timestamptz, bytes: buffer) else {
             return XCTFail("expected a timestamp")
         }
@@ -142,7 +144,7 @@ final class PostgresBinaryDecoderTests: XCTestCase {
 
     func testTimestampBeforeTheEpochCarriesDaysBackwards() {
         var buffer = ByteBufferAllocator().buffer(capacity: 8)
-        buffer.writeInteger(Int64(-1))   // one microsecond before 2000-01-01
+        buffer.writeInteger(Int64(-1))  // one microsecond before 2000-01-01
         guard case let .timestamp(value) = decoder.decode(oid: PGOID.timestamp, bytes: buffer) else {
             return XCTFail("expected a timestamp")
         }
@@ -171,8 +173,8 @@ final class PostgresBinaryDecoderTests: XCTestCase {
     func testIntervalRendersLikePostgres() {
         var buffer = ByteBufferAllocator().buffer(capacity: 16)
         buffer.writeInteger(Int64(4 * 3_600 + 5 * 60 + 6) * 1_000_000 + 500_000)
-        buffer.writeInteger(Int32(3))    // days
-        buffer.writeInteger(Int32(14))   // months = 1 year 2 mons
+        buffer.writeInteger(Int32(3))  // days
+        buffer.writeInteger(Int32(14))  // months = 1 year 2 mons
         XCTAssertEqual(
             decoder.decode(oid: PGOID.interval, bytes: buffer).text,
             "1 year 2 mons 3 days 04:05:06.5"
@@ -205,13 +207,13 @@ final class PostgresBinaryDecoderTests: XCTestCase {
 
     func testArrayWithNulls() {
         var buffer = ByteBufferAllocator().buffer(capacity: 64)
-        buffer.writeInteger(Int32(1))            // one dimension
-        buffer.writeInteger(Int32(1))            // has nulls
-        buffer.writeInteger(PGOID.int4)          // element type
-        buffer.writeInteger(Int32(3))            // length
-        buffer.writeInteger(Int32(1))            // lower bound
+        buffer.writeInteger(Int32(1))  // one dimension
+        buffer.writeInteger(Int32(1))  // has nulls
+        buffer.writeInteger(PGOID.int4)  // element type
+        buffer.writeInteger(Int32(3))  // length
+        buffer.writeInteger(Int32(1))  // lower bound
         buffer.writeInteger(Int32(4)); buffer.writeInteger(Int32(1))
-        buffer.writeInteger(Int32(-1))           // NULL element
+        buffer.writeInteger(Int32(-1))  // NULL element
         buffer.writeInteger(Int32(4)); buffer.writeInteger(Int32(3))
         XCTAssertEqual(
             decoder.decode(oid: 1_007, bytes: buffer),
@@ -229,7 +231,7 @@ final class PostgresBinaryDecoderTests: XCTestCase {
 
     func testUnknownTypeBecomesRawWithItsCatalogName() {
         let catalog = PostgresTypeCatalog(types: [
-            90_001: PostgresTypeInfo(name: "geometry", type: "b", category: "U", elementOID: 0, baseOID: 0),
+            90_001: PostgresTypeInfo(name: "geometry", type: "b", category: "U", elementOID: 0, baseOID: 0)
         ])
         let decoder = PostgresBinaryDecoder(catalog: catalog)
         guard case let .raw(typeName, text, bytes) = decoder.decode(oid: 90_001, bytes: buffer([1, 2, 3])) else {
@@ -252,7 +254,7 @@ final class PostgresBinaryDecoderTests: XCTestCase {
 
     func testDomainsDecodeAsTheirBaseType() {
         let catalog = PostgresTypeCatalog(types: [
-            90_004: PostgresTypeInfo(name: "positive_int", type: "d", category: "N", elementOID: 0, baseOID: PGOID.int4),
+            90_004: PostgresTypeInfo(name: "positive_int", type: "d", category: "N", elementOID: 0, baseOID: PGOID.int4)
         ])
         let decoder = PostgresBinaryDecoder(catalog: catalog)
         XCTAssertEqual(decoder.decode(oid: 90_004, bytes: buffer([0, 0, 0, 7])), .int(7))

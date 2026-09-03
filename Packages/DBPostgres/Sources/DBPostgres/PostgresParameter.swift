@@ -64,11 +64,14 @@ enum PostgresParameterEncoder {
             if case .null = item { return "NULL" }
             if case let .array(nested) = item { return arrayLiteral(nested) }
             let text = text(for: item)
-            let needsQuotes = text.isEmpty || text.uppercased() == "NULL" || text.contains(where: {
-                $0 == "," || $0 == "{" || $0 == "}" || $0 == "\"" || $0 == "\\" || $0.isWhitespace
-            })
+            let needsQuotes =
+                text.isEmpty || text.uppercased() == "NULL"
+                || text.contains(where: {
+                    $0 == "," || $0 == "{" || $0 == "}" || $0 == "\"" || $0 == "\\" || $0.isWhitespace
+                })
             guard needsQuotes else { return text }
-            let escaped = text
+            let escaped =
+                text
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "\"", with: "\\\"")
             return "\"\(escaped)\""

@@ -27,12 +27,15 @@ public struct FirstRunView: View {
             .padding(.bottom, DesignTokens.Spacing.lg)
 
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                point(Icon.key, .blue, "Passwords live in your macOS Keychain",
-                      "Never in \(Product.name)'s own files.")
-                point(Icon.shield, .green, "Every change is shown as SQL before it runs",
-                      "Grid edits run in one transaction, and roll back if anything is off.")
-                point(Icon.production, .orange, "Mark a connection Production or Read-only",
-                      "Production asks before every write. Read-only blocks them entirely.")
+                point(
+                    Icon.key, .blue, "Passwords live in your macOS Keychain",
+                    "Never in \(Product.name)'s own files.")
+                point(
+                    Icon.shield, .green, "Every change is shown as SQL before it runs",
+                    "Grid edits run in one transaction, and roll back if anything is off.")
+                point(
+                    Icon.production, .orange, "Mark a connection Production or Read-only",
+                    "Production asks before every write. Read-only blocks them entirely.")
             }
             .padding(.horizontal, DesignTokens.Spacing.xl)
 

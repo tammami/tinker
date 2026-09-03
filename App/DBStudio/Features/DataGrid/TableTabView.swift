@@ -99,7 +99,10 @@ public struct TableTabView: View {
                 Button {
                     isColumnsPopoverShown = true
                 } label: {
-                    Label(controller.hiddenColumns.isEmpty ? "Columns" : "Columns (\(controller.hiddenColumns.count) hidden)", systemImage: Icon.column)
+                    Label(
+                        controller.hiddenColumns.isEmpty
+                            ? "Columns" : "Columns (\(controller.hiddenColumns.count) hidden)", systemImage: Icon.column
+                    )
                 }
                 .buttonStyle(.borderless)
                 .help("Choose which columns the grid shows")
@@ -252,7 +255,8 @@ public struct TableTabView: View {
                 if controller.selection.mode == .rows, rows > 0 {
                     Text("\(rows) row\(rows == 1 ? "" : "s") selected").monospacedDigit()
                 } else if controller.selection.rowSpan > 1 || controller.selection.columnSpan > 1 {
-                    Text("\(controller.selection.rowSpan)×\(controller.selection.columnSpan) selected").monospacedDigit()
+                    Text("\(controller.selection.rowSpan)×\(controller.selection.columnSpan) selected")
+                        .monospacedDigit()
                 }
             }
             if let model = controller.model, model.edits.pendingStatementCount > 0 {
@@ -272,7 +276,7 @@ public struct TableTabView: View {
 
     func presentCommitPreview() {
         guard let model = controller.model,
-              let config = workspace.environment.connections.first(where: { $0.id == tab.connectionID })
+            let config = workspace.environment.connections.first(where: { $0.id == tab.connectionID })
         else { return }
         let statements = controller.pendingStatements()
         guard !statements.isEmpty else { return }
@@ -285,7 +289,6 @@ public struct TableTabView: View {
         )
     }
 }
-
 
 /// The list of a table's columns with a checkbox each: what the grid shows.
 struct ColumnsPopover: View {
@@ -306,10 +309,12 @@ struct ColumnsPopover: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                     ForEach(controller.columnsInfo) { column in
-                        Toggle(isOn: Binding(
-                            get: { !controller.hiddenColumns.contains(column.name) },
-                            set: { shown in controller.setColumn(column.name, hidden: !shown) }
-                        )) {
+                        Toggle(
+                            isOn: Binding(
+                                get: { !controller.hiddenColumns.contains(column.name) },
+                                set: { shown in controller.setColumn(column.name, hidden: !shown) }
+                            )
+                        ) {
                             HStack(spacing: DesignTokens.Spacing.sm) {
                                 Text(column.name).lineLimit(1)
                                 Text(column.nativeType).font(.caption).foregroundStyle(.tertiary).lineLimit(1)

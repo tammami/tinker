@@ -55,7 +55,9 @@ public struct ConnectionEditorView: View {
         SheetFrame(
             title: isNew ? "New Connection" : config.name,
             icon: Icon.connection,
-            subtitle: isNew ? "Passwords go to your Keychain, never to \(Product.name)'s own files." : "\(config.user)@\(config.host):\(config.port)",
+            subtitle: isNew
+                ? "Passwords go to your Keychain, never to \(Product.name)'s own files."
+                : "\(config.user)@\(config.host):\(config.port)",
             width: DesignTokens.Metrics.sheetWidth + 40,
             contentInset: 0
         ) {
@@ -83,10 +85,12 @@ public struct ConnectionEditorView: View {
                         }
                         TextField("User", text: $config.user)
                         SecureField("Password", text: $password)
-                        TextField("Database", text: Binding(
-                            get: { config.database ?? "" },
-                            set: { config.database = $0.isEmpty ? nil : $0 }
-                        ), prompt: Text(config.dialect == .mysql ? "Optional" : "postgres"))
+                        TextField(
+                            "Database",
+                            text: Binding(
+                                get: { config.database ?? "" },
+                                set: { config.database = $0.isEmpty ? nil : $0 }
+                            ), prompt: Text(config.dialect == .mysql ? "Optional" : "postgres"))
                     } header: {
                         Label("Server", systemImage: Icon.database)
                     }
@@ -98,10 +102,12 @@ public struct ConnectionEditorView: View {
                                 ForEach(ConnectionColor.allCases, id: \.self) { colorSwatch($0) }
                             }
                         }
-                        TextField("Group", text: Binding(
-                            get: { config.groupPath.joined(separator: "/") },
-                            set: { config.groupPath = $0.isEmpty ? [] : $0.components(separatedBy: "/") }
-                        ), prompt: Text("Work/Staging"))
+                        TextField(
+                            "Group",
+                            text: Binding(
+                                get: { config.groupPath.joined(separator: "/") },
+                                set: { config.groupPath = $0.isEmpty ? [] : $0.components(separatedBy: "/") }
+                            ), prompt: Text("Work/Staging"))
                         Toggle(isOn: $config.isProduction) {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text("Production")
@@ -127,14 +133,18 @@ public struct ConnectionEditorView: View {
                             }
                         }
                         if config.tls.mode.verifiesCertificate {
-                            TextField("CA file", text: Binding(
-                                get: { config.tls.caFile ?? "" },
-                                set: { config.tls.caFile = $0.isEmpty ? nil : $0 }
-                            ))
-                            TextField("Server name override", text: Binding(
-                                get: { config.tls.serverNameOverride ?? "" },
-                                set: { config.tls.serverNameOverride = $0.isEmpty ? nil : $0 }
-                            ))
+                            TextField(
+                                "CA file",
+                                text: Binding(
+                                    get: { config.tls.caFile ?? "" },
+                                    set: { config.tls.caFile = $0.isEmpty ? nil : $0 }
+                                ))
+                            TextField(
+                                "Server name override",
+                                text: Binding(
+                                    get: { config.tls.serverNameOverride ?? "" },
+                                    set: { config.tls.serverNameOverride = $0.isEmpty ? nil : $0 }
+                                ))
                         }
                     } header: {
                         Label("TLS", systemImage: Icon.lock)
@@ -158,19 +168,28 @@ public struct ConnectionEditorView: View {
                     }
 
                     Section {
-                        TextField("Statement timeout (seconds, 0 for none)", value: Binding(
-                            get: { config.statementTimeout.map { Int($0.components.seconds) } ?? 0 },
-                            set: { config.statementTimeout = $0 <= 0 ? nil : .seconds($0) }
-                        ), format: .number)
-                        TextField("Application name", text: Binding(
-                            get: { config.options[ConnectionConfig.OptionKey.applicationName] ?? Product.name },
-                            set: { config.options[ConnectionConfig.OptionKey.applicationName] = $0 }
-                        ))
-                        if config.dialect == .mysql {
-                            Toggle("Treat tinyint(1) as boolean", isOn: Binding(
-                                get: { config.options[ConnectionConfig.OptionKey.tinyint1IsBool] != "false" },
-                                set: { config.options[ConnectionConfig.OptionKey.tinyint1IsBool] = $0 ? "true" : "false" }
+                        TextField(
+                            "Statement timeout (seconds, 0 for none)",
+                            value: Binding(
+                                get: { config.statementTimeout.map { Int($0.components.seconds) } ?? 0 },
+                                set: { config.statementTimeout = $0 <= 0 ? nil : .seconds($0) }
+                            ), format: .number)
+                        TextField(
+                            "Application name",
+                            text: Binding(
+                                get: { config.options[ConnectionConfig.OptionKey.applicationName] ?? Product.name },
+                                set: { config.options[ConnectionConfig.OptionKey.applicationName] = $0 }
                             ))
+                        if config.dialect == .mysql {
+                            Toggle(
+                                "Treat tinyint(1) as boolean",
+                                isOn: Binding(
+                                    get: { config.options[ConnectionConfig.OptionKey.tinyint1IsBool] != "false" },
+                                    set: {
+                                        config.options[ConnectionConfig.OptionKey.tinyint1IsBool] =
+                                            $0 ? "true" : "false"
+                                    }
+                                ))
                         }
                     } header: {
                         Label("Advanced", systemImage: Icon.settings)
@@ -261,7 +280,8 @@ public struct ConnectionEditorView: View {
             }
         }
         if let reference = config.passwordRef,
-           let stored = try? await environment.secrets.secret(for: reference) {
+            let stored = try? await environment.secrets.secret(for: reference)
+        {
             password = stored
         }
     }
@@ -279,8 +299,9 @@ public struct ConnectionEditorView: View {
                 }
                 // A world-readable key is a warning, not a refusal.
                 if let attributes = try? FileManager.default.attributesOfItem(atPath: expanded),
-                   let permissions = attributes[.posixPermissions] as? NSNumber,
-                   permissions.intValue & 0o077 != 0 {
+                    let permissions = attributes[.posixPermissions] as? NSNumber,
+                    permissions.intValue & 0o077 != 0
+                {
                     testLog.append("Warning: \(expanded) is readable by other users; ssh may refuse it.")
                 }
             }
@@ -303,7 +324,8 @@ public struct ConnectionEditorView: View {
             case .password:
                 ssh.auth = .password(SecretRef.forConnection(result.id, field: SecretField.sshPassword.rawValue))
             case .key:
-                let passphraseRef = sshPassphrase.isEmpty
+                let passphraseRef =
+                    sshPassphrase.isEmpty
                     ? nil
                     : SecretRef.forConnection(result.id, field: SecretField.sshPassphrase.rawValue)
                 ssh.auth = .privateKey(path: sshKeyPath, passphrase: passphraseRef)
@@ -311,9 +333,10 @@ public struct ConnectionEditorView: View {
                 ssh.auth = .agent
             }
             if !jumpHost.isEmpty {
-                ssh.jumpHost = Box(SSHConfig(
-                    host: jumpHost, user: jumpUser.isEmpty ? NSUserName() : jumpUser, auth: .agent
-                ))
+                ssh.jumpHost = Box(
+                    SSHConfig(
+                        host: jumpHost, user: jumpUser.isEmpty ? NSUserName() : jumpUser, auth: .agent
+                    ))
             } else {
                 ssh.jumpHost = nil
             }

@@ -47,9 +47,10 @@ public struct FilterBarView: View {
                 BarDivider()
 
                 Button {
-                    rules.append(FilterRule(
-                        column: columns.first?.name ?? "", op: .equal, values: [.string("")]
-                    ))
+                    rules.append(
+                        FilterRule(
+                            column: columns.first?.name ?? "", op: .equal, values: [.string("")]
+                        ))
                 } label: {
                     Label("Add Condition", systemImage: Icon.add)
                 }
@@ -105,7 +106,8 @@ public struct FilterBarView: View {
 
                             if rule.op.operandCount != 0 {
                                 TextField(
-                                    rule.op == .inList ? "value, value, …"
+                                    rule.op == .inList
+                                        ? "value, value, …"
                                         : rule.op == .between ? "low, high" : "value",
                                     text: valueBinding(for: $rule)
                                 )
@@ -145,9 +147,10 @@ public struct FilterBarView: View {
     var generatedClause: String {
         let compiled = FilterCompiler.compile(rules, dialect: dialect)
         guard let clause = compiled.whereClause else { return "No filter" }
-        return "WHERE " + SQLLiteral.renderForDisplay(
-            clause, parameters: compiled.parameters, dialect: dialect
-        )
+        return "WHERE "
+            + SQLLiteral.renderForDisplay(
+                clause, parameters: compiled.parameters, dialect: dialect
+            )
     }
 
     /// Filter values are edited as text and sent as parameters; the server coerces them.
@@ -158,7 +161,8 @@ public struct FilterBarView: View {
             },
             set: { text in
                 if rule.wrappedValue.op == .inList {
-                    rule.wrappedValue.values = text
+                    rule.wrappedValue.values =
+                        text
                         .split(separator: ",")
                         .map { .string($0.trimmingCharacters(in: .whitespaces)) }
                 } else if rule.wrappedValue.op == .between {

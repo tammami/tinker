@@ -19,7 +19,8 @@ public struct CommitPreviewView: View {
         SheetFrame(
             title: "Review \(preview.statements.count) statement\(preview.statements.count == 1 ? "" : "s")",
             icon: Icon.commit,
-            subtitle: preview.summary + " on \(preview.connectionName). Everything runs in one transaction; a statement that does not affect exactly one row rolls the whole thing back.",
+            subtitle: preview.summary
+                + " on \(preview.connectionName). Everything runs in one transaction; a statement that does not affect exactly one row rolls the whole thing back.",
             width: DesignTokens.Metrics.wideSheetWidth
         ) {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
@@ -29,7 +30,9 @@ public struct CommitPreviewView: View {
                             VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                                 HStack(spacing: DesignTokens.Spacing.sm) {
                                     Text("\(index + 1)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
-                                    Badge(text: statement.kind.rawValue.uppercased(), color: Self.color(for: statement.kind))
+                                    Badge(
+                                        text: statement.kind.rawValue.uppercased(),
+                                        color: Self.color(for: statement.kind))
                                     Text(statement.table.name).font(.caption).foregroundStyle(.secondary)
                                 }
                                 Text(statement.displaySQL(dialect: preview.dialect))

@@ -3,6 +3,7 @@ import DBSQL
 import DBTestKit
 import Logging
 import XCTest
+
 @testable import DBMySQL
 
 /// The MySQL suite mirrors the PostgreSQL one statement for statement, because SPEC §16
@@ -35,7 +36,8 @@ final class MySQLIntegrationTests: XCTestCase {
                     file: file, line: line
                 )
                 let version = await connection.serverVersion
-                TestLog.note("server version: \(version.flavor.rawValue) \(version.rawString) — \(server.redactedDescription)")
+                TestLog.note(
+                    "server version: \(version.flavor.rawValue) \(version.rawString) — \(server.redactedDescription)")
                 try await body(connection, server)
             } catch {
                 await connection.close()
@@ -63,7 +65,8 @@ final class MySQLIntegrationTests: XCTestCase {
         try await withEachServer { connection, _ in
             // Reading `mysql.user` needs a privilege the test account must not have, so a
             // refusal here is the environment behaving correctly.
-            let plugin = try? await connection.executeCollecting("""
+            let plugin = try? await connection.executeCollecting(
+                """
                 SELECT plugin FROM mysql.user WHERE user = SUBSTRING_INDEX(CURRENT_USER(), '@', 1) LIMIT 1
                 """)
             let name = plugin?.firstText
@@ -142,7 +145,8 @@ final class MySQLIntegrationTests: XCTestCase {
 
     func testEveryMappedTypeRoundTrips() async throws {
         try await withEachServer { connection, _ in
-            let result = try await connection.executeCollecting("""
+            let result = try await connection.executeCollecting(
+                """
                 SELECT c_bool, c_tinyint, c_utinyint, c_smallint, c_mediumint, c_int,
                        c_bigint, c_ubigint, c_float, c_double, c_decimal,
                        c_char, c_varchar, c_text, c_binary, c_varbinary,
@@ -206,7 +210,8 @@ final class MySQLIntegrationTests: XCTestCase {
 
     func testNullsInEveryColumn() async throws {
         try await withEachServer { connection, _ in
-            let result = try await connection.executeCollecting("""
+            let result = try await connection.executeCollecting(
+                """
                 SELECT c_bool, c_bigint, c_decimal, c_text, c_blob, c_datetime, c_json, c_enum
                 FROM all_types WHERE id = 2
                 """)
@@ -217,7 +222,8 @@ final class MySQLIntegrationTests: XCTestCase {
 
     func testExtremesAndUnicode() async throws {
         try await withEachServer { connection, _ in
-            let result = try await connection.executeCollecting("""
+            let result = try await connection.executeCollecting(
+                """
                 SELECT c_tinyint, c_smallint, c_int, c_bigint, c_decimal, c_text, c_blob,
                        c_date, c_datetime
                 FROM all_types WHERE id = 3
@@ -742,7 +748,8 @@ extension MySQLIntegrationTests {
             XCTAssertTrue(procedure.uppercased().contains("PROCEDURE"), procedure)
 
             do {
-                _ = try await introspector.routineDefinition(in: schema, name: "no_such", signature: "", kind: .function)
+                _ = try await introspector.routineDefinition(
+                    in: schema, name: "no_such", signature: "", kind: .function)
                 XCTFail("expected not found")
             } catch {}
         }

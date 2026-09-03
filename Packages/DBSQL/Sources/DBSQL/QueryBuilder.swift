@@ -85,7 +85,8 @@ public struct QueryBuilderModel: Sendable, Hashable, Codable {
         public var aggregate: Aggregate
         public var alias: String?
 
-        public init(id: UUID = UUID(), table: UUID, column: String, aggregate: Aggregate = .none, alias: String? = nil) {
+        public init(id: UUID = UUID(), table: UUID, column: String, aggregate: Aggregate = .none, alias: String? = nil)
+        {
             self.id = id
             self.table = table
             self.column = column
@@ -202,30 +203,34 @@ public struct QueryBuilderModel: Sendable, Hashable, Codable {
         guard let placed = table(newTable) else { return }
         for key in keys {
             guard key.columns.count == 1, key.referencedColumns.count == 1,
-                  let target = tables.first(where: { $0.id != newTable && $0.ref == key.referencedTable })
+                let target = tables.first(where: { $0.id != newTable && $0.ref == key.referencedTable })
             else { continue }
             if !hasJoin(newTable, key.columns[0], target.id, key.referencedColumns[0]) {
-                joins.append(Join(
-                    leftTable: target.id, leftColumn: key.referencedColumns[0],
-                    rightTable: newTable, rightColumn: key.columns[0]
-                ))
+                joins.append(
+                    Join(
+                        leftTable: target.id, leftColumn: key.referencedColumns[0],
+                        rightTable: newTable, rightColumn: key.columns[0]
+                    ))
             }
         }
         _ = placed
     }
 
     /// Joins for foreign keys that point from an already-placed table at `newTable`.
-    public mutating func addJoins(toNewTable newTable: UUID, fromPlacedForeignKeys keys: [(table: UUID, key: ForeignKeyInfo)]) {
+    public mutating func addJoins(
+        toNewTable newTable: UUID, fromPlacedForeignKeys keys: [(table: UUID, key: ForeignKeyInfo)]
+    ) {
         guard let placed = table(newTable) else { return }
         for (source, key) in keys {
             guard key.columns.count == 1, key.referencedColumns.count == 1,
-                  key.referencedTable == placed.ref, source != newTable
+                key.referencedTable == placed.ref, source != newTable
             else { continue }
             if !hasJoin(source, key.columns[0], newTable, key.referencedColumns[0]) {
-                joins.append(Join(
-                    leftTable: newTable, leftColumn: key.referencedColumns[0],
-                    rightTable: source, rightColumn: key.columns[0]
-                ))
+                joins.append(
+                    Join(
+                        leftTable: newTable, leftColumn: key.referencedColumns[0],
+                        rightTable: source, rightColumn: key.columns[0]
+                    ))
             }
         }
     }
@@ -244,7 +249,8 @@ public struct QueryBuilderModel: Sendable, Hashable, Codable {
         var lines: [String] = []
 
         // SELECT
-        let selectItems: [String] = expandedFields().isEmpty
+        let selectItems: [String] =
+            expandedFields().isEmpty
             ? ["*"]
             : expandedFields().map { field in
                 var expression = qualified(field.table, field.column)
@@ -274,7 +280,7 @@ public struct QueryBuilderModel: Sendable, Hashable, Codable {
                 let leftPlaced = placed.contains(join.leftTable)
                 let rightPlaced = placed.contains(join.rightTable)
                 guard leftPlaced != rightPlaced,
-                      let newTable = table(leftPlaced ? join.rightTable : join.leftTable)
+                    let newTable = table(leftPlaced ? join.rightTable : join.leftTable)
                 else { continue }
                 if join.kind == .cross {
                     lines.append("CROSS JOIN \(fromClause(newTable))")
@@ -305,9 +311,11 @@ public struct QueryBuilderModel: Sendable, Hashable, Codable {
             lines.append("HAVING \(havingClause)")
         }
         if !orderBy.isEmpty {
-            lines.append("ORDER BY " + orderBy.map {
-                qualified($0.table, $0.column) + ($0.ascending ? " ASC" : " DESC")
-            }.joined(separator: ", "))
+            lines.append(
+                "ORDER BY "
+                    + orderBy.map {
+                        qualified($0.table, $0.column) + ($0.ascending ? " ASC" : " DESC")
+                    }.joined(separator: ", "))
         }
         if let limit, limit > 0 {
             lines.append("LIMIT \(limit)")
@@ -344,8 +352,8 @@ public struct QueryBuilderModel: Sendable, Hashable, Codable {
         }
         return expanded.map { field in
             guard field.aggregate == .none, !field.isStar, field.alias == nil,
-                  counts[field.column, default: 0] > 1,
-                  let alias = table(field.table)?.alias
+                counts[field.column, default: 0] > 1,
+                let alias = table(field.table)?.alias
             else { return field }
             var renamed = field
             renamed.alias = "\(alias)_\(field.column)"
@@ -372,23 +380,25 @@ public struct QueryBuilderModel: Sendable, Hashable, Codable {
             case .isNotNull: text = "\(column) IS NOT NULL"
             case .equal, .notEqual, .lessThan, .lessOrEqual, .greaterThan, .greaterOrEqual:
                 guard let value = condition.values.first, !(value.text ?? "").isEmpty else { text = nil; break }
-                let symbol: String = switch condition.op {
-                case .equal: "="
-                case .notEqual: "<>"
-                case .lessThan: "<"
-                case .lessOrEqual: "<="
-                case .greaterThan: ">"
-                default: ">="
-                }
+                let symbol: String =
+                    switch condition.op {
+                    case .equal: "="
+                    case .notEqual: "<>"
+                    case .lessThan: "<"
+                    case .lessOrEqual: "<="
+                    case .greaterThan: ">"
+                    default: ">="
+                    }
                 text = "\(column) \(symbol) \(value.sqlLiteral(dialect: dialect))"
             case .contains, .startsWith, .endsWith, .anyContains:
                 guard let raw = condition.values.first?.text, !raw.isEmpty else { text = nil; break }
                 let escaped = FilterCompiler.escapeLikePattern(raw)
-                let pattern: String = switch condition.op {
-                case .startsWith: "\(escaped)%"
-                case .endsWith: "%\(escaped)"
-                default: "%\(escaped)%"
-                }
+                let pattern: String =
+                    switch condition.op {
+                    case .startsWith: "\(escaped)%"
+                    case .endsWith: "%\(escaped)"
+                    default: "%\(escaped)%"
+                    }
                 let lhs = dialect == .postgresql ? "\(column)::text" : "CAST(\(column) AS CHAR)"
                 text = "\(lhs) LIKE \(DBValue.string(pattern).sqlLiteral(dialect: dialect)) ESCAPE '!'"
             case .inList:
@@ -397,7 +407,8 @@ public struct QueryBuilderModel: Sendable, Hashable, Codable {
                 text = "\(column) IN (\(items.map { $0.sqlLiteral(dialect: dialect) }.joined(separator: ", ")))"
             case .between:
                 guard condition.values.count >= 2 else { text = nil; break }
-                text = "\(column) BETWEEN \(condition.values[0].sqlLiteral(dialect: dialect)) AND \(condition.values[1].sqlLiteral(dialect: dialect))"
+                text =
+                    "\(column) BETWEEN \(condition.values[0].sqlLiteral(dialect: dialect)) AND \(condition.values[1].sqlLiteral(dialect: dialect))"
             }
             guard let text else { continue }
             if parts.isEmpty {

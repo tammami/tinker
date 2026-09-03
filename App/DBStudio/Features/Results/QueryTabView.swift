@@ -122,10 +122,13 @@ public struct QueryTabView: View {
             BarDivider()
 
             // The tab's session: statements resolve unqualified names here.
-            Picker("Connection", selection: Binding(
-                get: { controller.connectionID },
-                set: { id in Task { await controller.selectConnection(id) } }
-            )) {
+            Picker(
+                "Connection",
+                selection: Binding(
+                    get: { controller.connectionID },
+                    set: { id in Task { await controller.selectConnection(id) } }
+                )
+            ) {
                 ForEach(controller.availableConnections) { config in
                     Label(config.name, systemImage: Icon.connection).tag(config.id)
                 }
@@ -134,10 +137,13 @@ public struct QueryTabView: View {
             .frame(width: 170)
             .help("The connection this tab runs on")
 
-            Picker("Database", selection: Binding(
-                get: { controller.sessionDatabase ?? "" },
-                set: { name in Task { await controller.selectDatabase(name) } }
-            )) {
+            Picker(
+                "Database",
+                selection: Binding(
+                    get: { controller.sessionDatabase ?? "" },
+                    set: { name in Task { await controller.selectDatabase(name) } }
+                )
+            ) {
                 if controller.sessionDatabase == nil {
                     Text("Choose…").tag("")
                 }
@@ -155,10 +161,13 @@ public struct QueryTabView: View {
 
             BarDivider()
 
-            Toggle("Auto-commit", isOn: Binding(
-                get: { controller.autoCommit },
-                set: { value in Task { await controller.setAutoCommit(value) } }
-            ))
+            Toggle(
+                "Auto-commit",
+                isOn: Binding(
+                    get: { controller.autoCommit },
+                    set: { value in Task { await controller.setAutoCommit(value) } }
+                )
+            )
             .toggleStyle(.checkbox)
             .help("Off holds a transaction open until you commit or roll back")
 
@@ -262,14 +271,16 @@ public struct QueryTabView: View {
             case .message: messagePane(result)
             case .result: rowsPane(result)
             case .text: textPane(result)
-            case .profile: tablePane(
-                columns: result.profileColumns, rows: result.profile, note: result.profileNote
-            )
-            .task(id: result.id) { await controller.loadProfile(for: result) }
-            case .status: tablePane(
-                columns: result.statusColumns, rows: result.status, note: result.statusNote
-            )
-            .task(id: result.id) { await controller.loadStatus(for: result) }
+            case .profile:
+                tablePane(
+                    columns: result.profileColumns, rows: result.profile, note: result.profileNote
+                )
+                .task(id: result.id) { await controller.loadProfile(for: result) }
+            case .status:
+                tablePane(
+                    columns: result.statusColumns, rows: result.status, note: result.statusNote
+                )
+                .task(id: result.id) { await controller.loadStatus(for: result) }
             }
         } else {
             EmptyStateView(
@@ -353,7 +364,8 @@ public struct QueryTabView: View {
     }
 
     static func seconds(_ duration: Duration) -> String {
-        let ms = Double(duration.components.attoseconds) / 1e15
+        let ms =
+            Double(duration.components.attoseconds) / 1e15
             + Double(duration.components.seconds) * 1000
         return ms < 1_000 ? String(format: "%.0f ms", ms) : String(format: "%.3f s", ms / 1000)
     }

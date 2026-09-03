@@ -43,7 +43,8 @@ struct DDLPreviewView: View {
                 if !destructive.isEmpty {
                     InlineBanner(
                         kind: .error,
-                        message: "\(destructive.count) statement\(destructive.count == 1 ? "" : "s") discard\(destructive.count == 1 ? "s" : "") data that cannot be recovered.",
+                        message:
+                            "\(destructive.count) statement\(destructive.count == 1 ? "" : "s") discard\(destructive.count == 1 ? "s" : "") data that cannot be recovered.",
                         onDismiss: {}
                     )
                 }

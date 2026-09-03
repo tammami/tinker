@@ -166,7 +166,8 @@ final class CompletionPopover: NSObject, NSTableViewDataSource, NSTableViewDeleg
     ) -> NSView? {
         guard candidates.indices.contains(row) else { return nil }
         let identifier = NSUserInterfaceItemIdentifier("CompletionRow")
-        let view = tableView.makeView(withIdentifier: identifier, owner: self) as? CompletionRowView
+        let view =
+            tableView.makeView(withIdentifier: identifier, owner: self) as? CompletionRowView
             ?? {
                 let fresh = CompletionRowView()
                 fresh.identifier = identifier

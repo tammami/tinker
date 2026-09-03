@@ -95,8 +95,9 @@ public struct CellInspectorView: View {
                     onSetNull: { onSetNull(focusedColumn) }
                 )
             } else {
-                EmptyStateView(icon: Icon.inspector, title: "No cell selected",
-                               message: "Click a cell in the grid to see its full value here.")
+                EmptyStateView(
+                    icon: Icon.inspector, title: "No cell selected",
+                    message: "Click a cell in the grid to see its full value here.")
             }
         }
         .padding(DesignTokens.Spacing.md)
@@ -127,8 +128,9 @@ public struct CellInspectorView: View {
                 .padding(DesignTokens.Spacing.md)
             }
         } else {
-            EmptyStateView(icon: Icon.form, title: "No row selected",
-                           message: "Click a row in the grid to edit it as a form.")
+            EmptyStateView(
+                icon: Icon.form, title: "No row selected",
+                message: "Click a row in the grid to edit it as a form.")
         }
     }
 }
@@ -302,7 +304,8 @@ private struct CellValueEditor: View {
                     // A date is typed or picked; either way the text below is what is sent.
                     HStack {
                         Toggle(isOn: $isPickerShown) {
-                            Label(kind == .time ? "Clock" : "Calendar", systemImage: kind == .time ? "clock" : "calendar")
+                            Label(
+                                kind == .time ? "Clock" : "Calendar", systemImage: kind == .time ? "clock" : "calendar")
                         }
                         .toggleStyle(.button)
                         .controlSize(.small)
@@ -367,10 +370,10 @@ extension CellInspectorView {
 
     static func prettyJSON(_ text: String) -> String {
         guard let data = text.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]),
-              let pretty = try? JSONSerialization.data(
-                  withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .fragmentsAllowed]
-              )
+            let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]),
+            let pretty = try? JSONSerialization.data(
+                withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .fragmentsAllowed]
+            )
         else { return text }
         return String(decoding: pretty, as: UTF8.self)
     }

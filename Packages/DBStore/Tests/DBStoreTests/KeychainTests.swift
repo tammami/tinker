@@ -1,6 +1,7 @@
 import DBCore
 import Foundation
 import XCTest
+
 @testable import DBStore
 
 /// Keychain round-trips, run against a scratch service name so nothing the user owns is
@@ -59,7 +60,8 @@ final class KeychainSecretStoreTests: XCTestCase {
 
     func testDeletingAConnectionRemovesEveryField() async throws {
         for field in SecretField.allCases {
-            try await store.setSecret("value-\(field.rawValue)", for: SecretRef.forConnection(connectionID, field: field.rawValue))
+            try await store.setSecret(
+                "value-\(field.rawValue)", for: SecretRef.forConnection(connectionID, field: field.rawValue))
         }
         for field in SecretField.allCases {
             let stored = try await store.secret(for: SecretRef.forConnection(connectionID, field: field.rawValue))

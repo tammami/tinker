@@ -151,9 +151,10 @@ public struct EditBuffer: Sendable {
         var statements: [GeneratedStatement] = []
         for row in edits.keys.sorted() {
             guard let edit = edits[row], !edit.changes.isEmpty else { continue }
-            statements.append(try generator.update(
-                changes: edit.changes, originalIdentity: edit.originalIdentity
-            ))
+            statements.append(
+                try generator.update(
+                    changes: edit.changes, originalIdentity: edit.originalIdentity
+                ))
         }
         for row in deletions.sorted() {
             guard let identity = deletionIdentities[row] else {

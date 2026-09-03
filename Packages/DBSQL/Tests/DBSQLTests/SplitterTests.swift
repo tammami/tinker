@@ -1,5 +1,6 @@
 import DBCore
 import XCTest
+
 @testable import DBSQL
 
 final class StatementSplitterTests: XCTestCase {
@@ -28,10 +29,10 @@ final class StatementSplitterTests: XCTestCase {
 
     func testIgnoresSemicolonsInsideComments() {
         let shared = """
-        SELECT 1; -- trailing; comment
-        /* block ; comment */ SELECT 2;
-        SELECT 3
-        """
+            SELECT 1; -- trailing; comment
+            /* block ; comment */ SELECT 2;
+            SELECT 3
+            """
         let pg = StatementSplitter.split(shared, dialect: .postgresql)
         XCTAssertEqual(pg.map { $0.text.hasSuffix("3") }, [false, false, true])
         XCTAssertEqual(pg.count, 3)
@@ -49,13 +50,13 @@ final class StatementSplitterTests: XCTestCase {
 
     func testDollarQuotedBodyKeepsItsSemicolons() {
         let sql = """
-        CREATE FUNCTION f() RETURNS int AS $$
-        BEGIN
-            RETURN 1;
-        END;
-        $$ LANGUAGE plpgsql;
-        SELECT f()
-        """
+            CREATE FUNCTION f() RETURNS int AS $$
+            BEGIN
+                RETURN 1;
+            END;
+            $$ LANGUAGE plpgsql;
+            SELECT f()
+            """
         let statements = StatementSplitter.split(sql, dialect: .postgresql)
         XCTAssertEqual(statements.count, 2)
         XCTAssertTrue(statements[0].text.contains("RETURN 1;"))
@@ -76,15 +77,15 @@ final class StatementSplitterTests: XCTestCase {
 
     func testMySQLDelimiterDirective() {
         let sql = """
-        DELIMITER $$
-        CREATE PROCEDURE p()
-        BEGIN
-            SELECT 1;
-            SELECT 2;
-        END$$
-        DELIMITER ;
-        SELECT 3;
-        """
+            DELIMITER $$
+            CREATE PROCEDURE p()
+            BEGIN
+                SELECT 1;
+                SELECT 2;
+            END$$
+            DELIMITER ;
+            SELECT 3;
+            """
         let statements = StatementSplitter.split(sql, dialect: .mysql)
         XCTAssertEqual(statements.count, 2)
         XCTAssertTrue(statements[0].text.hasPrefix("CREATE PROCEDURE p()"))

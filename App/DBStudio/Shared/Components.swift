@@ -436,7 +436,6 @@ extension View {
     }
 }
 
-
 extension View {
     /// Focuses `binding` when ⌘F asks for the front tab's search field.
     func focusesOnSearchCommand(_ binding: FocusState<Bool>.Binding) -> some View {

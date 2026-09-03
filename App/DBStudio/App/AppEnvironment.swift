@@ -85,7 +85,8 @@ public final class AppEnvironment {
         copy.id = UUID()
         copy.name = "\(config.name) copy"
         if let source = config.passwordRef,
-           let password = try? await secrets.secret(for: source) {
+            let password = try? await secrets.secret(for: source)
+        {
             let destination = SecretRef.forConnection(copy.id, field: SecretField.password.rawValue)
             try? await secrets.setSecret(password, for: destination)
             copy.passwordRef = destination
@@ -122,10 +123,11 @@ public final class AppEnvironment {
         }
         for group in groups where group.path.starts(with: path) {
             try? await store?.deleteGroup(path: group.path)
-            try? await store?.save(StoredGroup(
-                path: renamed + Array(group.path.dropFirst(path.count)),
-                isExpanded: group.isExpanded, sortOrder: group.sortOrder
-            ))
+            try? await store?.save(
+                StoredGroup(
+                    path: renamed + Array(group.path.dropFirst(path.count)),
+                    isExpanded: group.isExpanded, sortOrder: group.sortOrder
+                ))
         }
         await reloadFromStore()
     }
@@ -143,7 +145,8 @@ public final class AppEnvironment {
             try? await store?.deleteGroup(path: group.path)
             let rest = Array(group.path.dropFirst(path.count))
             if !rest.isEmpty {
-                try? await store?.save(StoredGroup(path: parent + rest, isExpanded: group.isExpanded, sortOrder: group.sortOrder))
+                try? await store?.save(
+                    StoredGroup(path: parent + rest, isExpanded: group.isExpanded, sortOrder: group.sortOrder))
             }
         }
         await reloadFromStore()

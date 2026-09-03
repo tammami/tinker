@@ -148,7 +148,8 @@ public actor DBStore {
     /// A store left by an earlier build under the old name is moved into place rather than
     /// abandoned, so renaming the product costs nobody their connections.
     public static var defaultPath: String {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        let base =
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
         let folder = base.appendingPathComponent(folderName, isDirectory: true)
         let legacy = base.appendingPathComponent(legacyFolderName, isDirectory: true)
@@ -346,8 +347,8 @@ public actor DBStore {
 
         return try await database.query(sql, parameters).compactMap { row in
             guard let connectionText = row["connection_id"].textValue,
-                  let connectionID = UUID(uuidString: connectionText),
-                  let statement = row["sql"].textValue
+                let connectionID = UUID(uuidString: connectionText),
+                let statement = row["sql"].textValue
             else { return nil }
             return QueryHistoryEntry(
                 id: row["id"].intValue ?? 0,
@@ -384,7 +385,7 @@ public actor DBStore {
         sql += " ORDER BY name COLLATE NOCASE, id"
         return try await database.query(sql, parameters).compactMap { row in
             guard let id = row["id"].intValue, let name = row["name"].textValue,
-                  let body = row["body"].textValue
+                let body = row["body"].textValue
             else { return nil }
             return Snippet(
                 id: id, name: name, body: body, dialect: row["dialect"].textValue,
@@ -401,15 +402,19 @@ public actor DBStore {
         if snippet.id == 0 {
             try await database.execute(
                 "INSERT INTO snippets (name, body, dialect, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                [.text(snippet.name), .text(snippet.body), snippet.dialect.map(SQLiteValue.text) ?? .null,
-                 .real(now), .real(now)]
+                [
+                    .text(snippet.name), .text(snippet.body), snippet.dialect.map(SQLiteValue.text) ?? .null,
+                    .real(now), .real(now),
+                ]
             )
             return await database.lastInsertRowID
         }
         try await database.execute(
             "UPDATE snippets SET name = ?, body = ?, dialect = ?, updated_at = ? WHERE id = ?",
-            [.text(snippet.name), .text(snippet.body), snippet.dialect.map(SQLiteValue.text) ?? .null,
-             .real(now), .integer(snippet.id)]
+            [
+                .text(snippet.name), .text(snippet.body), snippet.dialect.map(SQLiteValue.text) ?? .null,
+                .real(now), .integer(snippet.id),
+            ]
         )
         return snippet.id
     }

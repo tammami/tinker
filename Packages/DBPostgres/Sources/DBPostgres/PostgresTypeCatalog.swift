@@ -51,7 +51,7 @@ public struct PostgresTypeCatalog: Sendable {
         types.reserveCapacity(rows.count)
         for row in rows where row.count >= 6 {
             guard case let .int(oid) = row[0], oid >= 0,
-                  case let .string(name) = row[1]
+                case let .string(name) = row[1]
             else { continue }
             let typeChar = row[2].text?.first ?? "b"
             let categoryChar = row[3].text?.first ?? "U"

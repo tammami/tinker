@@ -45,9 +45,10 @@ public actor MySQLSQLConnection: SQLConnection {
             flavor: Self.flavor(from: versionText), rawString: versionText
         )
         let tinyint1IsBool = config.options[ConnectionConfig.OptionKey.tinyint1IsBool] != "false"
-        decoder = MySQLValueDecoder(settings: MySQLSessionSettings(
-            tinyint1IsBool: tinyint1IsBool, timeZoneName: timeZone
-        ))
+        decoder = MySQLValueDecoder(
+            settings: MySQLSessionSettings(
+                tinyint1IsBool: tinyint1IsBool, timeZoneName: timeZone
+            ))
         introspector = MySQLIntrospector(
             connection: underlying, logger: logger, decoder: decoder,
             version: serverVersion, currentDatabase: config.database ?? ""
@@ -58,7 +59,8 @@ public actor MySQLSQLConnection: SQLConnection {
             "SET character_set_results = utf8mb4", on: underlying, logger: logger, decoder: decoder
         )
         if let timeout = config.statementTimeout {
-            let milliseconds = timeout.components.seconds * 1_000
+            let milliseconds =
+                timeout.components.seconds * 1_000
                 + Int64(timeout.components.attoseconds / 1_000_000_000_000_000)
             // MariaDB spells it differently, and neither server minds an unknown variable
             // being set in its own dialect's statement failing.
@@ -212,14 +214,16 @@ public actor MySQLSQLConnection: SQLConnection {
 
             let rowCount = batcher.finish()
             let metadata = metadataBox.withLockedValue { $0 }
-            continuation.yield(.complete(QueryCompletion(
-                affectedRows: rowCount > 0
-                    ? Int64(rowCount)
-                    : metadata.map { Int64($0.affectedRows) },
-                lastInsertID: metadata?.lastInsertID.map { Int64($0) },
-                serverTag: Self.tag(sql: sql, metadata: metadata, rowCount: rowCount),
-                durationTotal: started.duration(to: .now)
-            )))
+            continuation.yield(
+                .complete(
+                    QueryCompletion(
+                        affectedRows: rowCount > 0
+                            ? Int64(rowCount)
+                            : metadata.map { Int64($0.affectedRows) },
+                        lastInsertID: metadata?.lastInsertID.map { Int64($0) },
+                        serverTag: Self.tag(sql: sql, metadata: metadata, rowCount: rowCount),
+                        durationTotal: started.duration(to: .now)
+                    )))
             noteTransactionKeyword(in: sql)
             continuation.finish()
         } catch {

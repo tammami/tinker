@@ -135,11 +135,12 @@ public final class GridModel {
         self.identityColumns = identityColumns
         self.identityKind = identityKind
         self.buffer = buffer
-        planner = if case let .table(table) = source {
-            PagePlanner(dialect: dialect, table: table)
-        } else {
-            nil
-        }
+        planner =
+            if case let .table(table) = source {
+                PagePlanner(dialect: dialect, table: table)
+            } else {
+                nil
+            }
     }
 
     /// How many rows the table view should claim, including the pending new rows.
@@ -147,17 +148,19 @@ public final class GridModel {
     /// Before an exact count exists the estimate sizes the scrollbar, so dragging it to
     /// the end works on a table nobody has counted (SPEC §12.6).
     public var displayRowCount: Int {
-        let known = if let total = totalCount {
-            Int(total)
-        } else if !isPaged, filter.isEmpty, let estimate = estimatedTotal,
-                  estimate > Int64(rowCount) {
-            // The estimate counts the whole table. Under a filter it is not the number of
-            // matching rows, and using it draws thousands of rows that hold nothing —
-            // which is what a filtered grid looked like when its first page failed to load.
-            Int(estimate)
-        } else {
-            rowCount
-        }
+        let known =
+            if let total = totalCount {
+                Int(total)
+            } else if !isPaged, filter.isEmpty, let estimate = estimatedTotal,
+                estimate > Int64(rowCount)
+            {
+                // The estimate counts the whole table. Under a filter it is not the number of
+                // matching rows, and using it draws thousands of rows that hold nothing —
+                // which is what a filtered grid looked like when its first page failed to load.
+                Int(estimate)
+            } else {
+                rowCount
+            }
         return known + edits.pendingInserts.count
     }
 
@@ -246,10 +249,11 @@ public final class GridModel {
     /// the planner allows it *and* the preceding page is loaded. Dragging the scrollbar
     /// into unloaded territory falls back to `OFFSET`, which can position anywhere.
     public func strategy(forPage page: Int) -> PagingStrategy {
-        let preferred = planner?.strategy(
-            page: page, userSort: sort,
-            identityColumns: identityColumns, identityKind: identityKind
-        ) ?? .offset
+        let preferred =
+            planner?.strategy(
+                page: page, userSort: sort,
+                identityColumns: identityColumns, identityKind: identityKind
+            ) ?? .offset
         guard case let .keyset(column) = preferred else { return .offset }
         return keysetAnchor(forPage: page, column: column) == nil ? .offset : preferred
     }
@@ -257,9 +261,9 @@ public final class GridModel {
     /// The key value of the last row before `page`, which is where a keyset page resumes.
     func keysetAnchor(forPage page: Int, column: String) -> DBValue? {
         guard page > 0,
-              let index = columns.firstIndex(where: { $0.name == column }),
-              let previous = buffer.row(at: page * buffer.pageSize - 1),
-              index < previous.count
+            let index = columns.firstIndex(where: { $0.name == column }),
+            let previous = buffer.row(at: page * buffer.pageSize - 1),
+            index < previous.count
         else { return nil }
         return previous[index]
     }

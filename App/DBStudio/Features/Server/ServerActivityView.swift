@@ -262,7 +262,9 @@ public struct ServerActivityView: View {
                     }
                     .help("Create a user and grant it privileges on a database")
                     IconButton(icon: Icon.edit, label: "Edit user: password, attributes, grants") {
-                        if let user = selectedUser { userEditor = UserEditorRequest(mode: .edit(user), database: controller.focusDatabase) }
+                        if let user = selectedUser {
+                            userEditor = UserEditorRequest(mode: .edit(user), database: controller.focusDatabase)
+                        }
                     }
                     .disabled(selectedUser == nil)
                     IconButton(icon: Icon.delete, label: "Drop user", isDestructive: true) {
@@ -290,11 +292,15 @@ public struct ServerActivityView: View {
             StatusBarView {
                 switch pane {
                 case .sessions:
-                    Text("\(controller.visibleSessions.count) session\(controller.visibleSessions.count == 1 ? "" : "s")")
+                    Text(
+                        "\(controller.visibleSessions.count) session\(controller.visibleSessions.count == 1 ? "" : "s")"
+                    )
                 case .users:
                     Text("\(controller.visibleUsers.count) account\(controller.visibleUsers.count == 1 ? "" : "s")")
                 case .variables:
-                    Text("\(controller.visibleVariables.count) setting\(controller.visibleVariables.count == 1 ? "" : "s")")
+                    Text(
+                        "\(controller.visibleVariables.count) setting\(controller.visibleVariables.count == 1 ? "" : "s")"
+                    )
                 }
                 Spacer()
                 if let at = controller.refreshedAt {
@@ -333,11 +339,14 @@ public struct ServerActivityView: View {
             DestructiveConfirmationView(
                 confirmation: DestructiveConfirmation(
                     title: "Drop user “\(user.id)”?",
-                    message: "The account and its grants are removed from the server. Objects it owns are left alone, and the server refuses if any depend on it.",
+                    message:
+                        "The account and its grants are removed from the server. Objects it owns are left alone, and the server refuses if any depend on it.",
                     confirmTitle: "Drop User",
                     action: {
                         let request = UserRequest(name: user.name, host: user.host ?? "%")
-                        if let failure = await controller.runUserStatements([UserOperations.drop(request, dialect: controller.dialect)]) {
+                        if let failure = await controller.runUserStatements([
+                            UserOperations.drop(request, dialect: controller.dialect)
+                        ]) {
                             controller.report(failure)
                         }
                     }
@@ -349,7 +358,8 @@ public struct ServerActivityView: View {
             DestructiveConfirmationView(
                 confirmation: DestructiveConfirmation(
                     title: "End session \(session.id)?",
-                    message: "The connection from \(session.user ?? "?") at \(session.clientAddress ?? "?") is closed on the server and whatever it is running is cancelled.",
+                    message:
+                        "The connection from \(session.user ?? "?") at \(session.clientAddress ?? "?") is closed on the server and whatever it is running is cancelled.",
                     confirmTitle: "End Session",
                     action: { await controller.terminate(session.id) }
                 ),
@@ -375,8 +385,9 @@ public struct ServerActivityView: View {
     @ViewBuilder
     private var sessionsPane: some View {
         if controller.visibleSessions.isEmpty, !controller.isLoading {
-            EmptyStateView(icon: Icon.activity, title: "No sessions to show",
-                           message: controller.search.isEmpty ? nil : "Nothing matches “\(controller.search)”.")
+            EmptyStateView(
+                icon: Icon.activity, title: "No sessions to show",
+                message: controller.search.isEmpty ? nil : "Nothing matches “\(controller.search)”.")
         } else {
             VStack(spacing: 0) {
                 columnHeader(["ID", "User", "Database", "Client", "State", "Duration", "Query"], widths: sessionWidths)
@@ -405,7 +416,9 @@ public struct ServerActivityView: View {
             cell(sessionWidths[3]) { Text(session.clientAddress ?? "—").foregroundStyle(.secondary) }
             cell(sessionWidths[4]) {
                 Text(session.state ?? "—")
-                    .foregroundStyle(session.state?.lowercased().hasPrefix("active") == true || session.state == "Query" ? Color.green : .secondary)
+                    .foregroundStyle(
+                        session.state?.lowercased().hasPrefix("active") == true || session.state == "Query"
+                            ? Color.green : .secondary)
             }
             cell(sessionWidths[5]) { Text(session.duration ?? "—").monospacedDigit().foregroundStyle(.secondary) }
             cell(nil) {
@@ -417,7 +430,8 @@ public struct ServerActivityView: View {
         .font(.callout)
         .frame(height: 26)
         .background(
-            isSelected ? Color.accentColor.opacity(0.14)
+            isSelected
+                ? Color.accentColor.opacity(0.14)
                 : (index.isMultiple(of: 2) ? Color.clear : Color(nsColor: .alternatingContentBackgroundColors[1]))
         )
         .contentShape(Rectangle())
@@ -452,11 +466,13 @@ public struct ServerActivityView: View {
     @ViewBuilder
     private var usersPane: some View {
         if controller.visibleUsers.isEmpty {
-            EmptyStateView(icon: Icon.user, title: "No accounts visible",
-                           message: "The server shows each account only what it is allowed to see.")
+            EmptyStateView(
+                icon: Icon.user, title: "No accounts visible",
+                message: "The server shows each account only what it is allowed to see.")
         } else {
             VStack(spacing: 0) {
-                columnHeader(["Name", "Host", "Super", "Login", "Create DB", "Create role", "Attributes"], widths: userWidths)
+                columnHeader(
+                    ["Name", "Host", "Super", "Login", "Create DB", "Create role", "Attributes"], widths: userWidths)
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(controller.visibleUsers.enumerated()), id: \.element.id) { index, user in
@@ -480,8 +496,10 @@ public struct ServerActivityView: View {
                             .font(.callout)
                             .frame(height: 26)
                             .background(
-                                isSelected ? Color.accentColor.opacity(0.14)
-                                    : (index.isMultiple(of: 2) ? Color.clear : Color(nsColor: .alternatingContentBackgroundColors[1]))
+                                isSelected
+                                    ? Color.accentColor.opacity(0.14)
+                                    : (index.isMultiple(of: 2)
+                                        ? Color.clear : Color(nsColor: .alternatingContentBackgroundColors[1]))
                             )
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -492,18 +510,24 @@ public struct ServerActivityView: View {
                                 userEditor = UserEditorRequest(mode: .edit(user), database: controller.focusDatabase)
                             }
                             .contextMenu {
-                                Button { userEditor = UserEditorRequest(mode: .edit(user), database: controller.focusDatabase) } label: {
+                                Button {
+                                    userEditor = UserEditorRequest(
+                                        mode: .edit(user), database: controller.focusDatabase)
+                                } label: {
                                     Label("Edit…", systemImage: Icon.edit)
                                 }
                                 Button {
                                     NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(controller.grantLines.joined(separator: ";\n"), forType: .string)
+                                    NSPasteboard.general.setString(
+                                        controller.grantLines.joined(separator: ";\n"), forType: .string)
                                 } label: {
                                     Label("Copy Grants", systemImage: Icon.copy)
                                 }
                                 .disabled(controller.selectedUserID != user.id || controller.grantLines.isEmpty)
                                 Divider()
-                                Button(role: .destructive) { droppingUser = user } label: {
+                                Button(role: .destructive) {
+                                    droppingUser = user
+                                } label: {
                                     Label("Drop User…", systemImage: Icon.delete)
                                 }
                             }
@@ -563,19 +587,27 @@ public struct ServerActivityView: View {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(controller.visibleVariables.enumerated()), id: \.element.id) { index, variable in
                             HStack(spacing: 0) {
-                                cell(variableWidths[0]) { Text(variable.name).font(.system(.callout, design: .monospaced)) }
-                                cell(variableWidths[1]) { Text(variable.value).font(.system(.callout, design: .monospaced)) }
+                                cell(variableWidths[0]) {
+                                    Text(variable.name).font(.system(.callout, design: .monospaced))
+                                }
+                                cell(variableWidths[1]) {
+                                    Text(variable.value).font(.system(.callout, design: .monospaced))
+                                }
                                 cell(variableWidths[2]) { Text(variable.unit ?? "").foregroundStyle(.secondary) }
                                 cell(variableWidths[3]) { Text(variable.category ?? "").foregroundStyle(.secondary) }
                                 cell(nil) { Text(variable.summary ?? "").foregroundStyle(.secondary) }
                             }
                             .font(.callout)
                             .frame(height: 24)
-                            .background(index.isMultiple(of: 2) ? Color.clear : Color(nsColor: .alternatingContentBackgroundColors[1]))
+                            .background(
+                                index.isMultiple(of: 2)
+                                    ? Color.clear : Color(nsColor: .alternatingContentBackgroundColors[1])
+                            )
                             .contextMenu {
                                 Button {
                                     NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString("\(variable.name) = \(variable.value)", forType: .string)
+                                    NSPasteboard.general.setString(
+                                        "\(variable.name) = \(variable.value)", forType: .string)
                                 } label: {
                                     Label("Copy", systemImage: Icon.copy)
                                 }
@@ -614,7 +646,6 @@ public struct ServerActivityView: View {
     }
 }
 
-
 /// What the user editor is doing.
 struct UserEditorRequest: Identifiable {
     enum Mode {
@@ -643,8 +674,10 @@ struct UserEditorSheet: View {
     private var isMySQL: Bool { controller.dialect == .mysql }
 
     private var statements: [String] {
-        (try? (isCreate ? UserOperations.create(user, dialect: controller.dialect)
-                        : UserOperations.alter(user, dialect: controller.dialect))) ?? []
+        (try?
+            (isCreate
+            ? UserOperations.create(user, dialect: controller.dialect)
+            : UserOperations.alter(user, dialect: controller.dialect))) ?? []
     }
 
     private var problem: String? {
@@ -671,9 +704,11 @@ struct UserEditorSheet: View {
                         if isMySQL {
                             TextField("Host", text: $user.host, prompt: Text("% for any host")).disabled(!isCreate)
                         }
-                        SecureField(isCreate ? "Password" : "New password", text: Binding(
-                            get: { user.password ?? "" }, set: { user.password = $0.isEmpty ? nil : $0 }
-                        ), prompt: Text(isCreate ? "Required" : "Leave empty to keep"))
+                        SecureField(
+                            isCreate ? "Password" : "New password",
+                            text: Binding(
+                                get: { user.password ?? "" }, set: { user.password = $0.isEmpty ? nil : $0 }
+                            ), prompt: Text(isCreate ? "Required" : "Leave empty to keep"))
                     } header: {
                         Label("Account", systemImage: Icon.user)
                     }
@@ -686,29 +721,40 @@ struct UserEditorSheet: View {
                         Toggle(isOn: $user.isSuperuser) {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(isMySQL ? "All privileges on every database" : "Superuser")
-                                Text("Everything, everywhere. Rarely what a person needs.").font(.caption).foregroundStyle(.secondary)
+                                Text("Everything, everywhere. Rarely what a person needs.").font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
                         }
                     } header: {
                         Label("Attributes", systemImage: Icon.shield)
                     }
                     Section {
-                        Picker("Database", selection: Binding(
-                            get: { user.database ?? "" }, set: { user.database = $0.isEmpty ? nil : $0 }
-                        )) {
+                        Picker(
+                            "Database",
+                            selection: Binding(
+                                get: { user.database ?? "" }, set: { user.database = $0.isEmpty ? nil : $0 }
+                            )
+                        ) {
                             Text("None").tag("")
                             ForEach(databases, id: \.self) { Text($0).tag($0) }
                         }
                         HStack(spacing: DesignTokens.Spacing.md) {
                             ForEach(DatabasePrivilege.allCases, id: \.self) { privilege in
-                                Toggle(privilege.title, isOn: Binding(
-                                    get: { user.privileges.contains(privilege) },
-                                    set: { on in
-                                        if on { user.privileges.insert(privilege) } else { user.privileges.remove(privilege) }
-                                        if privilege == .all, on { user.privileges = [.all] }
-                                        if privilege != .all, on { user.privileges.remove(.all) }
-                                    }
-                                ))
+                                Toggle(
+                                    privilege.title,
+                                    isOn: Binding(
+                                        get: { user.privileges.contains(privilege) },
+                                        set: { on in
+                                            if on {
+                                                user.privileges.insert(privilege)
+                                            } else {
+                                                user.privileges.remove(privilege)
+                                            }
+                                            if privilege == .all, on { user.privileges = [.all] }
+                                            if privilege != .all, on { user.privileges.remove(.all) }
+                                        }
+                                    )
+                                )
                                 .toggleStyle(.checkbox)
                             }
                         }
@@ -717,9 +763,10 @@ struct UserEditorSheet: View {
                     } header: {
                         Label("Privileges on a database", systemImage: Icon.database)
                     } footer: {
-                        Text(isMySQL
-                             ? "Granted on every table of the database."
-                             : "Granted on every table in the public schema, now and for tables created later.")
+                        Text(
+                            isMySQL
+                                ? "Granted on every table of the database."
+                                : "Granted on every table in the public schema, now and for tables created later.")
                     }
                 }
                 .formStyle(.grouped)

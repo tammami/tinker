@@ -67,18 +67,25 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         guard let session else { return }
         var candidates: [CompletionCandidate] = []
         let database = session.config.database ?? ""
-        if let schemas = try? await session.introspection(.schemas(database: database), load: {
-            try await $0.schemas(in: database)
-        }) {
+        if let schemas = try? await session.introspection(
+            .schemas(database: database),
+            load: {
+                try await $0.schemas(in: database)
+            })
+        {
             for schema in schemas where !schema.isSystem {
                 candidates.append(CompletionCandidate(text: schema.name, kind: .schema))
-                if let tables = try? await session.introspection(.tables(schema.ref), load: {
-                    try await $0.tables(in: schema.ref)
-                }) {
+                if let tables = try? await session.introspection(
+                    .tables(schema.ref),
+                    load: {
+                        try await $0.tables(in: schema.ref)
+                    })
+                {
                     for table in tables {
-                        candidates.append(CompletionCandidate(
-                            text: table.name, detail: table.kind.rawValue, kind: .table
-                        ))
+                        candidates.append(
+                            CompletionCandidate(
+                                text: table.name, detail: table.kind.rawValue, kind: .table
+                            ))
                     }
                 }
             }
@@ -120,7 +127,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     public func explain(analyze: Bool) {
         NotificationCenter.default.post(name: .dbstudioDismissCompletion, object: nil)
         guard !isRunning,
-              let statement = StatementSplitter.statement(at: caretOffset, in: sql, dialect: dialect)
+            let statement = StatementSplitter.statement(at: caretOffset, in: sql, dialect: dialect)
         else {
             statusText = "Put the cursor in a statement to explain it"
             return
@@ -219,15 +226,17 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
 
             if columns.isEmpty {
                 let affected = completion?.affectedRows ?? 0
-                result.message = "\(completion?.serverTag ?? "OK") — \(affected) row\(affected == 1 ? "" : "s") in \(Self.format(duration))"
+                result.message =
+                    "\(completion?.serverTag ?? "OK") — \(affected) row\(affected == 1 ? "" : "s") in \(Self.format(duration))"
             } else {
                 result.message = "\(rowTotal) row\(rowTotal == 1 ? "" : "s") in \(Self.format(duration))"
             }
-            await environment.recordHistory(QueryHistoryEntry(
-                connectionID: connectionID, database: session.config.database,
-                sql: statement.text, startedAt: startedAt, duration: duration,
-                rowCount: Int64(rowTotal), succeeded: true
-            ))
+            await environment.recordHistory(
+                QueryHistoryEntry(
+                    connectionID: connectionID, database: session.config.database,
+                    sql: statement.text, startedAt: startedAt, duration: duration,
+                    rowCount: Int64(rowTotal), succeeded: true
+                ))
             isInTransaction = await connection.isInTransaction
             bumpRevision()
             return false
@@ -235,12 +244,13 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             let banner = QueryErrorBanner(error: error, statement: statement.text)
             result.error = banner
             errorBanner = banner
-            await environment.recordHistory(QueryHistoryEntry(
-                connectionID: connectionID, database: session.config.database,
-                sql: statement.text, startedAt: startedAt,
-                duration: clockStart.duration(to: .now),
-                error: banner.message, succeeded: false
-            ))
+            await environment.recordHistory(
+                QueryHistoryEntry(
+                    connectionID: connectionID, database: session.config.database,
+                    sql: statement.text, startedAt: startedAt,
+                    duration: clockStart.duration(to: .now),
+                    error: banner.message, succeeded: false
+                ))
             bumpRevision()
             return true
         }
@@ -276,12 +286,13 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     private func applySessionDatabase(on connection: any SQLConnection) async throws {
         guard let name = sessionDatabase, !name.isEmpty else { return }
         let quoted = Identifier.quote(name, dialect: dialect)
-        let sql = switch dialect {
-        case .mysql: "USE \(quoted)"
-        // PostgreSQL cannot change database on an open connection; unqualified names
-        // resolve against the search path, which it can change.
-        case .postgresql: "SET search_path TO \(quoted)"
-        }
+        let sql =
+            switch dialect {
+            case .mysql: "USE \(quoted)"
+            // PostgreSQL cannot change database on an open connection; unqualified names
+            // resolve against the search path, which it can change.
+            case .postgresql: "SET search_path TO \(quoted)"
+            }
         _ = try await connection.executeCollecting(sql)
     }
 
@@ -303,20 +314,23 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
                     "SHOW PROFILE CPU, BLOCK IO"
                 )
                 guard !profiles.rows.isEmpty else {
-                    result.profileNote = "No profile yet. MySQL records one for the "
+                    result.profileNote =
+                        "No profile yet. MySQL records one for the "
                         + "statements run after profiling is turned on, so run this again."
                     return
                 }
                 result.profileColumns = profiles.columns.map(\.name)
                 result.profile = profiles.rows.map { row in row.map { $0.text ?? "" } }
             } catch {
-                result.profileNote = (error as? DBError)?.errorDescription
+                result.profileNote =
+                    (error as? DBError)?.errorDescription
                     ?? String(describing: error)
             }
         case .postgresql:
             // Timing a statement here means running it again, and running a write again to
             // measure it is not something a client may do on its own.
-            result.profileNote = "PostgreSQL has no profile that does not re-run the "
+            result.profileNote =
+                "PostgreSQL has no profile that does not re-run the "
                 + "statement. Use EXPLAIN (ANALYZE) on a SELECT when you want its timings."
         }
     }
@@ -325,12 +339,14 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     public func loadStatus(for result: QueryResultTab) async {
         guard result.status == nil, result.statusNote == nil else { return }
         guard let session = environment.session(for: connectionID) else { return }
-        let sql = switch dialect {
-        case .mysql: "SHOW SESSION STATUS"
-        case .postgresql: """
-            SELECT * FROM pg_stat_database WHERE datname = current_database()
-            """
-        }
+        let sql =
+            switch dialect {
+            case .mysql: "SHOW SESSION STATUS"
+            case .postgresql:
+                """
+                SELECT * FROM pg_stat_database WHERE datname = current_database()
+                """
+            }
         do {
             let (lease, connection) = try await session.lease()
             defer { Task { await session.release(lease) } }
@@ -366,14 +382,16 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             case .postgresql:
                 // The picker offers schemas, which is what an unqualified name resolves
                 // against on PostgreSQL.
-                let database = environment.connections
+                let database =
+                    environment.connections
                     .first { $0.id == connectionID }?.database ?? ""
                 availableDatabases = try await session.introspection(.schemas(database: database)) {
                     try await $0.schemas(in: database)
                 }.filter { !$0.isSystem }.map(\.name)
             }
             if sessionDatabase == nil {
-                sessionDatabase = dialect == .mysql
+                sessionDatabase =
+                    dialect == .mysql
                     ? environment.connections.first { $0.id == connectionID }?.database
                     : availableDatabases.first { $0 == "public" } ?? availableDatabases.first
             }
@@ -409,7 +427,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     /// different set of databases and a different completion cache.
     public func selectConnection(_ id: UUID) async {
         guard id != connectionID,
-              let config = environment.connections.first(where: { $0.id == id })
+            let config = environment.connections.first(where: { $0.id == id })
         else { return }
         await releaseHeldConnection()
         connectionID = id
@@ -490,7 +508,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     }
 
     public static func format(_ duration: Duration) -> String {
-        let milliseconds = Double(duration.components.seconds) * 1_000
+        let milliseconds =
+            Double(duration.components.seconds) * 1_000
             + Double(duration.components.attoseconds) / 1e15
         if milliseconds < 1_000 { return String(format: "%.0f ms", milliseconds) }
         return String(format: "%.2f s", milliseconds / 1_000)
@@ -594,9 +613,12 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         let database = session.config.database ?? ""
         for name in Self.tablesMentioned(in: statement, dialect: dialect) where cachedColumns[name] == nil {
             let ref = TableRef(database: database, schema: dialect == .mysql ? database : "public", name: name)
-            if let columns = try? await session.introspection(.columns(ref), load: {
-                try await $0.columns(of: ref)
-            }) {
+            if let columns = try? await session.introspection(
+                .columns(ref),
+                load: {
+                    try await $0.columns(of: ref)
+                })
+            {
                 cachedColumns[name] = columns
             }
         }
@@ -609,7 +631,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         for (index, token) in tokens.enumerated() where token.kind == .keyword {
             let keyword = token.text.uppercased()
             guard ["FROM", "JOIN", "INTO", "UPDATE", "TABLE"].contains(keyword),
-                  index + 1 < tokens.count
+                index + 1 < tokens.count
             else { continue }
             let next = tokens[index + 1]
             guard next.kind == .identifier || next.kind == .quotedIdentifier else { continue }

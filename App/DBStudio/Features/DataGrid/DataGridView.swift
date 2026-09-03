@@ -209,7 +209,7 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
 
     func updateGutterWidth() {
         guard let tableView,
-              let gutter = tableView.tableColumns.first(where: { $0.identifier == Self.rowNumberColumnID })
+            let gutter = tableView.tableColumns.first(where: { $0.identifier == Self.rowNumberColumnID })
         else { return }
         let width = gutterWidth()
         guard gutter.width != width else { return }
@@ -240,7 +240,8 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
             column.headerToolTip = "\(meta.name) — \(meta.nativeTypeName)"
             column.minWidth = DesignTokens.Metrics.minimumColumnWidth
             column.maxWidth = DesignTokens.Metrics.maximumColumnWidth
-            column.width = storedColumnWidths[meta.name].map { CGFloat($0) }
+            column.width =
+                storedColumnWidths[meta.name].map { CGFloat($0) }
                 ?? Self.defaultWidth(for: meta)
             column.resizingMask = .userResizingMask
             tableView.addTableColumn(column)
@@ -253,7 +254,8 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
     func headerMenu(forPosition position: Int?) -> NSMenu {
         let menu = NSMenu()
         if let position, let column = modelColumn(atPosition: position) {
-            let hide = NSMenuItem(title: "Hide “\(model.columns[column].name)”", action: #selector(hideColumn(_:)), keyEquivalent: "")
+            let hide = NSMenuItem(
+                title: "Hide “\(model.columns[column].name)”", action: #selector(hideColumn(_:)), keyEquivalent: "")
             hide.target = self
             hide.representedObject = column
             hide.image = NSImage(systemSymbolName: "eye.slash", accessibilityDescription: nil)
@@ -266,7 +268,8 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         if !hiddenColumns.isEmpty {
             if menu.items.isEmpty == false { menu.addItem(.separator()) }
             let show = NSMenuItem(
-                title: "Show All Columns (\(hiddenColumns.count) hidden)", action: #selector(showAllColumns(_:)), keyEquivalent: ""
+                title: "Show All Columns (\(hiddenColumns.count) hidden)", action: #selector(showAllColumns(_:)),
+                keyEquivalent: ""
             )
             show.target = self
             show.image = NSImage(systemSymbolName: "eye", accessibilityDescription: nil)
@@ -287,17 +290,18 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
     /// A first guess at column width from the type, so a table of integers is not as wide
     /// as one of text.
     static func defaultWidth(for meta: ColumnMeta) -> CGFloat {
-        let byKind: CGFloat = switch meta.kind {
-        case .bool: 70
-        case .int, .uint: 90
-        case .double, .decimal: 110
-        case .date: 100
-        case .time: 110
-        case .timestamp: 190
-        case .uuid: 260
-        case .bytes: 110
-        default: DesignTokens.Metrics.defaultColumnWidth
-        }
+        let byKind: CGFloat =
+            switch meta.kind {
+            case .bool: 70
+            case .int, .uint: 90
+            case .double, .decimal: 110
+            case .date: 100
+            case .time: 110
+            case .timestamp: 190
+            case .uuid: 260
+            case .bytes: 110
+            default: DesignTokens.Metrics.defaultColumnWidth
+            }
         // A long column name still needs to be readable.
         return max(byKind, CGFloat(meta.name.count) * 8 + 24)
     }
@@ -305,7 +309,7 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
     /// Sizes a column to the widest value among the loaded rows (SPEC §12.1).
     func autosizeColumn(named name: String) {
         guard let tableView, let column = tableView.tableColumns.first(where: { $0.identifier.rawValue == name }),
-              let columnIndex = model.columns.firstIndex(where: { $0.name == name })
+            let columnIndex = model.columns.firstIndex(where: { $0.name == name })
         else { return }
         let font = DesignTokens.Fonts.grid
         var widest = (name as NSString).size(withAttributes: [.font: NSFont.boldSystemFont(ofSize: 11)]).width
@@ -321,9 +325,10 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
 
     func reportColumnWidths() {
         guard let tableView else { return }
-        let widths = Dictionary(uniqueKeysWithValues: tableView.tableColumns
-            .filter { $0.identifier != Self.rowNumberColumnID }
-            .map { ($0.identifier.rawValue, Double($0.width)) })
+        let widths = Dictionary(
+            uniqueKeysWithValues: tableView.tableColumns
+                .filter { $0.identifier != Self.rowNumberColumnID }
+                .map { ($0.identifier.rawValue, Double($0.width)) })
         delegate?.gridDidChangeColumnWidths(widths)
     }
 
@@ -341,7 +346,8 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         guard let tableColumn else { return nil }
 
         if tableColumn.identifier == Self.rowNumberColumnID {
-            let view = tableView.makeView(withIdentifier: GridRowNumberView.reuseIdentifier, owner: self)
+            let view =
+                tableView.makeView(withIdentifier: GridRowNumberView.reuseIdentifier, owner: self)
                 as? GridRowNumberView
                 ?? {
                     let fresh = GridRowNumberView()
@@ -352,11 +358,14 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
             return view
         }
 
-        guard let columnIndex = model.columns.firstIndex(where: {
-            $0.name == tableColumn.identifier.rawValue
-        }) else { return nil }
+        guard
+            let columnIndex = model.columns.firstIndex(where: {
+                $0.name == tableColumn.identifier.rawValue
+            })
+        else { return nil }
 
-        let view = tableView.makeView(withIdentifier: GridCellView.reuseIdentifier, owner: self) as? GridCellView
+        let view =
+            tableView.makeView(withIdentifier: GridCellView.reuseIdentifier, owner: self) as? GridCellView
             ?? {
                 let fresh = GridCellView()
                 fresh.identifier = GridCellView.reuseIdentifier
@@ -365,7 +374,8 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
 
         // Only a cell selection has a focused cell. Drawing the ring during a whole-row
         // selection puts a box around one arbitrary value inside the highlighted row.
-        let isFocused = selection.mode == .cells
+        let isFocused =
+            selection.mode == .cells
             && selection.focusRow == row
             && selection.focusColumn == columnIndex
         view.configure(
@@ -379,7 +389,7 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
     }
 
     public func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
-        false   // selection is drawn by the cells, from the grid's own model
+        false  // selection is drawn by the cells, from the grid's own model
     }
 
     /// The gutter stays at the left edge; nothing reorders it and nothing moves in front
@@ -400,9 +410,9 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
 
     public func tableView(_ tableView: NSTableView, didClick tableColumn: NSTableColumn) {
         guard tableColumn.identifier != Self.rowNumberColumnID,
-              let column = model.columns.firstIndex(where: {
-                  $0.name == tableColumn.identifier.rawValue
-              })
+            let column = model.columns.firstIndex(where: {
+                $0.name == tableColumn.identifier.rawValue
+            })
         else { return }
         let additive = NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false
         delegate?.gridDidClickColumnHeader(column: column, additive: additive)
@@ -414,7 +424,8 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         for column in tableView.tableColumns {
             let term = model.sort.first { $0.column == column.identifier.rawValue }
             tableView.setIndicatorImage(
-                term.map { NSImage(named: $0.ascending ? "NSAscendingSortIndicator" : "NSDescendingSortIndicator") } ?? nil,
+                term.map { NSImage(named: $0.ascending ? "NSAscendingSortIndicator" : "NSDescendingSortIndicator") }
+                    ?? nil,
                 in: column
             )
         }
@@ -540,14 +551,15 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         let column = selection.focusColumn
         guard model.columns.indices.contains(column), row < model.displayRowCount else { return }
         guard let position = position(ofModelColumn: column),
-              let cell = tableView.view(atColumn: position, row: row, makeIfNecessary: false) as? GridCellView
+            let cell = tableView.view(atColumn: position, row: row, makeIfNecessary: false) as? GridCellView
         else { return }
         let current = model.value(row: row, column: column)
         let editor = GridInlineEditor(frame: cell.bounds)
-        editor.stringValue = current.map { value in
-            if case .null = value { return "" }
-            return value.text ?? ""
-        } ?? ""
+        editor.stringValue =
+            current.map { value in
+                if case .null = value { return "" }
+                return value.text ?? ""
+            } ?? ""
         editor.onCommit = { [weak self] text in
             self?.delegate?.gridDidCommitEdit(row: row, column: column, text: text)
         }
@@ -576,7 +588,8 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         let menu = NSMenu()
         if let column {
             if delegate?.gridHasReference(row: row, column: column) == true {
-                let follow = NSMenuItem(title: "Go to Referenced Row", action: #selector(followReference(_:)), keyEquivalent: "")
+                let follow = NSMenuItem(
+                    title: "Go to Referenced Row", action: #selector(followReference(_:)), keyEquivalent: "")
                 follow.target = self
                 follow.image = NSImage(systemSymbolName: Icon.goTo, accessibilityDescription: nil)
                 follow.representedObject = [row, column]
@@ -584,12 +597,14 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
                 menu.addItem(.separator())
             }
             if model.isEditable, [.date, .time, .timestamp].contains(model.columns[column].kind) {
-                let pick = NSMenuItem(title: "Pick Date and Time…", action: #selector(showInspector(_:)), keyEquivalent: "")
+                let pick = NSMenuItem(
+                    title: "Pick Date and Time…", action: #selector(showInspector(_:)), keyEquivalent: "")
                 pick.target = self
                 pick.image = NSImage(systemSymbolName: "calendar", accessibilityDescription: nil)
                 menu.addItem(pick)
             }
-            let inspect = NSMenuItem(title: "Show in Inspector", action: #selector(showInspector(_:)), keyEquivalent: "")
+            let inspect = NSMenuItem(
+                title: "Show in Inspector", action: #selector(showInspector(_:)), keyEquivalent: "")
             inspect.target = self
             inspect.image = NSImage(systemSymbolName: Icon.inspector, accessibilityDescription: nil)
             menu.addItem(inspect)
@@ -651,7 +666,7 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
 
     @objc private func copyValue(_ sender: NSMenuItem) {
         guard let pair = sender.representedObject as? [Int], pair.count == 2,
-              let value = model.value(row: pair[0], column: pair[1])
+            let value = model.value(row: pair[0], column: pair[1])
         else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(ClipboardFormatter.cellText(value), forType: .string)
@@ -691,14 +706,28 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
 
         var new = selection
         switch event.keyCode {
-        case 126: new.move(rowDelta: -1, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
-        case 125: new.move(rowDelta: 1, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
-        case 123: new.move(rowDelta: 0, columnDelta: -visibleStep(from: selection.focusColumn, direction: -1), rowCount: rowCount, columnCount: columnCount, extending: extending)
-        case 124: new.move(rowDelta: 0, columnDelta: visibleStep(from: selection.focusColumn, direction: 1), rowCount: rowCount, columnCount: columnCount, extending: extending)
-        case 115: new.move(rowDelta: -rowCount, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
-        case 119: new.move(rowDelta: rowCount, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
-        case 116: new.move(rowDelta: -30, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
-        case 121: new.move(rowDelta: 30, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
+        case 126:
+            new.move(rowDelta: -1, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
+        case 125:
+            new.move(rowDelta: 1, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
+        case 123:
+            new.move(
+                rowDelta: 0, columnDelta: -visibleStep(from: selection.focusColumn, direction: -1), rowCount: rowCount,
+                columnCount: columnCount, extending: extending)
+        case 124:
+            new.move(
+                rowDelta: 0, columnDelta: visibleStep(from: selection.focusColumn, direction: 1), rowCount: rowCount,
+                columnCount: columnCount, extending: extending)
+        case 115:
+            new.move(
+                rowDelta: -rowCount, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
+        case 119:
+            new.move(
+                rowDelta: rowCount, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
+        case 116:
+            new.move(rowDelta: -30, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
+        case 121:
+            new.move(rowDelta: 30, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
         case 36:  // Return starts editing
             beginEditingFocusedCell()
             return true
@@ -707,7 +736,9 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
             return true
         case 48:  // Tab moves right, wrapping to the next row
             if selection.focusColumn == columnCount - 1, selection.focusRow < rowCount - 1 {
-                new.move(rowDelta: 1, columnDelta: -(columnCount - 1), rowCount: rowCount, columnCount: columnCount, extending: false)
+                new.move(
+                    rowDelta: 1, columnDelta: -(columnCount - 1), rowCount: rowCount, columnCount: columnCount,
+                    extending: false)
             } else {
                 new.move(rowDelta: 0, columnDelta: 1, rowCount: rowCount, columnCount: columnCount, extending: false)
             }
@@ -744,7 +775,9 @@ public final class GridTableView: NSTableView {
         MainActor.assumeIsolated {
             guard let controller else { return }
             let column = position >= 0 ? controller.modelColumn(atPosition: position) : nil
-            if let column, !controller.selection.contains(row: row, column: column, columnCount: controller.model.columns.count) {
+            if let column,
+                !controller.selection.contains(row: row, column: column, columnCount: controller.model.columns.count)
+            {
                 controller.handleClick(row: row, column: column, extending: false)
             } else if column == nil, !controller.selection.containsRow(row) {
                 controller.handleRowClick(row: row, extending: false)
@@ -790,7 +823,9 @@ public final class GridTableView: NSTableView {
             return
         }
         let point = convert(event.locationInWindow, from: nil)
-        let row = max(0, min(numberOfRows - 1, self.row(at: point) < 0 ? (point.y < 0 ? 0 : numberOfRows - 1) : self.row(at: point)))
+        let row = max(
+            0,
+            min(numberOfRows - 1, self.row(at: point) < 0 ? (point.y < 0 ? 0 : numberOfRows - 1) : self.row(at: point)))
         let position = column(at: point)
         MainActor.assumeIsolated {
             guard let controller else { return }
@@ -848,7 +883,6 @@ final class GridInlineEditor: NSTextField {
         window?.makeFirstResponder(window?.contentView)
     }
 }
-
 
 /// The header view, which offers Hide Column and Show All Columns on right-click.
 final class GridHeaderView: NSTableHeaderView {

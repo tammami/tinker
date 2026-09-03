@@ -17,70 +17,76 @@ public struct Migration: Sendable {
 /// The store's schema history. Append new migrations; never edit a released one.
 public enum StoreSchema {
     public static let migrations: [Migration] = [
-        Migration(version: 1, name: "initial", statements: [
-            """
-            CREATE TABLE connections (
-                id          TEXT PRIMARY KEY,
-                json        TEXT NOT NULL,
-                sort_order  INTEGER NOT NULL DEFAULT 0,
-                updated_at  REAL NOT NULL
-            )
-            """,
-            """
-            CREATE TABLE groups (
-                path        TEXT PRIMARY KEY,
-                expanded    INTEGER NOT NULL DEFAULT 1,
-                sort_order  INTEGER NOT NULL DEFAULT 0
-            )
-            """,
-            """
-            CREATE TABLE query_history (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                connection_id TEXT NOT NULL,
-                database      TEXT,
-                sql           TEXT NOT NULL,
-                started_at    REAL NOT NULL,
-                duration_ms   INTEGER,
-                rows          INTEGER,
-                error         TEXT,
-                success       INTEGER NOT NULL
-            )
-            """,
-            "CREATE INDEX query_history_started_idx ON query_history (started_at DESC)",
-            "CREATE INDEX query_history_connection_idx ON query_history (connection_id, started_at DESC)",
-            """
-            CREATE TABLE grid_prefs (
-                connection_id        TEXT NOT NULL,
-                table_qualified_name TEXT NOT NULL,
-                column_widths        TEXT,
-                sort                 TEXT,
-                filter               TEXT,
-                PRIMARY KEY (connection_id, table_qualified_name)
-            )
-            """,
-            """
-            CREATE TABLE settings (
-                key   TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """,
-        ]),
-        Migration(version: 2, name: "snippets", statements: [
-            """
-            CREATE TABLE snippets (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                name        TEXT NOT NULL,
-                body        TEXT NOT NULL,
-                dialect     TEXT,
-                created_at  REAL NOT NULL,
-                updated_at  REAL NOT NULL
-            )
-            """,
-            "CREATE INDEX snippets_name_idx ON snippets (name)",
-        ]),
-        Migration(version: 3, name: "hidden columns", statements: [
-            "ALTER TABLE grid_prefs ADD COLUMN hidden_columns TEXT",
-        ]),
+        Migration(
+            version: 1, name: "initial",
+            statements: [
+                """
+                CREATE TABLE connections (
+                    id          TEXT PRIMARY KEY,
+                    json        TEXT NOT NULL,
+                    sort_order  INTEGER NOT NULL DEFAULT 0,
+                    updated_at  REAL NOT NULL
+                )
+                """,
+                """
+                CREATE TABLE groups (
+                    path        TEXT PRIMARY KEY,
+                    expanded    INTEGER NOT NULL DEFAULT 1,
+                    sort_order  INTEGER NOT NULL DEFAULT 0
+                )
+                """,
+                """
+                CREATE TABLE query_history (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    connection_id TEXT NOT NULL,
+                    database      TEXT,
+                    sql           TEXT NOT NULL,
+                    started_at    REAL NOT NULL,
+                    duration_ms   INTEGER,
+                    rows          INTEGER,
+                    error         TEXT,
+                    success       INTEGER NOT NULL
+                )
+                """,
+                "CREATE INDEX query_history_started_idx ON query_history (started_at DESC)",
+                "CREATE INDEX query_history_connection_idx ON query_history (connection_id, started_at DESC)",
+                """
+                CREATE TABLE grid_prefs (
+                    connection_id        TEXT NOT NULL,
+                    table_qualified_name TEXT NOT NULL,
+                    column_widths        TEXT,
+                    sort                 TEXT,
+                    filter               TEXT,
+                    PRIMARY KEY (connection_id, table_qualified_name)
+                )
+                """,
+                """
+                CREATE TABLE settings (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """,
+            ]),
+        Migration(
+            version: 2, name: "snippets",
+            statements: [
+                """
+                CREATE TABLE snippets (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name        TEXT NOT NULL,
+                    body        TEXT NOT NULL,
+                    dialect     TEXT,
+                    created_at  REAL NOT NULL,
+                    updated_at  REAL NOT NULL
+                )
+                """,
+                "CREATE INDEX snippets_name_idx ON snippets (name)",
+            ]),
+        Migration(
+            version: 3, name: "hidden columns",
+            statements: [
+                "ALTER TABLE grid_prefs ADD COLUMN hidden_columns TEXT"
+            ]),
     ]
 
     /// Applies every migration the database has not seen yet.

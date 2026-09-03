@@ -11,6 +11,7 @@ import NIOPosix
 // Swift 6 concurrency checking. Same rationale as the library's own import.
 @preconcurrency import NIOSSH
 import XCTest
+
 @testable import DBTunnel
 
 /// End-to-end tunnel tests against an SSH server hosted inside the test process.

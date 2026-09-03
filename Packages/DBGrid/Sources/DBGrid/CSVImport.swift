@@ -76,7 +76,8 @@ public struct CSVReader {
         position = data.startIndex
         // A UTF-8 byte-order mark is not part of the first field.
         if bytes.count >= 3, bytes[bytes.startIndex] == 0xEF,
-           bytes[bytes.startIndex + 1] == 0xBB, bytes[bytes.startIndex + 2] == 0xBF {
+            bytes[bytes.startIndex + 1] == 0xBB, bytes[bytes.startIndex + 2] == 0xBF
+        {
             position = bytes.startIndex + 3
         }
     }
@@ -160,7 +161,9 @@ public struct CSVImportPlan: Sendable, Hashable {
     /// Rows per `INSERT`. Bounded so a statement never grows past what a server accepts.
     public var batchSize: Int
 
-    public init(table: TableRef, mapping: [String?], hasHeader: Bool = true, nullText: String = "", batchSize: Int = 200) {
+    public init(
+        table: TableRef, mapping: [String?], hasHeader: Bool = true, nullText: String = "", batchSize: Int = 200
+    ) {
         self.table = table
         self.mapping = mapping
         self.hasHeader = hasHeader
@@ -170,7 +173,8 @@ public struct CSVImportPlan: Sendable, Hashable {
 
     /// Matches CSV header names to table columns by name, case-insensitively.
     public static func matched(header: [String], to columns: [ColumnInfo], table: TableRef) -> CSVImportPlan {
-        let byName = Dictionary(columns.map { ($0.name.lowercased(), $0.name) }, uniquingKeysWith: { first, _ in first })
+        let byName = Dictionary(
+            columns.map { ($0.name.lowercased(), $0.name) }, uniquingKeysWith: { first, _ in first })
         let mapping = header.map { byName[$0.trimmingCharacters(in: .whitespaces).lowercased()] }
         return CSVImportPlan(table: table, mapping: mapping)
     }

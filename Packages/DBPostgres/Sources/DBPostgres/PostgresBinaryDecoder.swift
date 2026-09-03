@@ -86,10 +86,11 @@ public struct PostgresBinaryDecoder: Sendable {
             // PostgreSQL stores the zone as seconds *west* of UTC; the printed offset is its negation.
             let west = Int(buffer.readInteger(as: Int32.self) ?? 0)
             let base = CivilDate.timeFromMicroseconds(microseconds).time
-            return .time(DBTime(
-                hour: base.hour, minute: base.minute, second: base.second,
-                microsecond: base.microsecond, tzOffsetSeconds: -west
-            ))
+            return .time(
+                DBTime(
+                    hour: base.hour, minute: base.minute, second: base.second,
+                    microsecond: base.microsecond, tzOffsetSeconds: -west
+                ))
         case PGOID.timestamp:
             return decodeTimestamp(&buffer, hasTimeZone: false)
         case PGOID.timestamptz:
@@ -117,7 +118,8 @@ public struct PostgresBinaryDecoder: Sendable {
         if let elementOID = PGOID.arrayElement[oid] { return decodeArray(&buffer, fallbackElement: elementOID) }
 
         guard let info = catalog[oid] else {
-            return .raw(typeName: typeName(oid), text: nil, bytes: Data(buffer.readBytes(length: buffer.readableBytes) ?? []))
+            return .raw(
+                typeName: typeName(oid), text: nil, bytes: Data(buffer.readBytes(length: buffer.readableBytes) ?? []))
         }
         // An enum's binary form is its label; a string-category type's is its text.
         if info.type == "e" || info.category == "S" { return .string(readString(&buffer)) }
@@ -133,10 +135,11 @@ public struct PostgresBinaryDecoder: Sendable {
 
     private func decodeUUID(_ buffer: inout ByteBuffer) -> DBValue {
         guard let bytes = buffer.readBytes(length: 16), bytes.count == 16 else { return .null }
-        let uuid = UUID(uuid: (
-            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
-        ))
+        let uuid = UUID(
+            uuid: (
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+            ))
         return .uuid(uuid)
     }
 
@@ -144,9 +147,9 @@ public struct PostgresBinaryDecoder: Sendable {
     /// Reassembling them as text keeps every digit the server had.
     private func decodeNumeric(_ buffer: inout ByteBuffer) -> DBValue {
         guard let digitCount = buffer.readInteger(as: Int16.self),
-              let weight = buffer.readInteger(as: Int16.self),
-              let sign = buffer.readInteger(as: UInt16.self),
-              let displayScale = buffer.readInteger(as: Int16.self)
+            let weight = buffer.readInteger(as: Int16.self),
+            let sign = buffer.readInteger(as: UInt16.self),
+            let displayScale = buffer.readInteger(as: Int16.self)
         else { return .decimal("0") }
 
         switch sign {
@@ -230,8 +233,8 @@ public struct PostgresBinaryDecoder: Sendable {
     /// PostgreSQL itself would print under `IntervalStyle = postgres` (SPEC §7.3).
     private func decodeInterval(_ buffer: inout ByteBuffer) -> DBValue {
         guard let microseconds = buffer.readInteger(as: Int64.self),
-              let days = buffer.readInteger(as: Int32.self),
-              let months = buffer.readInteger(as: Int32.self)
+            let days = buffer.readInteger(as: Int32.self),
+            let months = buffer.readInteger(as: Int32.self)
         else { return .raw(typeName: "interval", text: nil, bytes: nil) }
 
         var parts: [String] = []
@@ -259,20 +262,21 @@ public struct PostgresBinaryDecoder: Sendable {
     /// `inet`/`cidr`: address family, prefix bits, a cidr flag, length, then the address.
     private func decodeInet(_ buffer: inout ByteBuffer, oid: UInt32) -> DBValue {
         guard let family = buffer.readInteger(as: UInt8.self),
-              let bits = buffer.readInteger(as: UInt8.self),
-              buffer.readInteger(as: UInt8.self) != nil,
-              let length = buffer.readInteger(as: UInt8.self),
-              let address = buffer.readBytes(length: Int(length))
+            let bits = buffer.readInteger(as: UInt8.self),
+            buffer.readInteger(as: UInt8.self) != nil,
+            let length = buffer.readInteger(as: UInt8.self),
+            let address = buffer.readBytes(length: Int(length))
         else { return .raw(typeName: typeName(oid), text: nil, bytes: nil) }
 
         let isIPv4 = family == 2 && address.count == 4
-        let host: String = if isIPv4 {
-            address.map(String.init).joined(separator: ".")
-        } else {
-            stride(from: 0, to: address.count, by: 2)
-                .map { String(format: "%x", Int(address[$0]) << 8 | Int(address[$0 + 1])) }
-                .joined(separator: ":")
-        }
+        let host: String =
+            if isIPv4 {
+                address.map(String.init).joined(separator: ".")
+            } else {
+                stride(from: 0, to: address.count, by: 2)
+                    .map { String(format: "%x", Int(address[$0]) << 8 | Int(address[$0 + 1])) }
+                    .joined(separator: ":")
+            }
         let fullWidth = isIPv4 ? 32 : 128
         let text = (oid == PGOID.cidr || Int(bits) != fullWidth) ? "\(host)/\(bits)" : host
         return .raw(typeName: typeName(oid), text: text, bytes: Data(address))
@@ -281,7 +285,7 @@ public struct PostgresBinaryDecoder: Sendable {
     /// `bit`/`varbit`: a bit length followed by the packed bits.
     private func decodeBitString(_ buffer: inout ByteBuffer, oid: UInt32) -> DBValue {
         guard let bitCount = buffer.readInteger(as: Int32.self),
-              let bytes = buffer.readBytes(length: buffer.readableBytes)
+            let bytes = buffer.readBytes(length: buffer.readableBytes)
         else { return .raw(typeName: typeName(oid), text: nil, bytes: nil) }
         var text = ""
         text.reserveCapacity(Int(bitCount))
@@ -299,15 +303,15 @@ public struct PostgresBinaryDecoder: Sendable {
     /// server sends them and the order the grid displays.
     private func decodeArray(_ buffer: inout ByteBuffer, fallbackElement: UInt32) -> DBValue {
         guard let dimensionCount = buffer.readInteger(as: Int32.self),
-              buffer.readInteger(as: Int32.self) != nil,
-              let elementOIDRaw = buffer.readInteger(as: UInt32.self)
+            buffer.readInteger(as: Int32.self) != nil,
+            let elementOIDRaw = buffer.readInteger(as: UInt32.self)
         else { return .array([]) }
         if dimensionCount == 0 { return .array([]) }
 
         var total = 1
         for _ in 0 ..< Int(dimensionCount) {
             let length = Int(buffer.readInteger(as: Int32.self) ?? 0)
-            _ = buffer.readInteger(as: Int32.self)   // lower bound, not modelled
+            _ = buffer.readInteger(as: Int32.self)  // lower bound, not modelled
             total *= max(0, length)
         }
 

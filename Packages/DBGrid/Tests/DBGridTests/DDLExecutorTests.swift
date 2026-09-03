@@ -1,7 +1,7 @@
 import DBCore
-import DBSQL
 import DBMySQL
 import DBPostgres
+import DBSQL
 import DBTestKit
 import Logging
 import XCTest
@@ -80,7 +80,7 @@ final class DDLExecutorTests: XCTestCase {
                 kind: .dropTable,
                 sql: "DROP TABLE IF EXISTS \(Identifier.qualified(ref, dialect: dialect))",
                 table: ref
-            ),
+            )
         ])
     }
 
@@ -358,7 +358,7 @@ final class DDLExecutorTests: XCTestCase {
                     : TriggerInfo(
                         name: "designer_trig_bump", timing: .before, events: [.update],
                         body: "SET NEW.touched = OLD.touched + 1"
-                    ),
+                    )
             ]
             let added = try await executor.run(generator.alter(from: current, to: edited))
             XCTAssertTrue(added.isSuccess, added.errorText ?? "no error")
@@ -400,10 +400,12 @@ final class DDLExecutorTests: XCTestCase {
                 ],
                 primaryKey: ["id", "bucket"]
             )
-            let firstBound = dialect == .postgresql
+            let firstBound =
+                dialect == .postgresql
                 ? "FOR VALUES FROM (0) TO (10)"
                 : "VALUES LESS THAN (10)"
-            let secondBound = dialect == .postgresql
+            let secondBound =
+                dialect == .postgresql
                 ? "FOR VALUES FROM (10) TO (20)"
                 : "VALUES LESS THAN (20)"
 

@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import DBCore
 
 final class DBValueTests: XCTestCase {
@@ -8,10 +9,13 @@ final class DBValueTests: XCTestCase {
             (.double(1), .double), (.decimal("1"), .decimal), (.string("a"), .string),
             (.bytes(Data()), .bytes), (.date(DBDate(year: 2024, month: 1, day: 1)), .date),
             (.time(DBTime(hour: 0, minute: 0, second: 0)), .time),
-            (.timestamp(DBTimestamp(
-                date: DBDate(year: 2024, month: 1, day: 1),
-                time: DBTime(hour: 0, minute: 0, second: 0), hasTimeZone: false
-            )), .timestamp),
+            (
+                .timestamp(
+                    DBTimestamp(
+                        date: DBDate(year: 2024, month: 1, day: 1),
+                        time: DBTime(hour: 0, minute: 0, second: 0), hasTimeZone: false
+                    )), .timestamp
+            ),
             (.uuid(UUID()), .uuid), (.json("null"), .json), (.array([]), .array),
             (.raw(typeName: "t", text: nil, bytes: nil), .raw),
         ]

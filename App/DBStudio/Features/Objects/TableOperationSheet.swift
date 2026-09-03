@@ -22,7 +22,8 @@ struct TableOperationSheet: View {
         case .duplicate:
             DuplicateTableSheet(request: request, environment: environment, onFinished: onFinished, onCancel: onCancel)
         case let .maintenance(action):
-            MaintenanceSheet(request: request, action: action, environment: environment, onFinished: onFinished, onCancel: onCancel)
+            MaintenanceSheet(
+                request: request, action: action, environment: environment, onFinished: onFinished, onCancel: onCancel)
         case .importCSV:
             ImportCSVSheet(request: request, environment: environment, onFinished: onFinished, onCancel: onCancel)
         }
@@ -79,8 +80,10 @@ private struct RenameTableSheet: View {
     }
 
     var body: some View {
-        SheetFrame(title: "Rename \(request.table.name)", icon: Icon.rename,
-                   subtitle: "Views, foreign keys and code that name the table are not updated.") {
+        SheetFrame(
+            title: "Rename \(request.table.name)", icon: Icon.rename,
+            subtitle: "Views, foreign keys and code that name the table are not updated."
+        ) {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                 FieldRow(label: "New name") {
                     TextField("name", text: $name).textFieldStyle(.roundedBorder)
@@ -107,7 +110,10 @@ private struct RenameTableSheet: View {
         defer { isRunning = false }
         do {
             _ = try await OperationRunner.run([statement], connectionID: request.connectionID, environment: environment)
-            onFinished(TableRef(database: request.table.database, schema: request.table.schema, name: name.trimmingCharacters(in: .whitespaces)))
+            onFinished(
+                TableRef(
+                    database: request.table.database, schema: request.table.schema,
+                    name: name.trimmingCharacters(in: .whitespaces)))
         } catch {
             failure = (error as? DBError)?.errorDescription ?? String(describing: error)
         }
@@ -137,8 +143,10 @@ private struct DuplicateTableSheet: View {
     }
 
     var body: some View {
-        SheetFrame(title: "Duplicate \(request.table.name)", icon: Icon.duplicate,
-                   subtitle: "Copies the columns, defaults, constraints and indexes. Foreign keys are not copied.") {
+        SheetFrame(
+            title: "Duplicate \(request.table.name)", icon: Icon.duplicate,
+            subtitle: "Copies the columns, defaults, constraints and indexes. Foreign keys are not copied."
+        ) {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                 FieldRow(label: "New table") {
                     TextField("name", text: $name).textFieldStyle(.roundedBorder)
@@ -168,7 +176,10 @@ private struct DuplicateTableSheet: View {
         defer { isRunning = false }
         do {
             _ = try await OperationRunner.run(statements, connectionID: request.connectionID, environment: environment)
-            onFinished(TableRef(database: request.table.database, schema: request.table.schema, name: name.trimmingCharacters(in: .whitespaces)))
+            onFinished(
+                TableRef(
+                    database: request.table.database, schema: request.table.schema,
+                    name: name.trimmingCharacters(in: .whitespaces)))
         } catch {
             failure = (error as? DBError)?.errorDescription ?? String(describing: error)
         }
@@ -198,7 +209,9 @@ private struct MaintenanceSheet: View {
                 if let statement {
                     StatementPreview(sql: statement)
                 } else {
-                    InlineBanner(kind: .warning, message: "This engine has no \(action.title.lowercased()) for tables.", onDismiss: {})
+                    InlineBanner(
+                        kind: .warning, message: "This engine has no \(action.title.lowercased()) for tables.",
+                        onDismiss: {})
                 }
                 if let output, !output.rows.isEmpty {
                     SimpleTable(
@@ -207,7 +220,8 @@ private struct MaintenanceSheet: View {
                     )
                     .frame(height: 120)
                 } else if let elapsed {
-                    InlineBanner(kind: .success, message: "Done in \(QueryTabController.format(elapsed))", onDismiss: {})
+                    InlineBanner(
+                        kind: .success, message: "Done in \(QueryTabController.format(elapsed))", onDismiss: {})
                 }
                 if let failure { InlineBanner(kind: .error, message: failure) { self.failure = nil } }
             }
@@ -229,7 +243,8 @@ private struct MaintenanceSheet: View {
         defer { isRunning = false }
         let start = ContinuousClock.now
         do {
-            output = try await OperationRunner.run([statement], connectionID: request.connectionID, environment: environment)
+            output = try await OperationRunner.run(
+                [statement], connectionID: request.connectionID, environment: environment)
             elapsed = start.duration(to: .now)
         } catch {
             failure = (error as? DBError)?.errorDescription ?? String(describing: error)
@@ -309,19 +324,26 @@ private struct ImportCSVSheet: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 } else {
-                    EmptyStateView(icon: Icon.importData, title: "Choose a file to begin",
-                                   message: "The first rows are shown so you can check the columns line up.")
-                        .frame(height: 200)
+                    EmptyStateView(
+                        icon: Icon.importData, title: "Choose a file to begin",
+                        message: "The first rows are shown so you can check the columns line up."
+                    )
+                    .frame(height: 200)
                 }
 
                 if isRunning {
                     HStack(spacing: DesignTokens.Spacing.sm) {
                         ProgressView().controlSize(.small)
-                        Text("Inserted \(progressCount) rows…").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        Text("Inserted \(progressCount) rows…").font(.caption).foregroundStyle(.secondary)
+                            .monospacedDigit()
                     }
                 }
                 if let insertedCount {
-                    InlineBanner(kind: .success, message: "Imported \(insertedCount) row\(insertedCount == 1 ? "" : "s") into \(request.table.name).", onDismiss: {})
+                    InlineBanner(
+                        kind: .success,
+                        message:
+                            "Imported \(insertedCount) row\(insertedCount == 1 ? "" : "s") into \(request.table.name).",
+                        onDismiss: {})
                 }
                 if let failure { InlineBanner(kind: .error, message: failure) { self.failure = nil } }
             }
@@ -365,10 +387,17 @@ private struct ImportCSVSheet: View {
                             Text(hasHeader ? name : "Column \(index + 1)")
                                 .lineLimit(1)
                                 .frame(width: 200, alignment: .leading)
-                            Picker("Target", selection: Binding(
-                                get: { mapping.indices.contains(index) ? (mapping[index] ?? "") : "" },
-                                set: { value in if mapping.indices.contains(index) { mapping[index] = value.isEmpty ? nil : value } }
-                            )) {
+                            Picker(
+                                "Target",
+                                selection: Binding(
+                                    get: { mapping.indices.contains(index) ? (mapping[index] ?? "") : "" },
+                                    set: { value in
+                                        if mapping.indices.contains(index) {
+                                            mapping[index] = value.isEmpty ? nil : value
+                                        }
+                                    }
+                                )
+                            ) {
                                 Text("Skip").tag("")
                                 ForEach(columns) { column in
                                     Text("\(column.name)  ·  \(column.nativeType)").tag(column.name)
@@ -386,7 +415,9 @@ private struct ImportCSVSheet: View {
                         }
                         .padding(.horizontal, DesignTokens.Spacing.sm)
                         .frame(height: 28)
-                        .background(index.isMultiple(of: 2) ? Color.clear : Color(nsColor: .alternatingContentBackgroundColors[1]))
+                        .background(
+                            index.isMultiple(of: 2)
+                                ? Color.clear : Color(nsColor: .alternatingContentBackgroundColors[1]))
                     }
                 }
             }
@@ -394,7 +425,8 @@ private struct ImportCSVSheet: View {
             .background(Color(nsColor: .controlBackgroundColor))
         }
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius))
-        .overlay(RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius).strokeBorder(Color.primary.opacity(0.1)))
+        .overlay(
+            RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius).strokeBorder(Color.primary.opacity(0.1)))
     }
 
     private func sample(at index: Int) -> String {
@@ -490,7 +522,9 @@ struct StatementPreview: View {
             .frame(maxHeight: 140)
             .background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius))
-            .overlay(RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius).strokeBorder(Color.primary.opacity(0.1)))
+            .overlay(
+                RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius).strokeBorder(
+                    Color.primary.opacity(0.1)))
         }
     }
 }

@@ -46,8 +46,8 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
     public var connectionID: UUID? {
         switch kind {
         case let .connection(id), let .database(id, _), let .schema(id, _),
-             let .tableFolder(id, _, _), let .table(id, _),
-             let .routineFolder(id, _), let .routine(id, _, _, _):
+            let .tableFolder(id, _, _), let .table(id, _),
+            let .routineFolder(id, _), let .routine(id, _, _, _):
             id
         case .group, .loading, .failure:
             nil

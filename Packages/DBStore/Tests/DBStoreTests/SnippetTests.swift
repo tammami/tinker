@@ -1,6 +1,7 @@
 import DBCore
 import Foundation
 import XCTest
+
 @testable import DBStore
 
 final class SnippetTests: XCTestCase {
@@ -35,7 +36,8 @@ final class SnippetTests: XCTestCase {
     func testSaveListFilterUpdateAndDelete() async throws {
         let store = try await temporaryStore()
         let any = try await store.saveSnippet(Snippet(name: "Count", body: "SELECT count(*) FROM ${1:t};"))
-        let pg = try await store.saveSnippet(Snippet(name: "Activity", body: "SELECT * FROM pg_stat_activity;", dialect: "postgresql"))
+        let pg = try await store.saveSnippet(
+            Snippet(name: "Activity", body: "SELECT * FROM pg_stat_activity;", dialect: "postgresql"))
         _ = try await store.saveSnippet(Snippet(name: "Processes", body: "SHOW PROCESSLIST;", dialect: "mysql"))
 
         let all = try await store.snippets()

@@ -74,14 +74,16 @@ final class GridCellView: NSView {
             textField.font = DesignTokens.Fonts.grid
         }
 
-        backgroundColor = switch changeState {
-        case .edited: DesignTokens.Colors.editedCell
-        case .inserted: DesignTokens.Colors.insertedRow
-        case .deleted: DesignTokens.Colors.deletedRow
-        case .unchanged: isSelected ? .selectedContentBackgroundColor.withAlphaComponent(0.35) : .clear
-        }
+        backgroundColor =
+            switch changeState {
+            case .edited: DesignTokens.Colors.editedCell
+            case .inserted: DesignTokens.Colors.insertedRow
+            case .deleted: DesignTokens.Colors.deletedRow
+            case .unchanged: isSelected ? .selectedContentBackgroundColor.withAlphaComponent(0.35) : .clear
+            }
         if changeState != .unchanged, isSelected {
-            backgroundColor = backgroundColor.blended(withFraction: 0.3, of: .selectedContentBackgroundColor)
+            backgroundColor =
+                backgroundColor.blended(withFraction: 0.3, of: .selectedContentBackgroundColor)
                 ?? backgroundColor
         }
         if changeState == .deleted {
@@ -191,8 +193,9 @@ final class GridRowNumberView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        (isSelected ? NSColor.controlAccentColor.withAlphaComponent(0.25)
-                    : NSColor.controlBackgroundColor).setFill()
+        (isSelected
+            ? NSColor.controlAccentColor.withAlphaComponent(0.25)
+            : NSColor.controlBackgroundColor).setFill()
         bounds.fill()
         // No trailing hairline: the rows carry no column rules, only the header does.
     }

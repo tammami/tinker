@@ -81,9 +81,10 @@ public final class RowExporter {
         switch options.format {
         case .csv:
             if options.includeHeader {
-                append(columns.map {
-                    ClipboardFormatter.csvField($0.name, delimiter: options.delimiter, quote: options.quote)
-                }.joined(separator: String(options.delimiter)) + "\n")
+                append(
+                    columns.map {
+                        ClipboardFormatter.csvField($0.name, delimiter: options.delimiter, quote: options.quote)
+                    }.joined(separator: String(options.delimiter)) + "\n")
             }
         case .json:
             append("[\n")
@@ -105,23 +106,28 @@ public final class RowExporter {
     public func write(row: [DBValue]) {
         switch options.format {
         case .csv:
-            append(row.map { value in
-                ClipboardFormatter.csvField(
-                    ClipboardFormatter.cellText(value, nullText: options.nullText),
-                    delimiter: options.delimiter, quote: options.quote
-                )
-            }.joined(separator: String(options.delimiter)) + "\n")
+            append(
+                row.map { value in
+                    ClipboardFormatter.csvField(
+                        ClipboardFormatter.cellText(value, nullText: options.nullText),
+                        delimiter: options.delimiter, quote: options.quote
+                    )
+                }.joined(separator: String(options.delimiter)) + "\n")
 
         case .json:
-            let object = "{" + zip(columns, row).map { column, value in
-                "\(ClipboardFormatter.jsonString(column.name)): \(ClipboardFormatter.jsonValue(value))"
-            }.joined(separator: ", ") + "}"
+            let object =
+                "{"
+                + zip(columns, row).map { column, value in
+                    "\(ClipboardFormatter.jsonString(column.name)): \(ClipboardFormatter.jsonValue(value))"
+                }.joined(separator: ", ") + "}"
             append(rowsWritten == 0 ? "  \(object)" : ",\n  \(object)")
 
         case .ndjson:
-            let object = "{" + zip(columns, row).map { column, value in
-                "\(ClipboardFormatter.jsonString(column.name)):\(ClipboardFormatter.jsonValue(value))"
-            }.joined(separator: ",") + "}"
+            let object =
+                "{"
+                + zip(columns, row).map { column, value in
+                    "\(ClipboardFormatter.jsonString(column.name)):\(ClipboardFormatter.jsonValue(value))"
+                }.joined(separator: ",") + "}"
             append(object + "\n")
 
         case .sqlInsert:
@@ -142,7 +148,8 @@ public final class RowExporter {
     }
 
     private func insertPrefix() -> String {
-        let name = options.table.map { Identifier.qualified($0, dialect: options.dialect) }
+        let name =
+            options.table.map { Identifier.qualified($0, dialect: options.dialect) }
             ?? Identifier.quote("exported", dialect: options.dialect)
         let columnList = columns.map { Identifier.quote($0.name, dialect: options.dialect) }
             .joined(separator: ", ")

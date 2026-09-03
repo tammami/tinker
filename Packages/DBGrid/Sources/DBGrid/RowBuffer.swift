@@ -135,7 +135,8 @@ public struct RowBuffer: Sendable {
         guard count > rowCapacity else { return }
         let protectedRange = (lastTouchedPage - residentPageRadius) ... (lastTouchedPage + residentPageRadius)
         // Evict furthest-from-viewport first; ties break on age.
-        let candidates = recency
+        let candidates =
+            recency
             .filter { !protectedRange.contains($0) }
             .sorted { abs($0 - lastTouchedPage) > abs($1 - lastTouchedPage) }
         for page in candidates {

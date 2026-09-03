@@ -91,17 +91,20 @@ public struct DDLGenerator: Sendable {
         statements.append(GeneratedDDL(kind: .createTable, sql: create, table: definition.ref))
 
         if dialect == .postgresql, let partitioning = definition.partitioning {
-            statements.append(contentsOf: partitioning.partitions.map {
-                addPartition($0, to: definition.ref)
-            })
+            statements.append(
+                contentsOf: partitioning.partitions.map {
+                    addPartition($0, to: definition.ref)
+                })
         }
-        statements.append(contentsOf: definition.indexes.map {
-            GeneratedDDL(kind: .createIndex, sql: createIndexSQL($0, on: definition.ref), table: definition.ref)
-        })
+        statements.append(
+            contentsOf: definition.indexes.map {
+                GeneratedDDL(kind: .createIndex, sql: createIndexSQL($0, on: definition.ref), table: definition.ref)
+            })
         statements.append(contentsOf: comments(for: definition, against: nil))
-        statements.append(contentsOf: definition.triggers.map {
-            GeneratedDDL(kind: .createTrigger, sql: createTriggerSQL($0, on: definition.ref), table: definition.ref)
-        })
+        statements.append(
+            contentsOf: definition.triggers.map {
+                GeneratedDDL(kind: .createTrigger, sql: createTriggerSQL($0, on: definition.ref), table: definition.ref)
+            })
         return statements
     }
 
@@ -133,11 +136,12 @@ public struct DDLGenerator: Sendable {
 
         // 3. Put the constraints back, now that the columns are what they should be.
         if primaryKeyChanged(current, edited), !edited.primaryKey.isEmpty {
-            statements.append(GeneratedDDL(
-                kind: .addPrimaryKey,
-                sql: "ALTER TABLE \(qualified(table)) ADD PRIMARY KEY (\(columnList(edited.primaryKey)))",
-                table: table
-            ))
+            statements.append(
+                GeneratedDDL(
+                    kind: .addPrimaryKey,
+                    sql: "ALTER TABLE \(qualified(table)) ADD PRIMARY KEY (\(columnList(edited.primaryKey)))",
+                    table: table
+                ))
         }
         statements.append(contentsOf: addedIndexes(current, edited))
         statements.append(contentsOf: addedChecks(current, edited))
@@ -166,21 +170,23 @@ public struct DDLGenerator: Sendable {
 
         // Dropped: in the original, gone from the edit.
         for column in current.columns where !editedIDs.contains(column.id) {
-            statements.append(GeneratedDDL(
-                kind: .dropColumn,
-                sql: "ALTER TABLE \(qualified(table)) DROP COLUMN \(quote(column.name))",
-                table: table,
-                isDestructive: true
-            ))
+            statements.append(
+                GeneratedDDL(
+                    kind: .dropColumn,
+                    sql: "ALTER TABLE \(qualified(table)) DROP COLUMN \(quote(column.name))",
+                    table: table,
+                    isDestructive: true
+                ))
         }
 
         for column in edited.columns {
             guard let before = currentByID[column.id] else {
-                statements.append(GeneratedDDL(
-                    kind: .addColumn,
-                    sql: "ALTER TABLE \(qualified(table)) ADD COLUMN \(columnClause(column))",
-                    table: table
-                ))
+                statements.append(
+                    GeneratedDDL(
+                        kind: .addColumn,
+                        sql: "ALTER TABLE \(qualified(table)) ADD COLUMN \(columnClause(column))",
+                        table: table
+                    ))
                 continue
             }
             // A rename is a different statement from a change of definition, and on MySQL
@@ -210,12 +216,14 @@ public struct DDLGenerator: Sendable {
         let prefix = "ALTER TABLE \(qualified(table))"
         switch dialect {
         case .mysql:
-            return [GeneratedDDL(
-                kind: .alterColumn,
-                sql: "\(prefix) MODIFY COLUMN \(columnClause(after))",
-                table: table,
-                isDestructive: before.type != after.type
-            )]
+            return [
+                GeneratedDDL(
+                    kind: .alterColumn,
+                    sql: "\(prefix) MODIFY COLUMN \(columnClause(after))",
+                    table: table,
+                    isDestructive: before.type != after.type
+                )
+            ]
 
         case .postgresql:
             var statements: [GeneratedDDL] = []
@@ -223,37 +231,42 @@ public struct DDLGenerator: Sendable {
             if before.type != after.type {
                 // USING lets the server cast what it can; without it a widening that needs
                 // a cast fails outright.
-                statements.append(GeneratedDDL(
-                    kind: .alterColumn,
-                    sql: "\(prefix) ALTER COLUMN \(column) TYPE \(after.type) USING \(column)::\(after.type)",
-                    table: table,
-                    isDestructive: true
-                ))
+                statements.append(
+                    GeneratedDDL(
+                        kind: .alterColumn,
+                        sql: "\(prefix) ALTER COLUMN \(column) TYPE \(after.type) USING \(column)::\(after.type)",
+                        table: table,
+                        isDestructive: true
+                    ))
             }
             if before.isNullable != after.isNullable {
-                statements.append(GeneratedDDL(
-                    kind: .alterColumn,
-                    sql: "\(prefix) ALTER COLUMN \(column) \(after.isNullable ? "DROP" : "SET") NOT NULL",
-                    table: table
-                ))
+                statements.append(
+                    GeneratedDDL(
+                        kind: .alterColumn,
+                        sql: "\(prefix) ALTER COLUMN \(column) \(after.isNullable ? "DROP" : "SET") NOT NULL",
+                        table: table
+                    ))
             }
             if before.defaultExpression != after.defaultExpression {
                 let action = after.defaultExpression.map { "SET DEFAULT \($0)" } ?? "DROP DEFAULT"
-                statements.append(GeneratedDDL(
-                    kind: .alterColumn,
-                    sql: "\(prefix) ALTER COLUMN \(column) \(action)",
-                    table: table
-                ))
+                statements.append(
+                    GeneratedDDL(
+                        kind: .alterColumn,
+                        sql: "\(prefix) ALTER COLUMN \(column) \(action)",
+                        table: table
+                    ))
             }
             if before.isAutoIncrement != after.isAutoIncrement {
-                let action = after.isAutoIncrement
+                let action =
+                    after.isAutoIncrement
                     ? "ADD GENERATED BY DEFAULT AS IDENTITY"
                     : "DROP IDENTITY IF EXISTS"
-                statements.append(GeneratedDDL(
-                    kind: .alterColumn,
-                    sql: "\(prefix) ALTER COLUMN \(column) \(action)",
-                    table: table
-                ))
+                statements.append(
+                    GeneratedDDL(
+                        kind: .alterColumn,
+                        sql: "\(prefix) ALTER COLUMN \(column) \(action)",
+                        table: table
+                    ))
             }
             return statements
         }
@@ -296,10 +309,11 @@ public struct DDLGenerator: Sendable {
     private func dropPrimaryKey(on table: TableRef) -> GeneratedDDL {
         // PostgreSQL drops the constraint by name and names it <table>_pkey by default;
         // MySQL has the dedicated syntax.
-        let sql = switch dialect {
-        case .mysql: "ALTER TABLE \(qualified(table)) DROP PRIMARY KEY"
-        case .postgresql: "ALTER TABLE \(qualified(table)) DROP CONSTRAINT \(quote("\(table.name)_pkey"))"
-        }
+        let sql =
+            switch dialect {
+            case .mysql: "ALTER TABLE \(qualified(table)) DROP PRIMARY KEY"
+            case .postgresql: "ALTER TABLE \(qualified(table)) DROP CONSTRAINT \(quote("\(table.name)_pkey"))"
+            }
         return GeneratedDDL(kind: .dropPrimaryKey, sql: sql, table: table, isDestructive: true)
     }
 
@@ -355,11 +369,12 @@ public struct DDLGenerator: Sendable {
         case .mysql:
             // MySQL spells FULLTEXT and SPATIAL as index kinds, not as USING methods.
             let upper = index.method?.uppercased()
-            let kind = switch upper {
-            case "FULLTEXT": "FULLTEXT "
-            case "SPATIAL": "SPATIAL "
-            default: index.isUnique ? "UNIQUE " : ""
-            }
+            let kind =
+                switch upper {
+                case "FULLTEXT": "FULLTEXT "
+                case "SPATIAL": "SPATIAL "
+                default: index.isUnique ? "UNIQUE " : ""
+                }
             var sql = "CREATE \(kind)INDEX \(quote(index.name)) ON \(qualified(table)) (\(columns))"
             if let method = upper, method == "BTREE" || method == "HASH" {
                 sql += " USING \(method)"
@@ -379,21 +394,23 @@ public struct DDLGenerator: Sendable {
     }
 
     private func dropIndex(named name: String, on table: TableRef, destructive: Bool) -> GeneratedDDL {
-        let sql = switch dialect {
-        // A PostgreSQL index lives in the schema, not on the table.
-        case .postgresql: "DROP INDEX \(Identifier.qualify([table.schema, name], dialect: dialect))"
-        case .mysql: "DROP INDEX \(quote(name)) ON \(qualified(table))"
-        }
+        let sql =
+            switch dialect {
+            // A PostgreSQL index lives in the schema, not on the table.
+            case .postgresql: "DROP INDEX \(Identifier.qualify([table.schema, name], dialect: dialect))"
+            case .mysql: "DROP INDEX \(quote(name)) ON \(qualified(table))"
+            }
         return GeneratedDDL(kind: .dropIndex, sql: sql, table: table, isDestructive: destructive)
     }
 
     private func renameIndex(from old: String, to new: String, on table: TableRef) -> GeneratedDDL {
-        let sql = switch dialect {
-        case .postgresql:
-            "ALTER INDEX \(Identifier.qualify([table.schema, old], dialect: dialect)) RENAME TO \(quote(new))"
-        case .mysql:
-            "ALTER TABLE \(qualified(table)) RENAME INDEX \(quote(old)) TO \(quote(new))"
-        }
+        let sql =
+            switch dialect {
+            case .postgresql:
+                "ALTER INDEX \(Identifier.qualify([table.schema, old], dialect: dialect)) RENAME TO \(quote(new))"
+            case .mysql:
+                "ALTER TABLE \(qualified(table)) RENAME INDEX \(quote(old)) TO \(quote(new))"
+            }
         return GeneratedDDL(kind: .renameIndex, sql: sql, table: table)
     }
 
@@ -468,12 +485,14 @@ public struct DDLGenerator: Sendable {
         let currentByID = Dictionary(uniqueKeysWithValues: current.checks.map { ($0.id, $0) })
         return edited.checks.compactMap { check in
             if let before = currentByID[check.id],
-               before.expression == check.expression, before.name == check.name {
+                before.expression == check.expression, before.name == check.name
+            {
                 return nil
             }
             return GeneratedDDL(
                 kind: .addCheck,
-                sql: "ALTER TABLE \(qualified(edited.ref)) ADD CONSTRAINT \(quote(check.name)) CHECK (\(check.expression))",
+                sql:
+                    "ALTER TABLE \(qualified(edited.ref)) ADD CONSTRAINT \(quote(check.name)) CHECK (\(check.expression))",
                 table: edited.ref
             )
         }
@@ -490,14 +509,17 @@ public struct DDLGenerator: Sendable {
     private func droppedTriggers(
         _ current: TableDefinition, _ edited: TableDefinition
     ) -> [GeneratedDDL] {
-        let kept = Set(edited.triggers.filter { trigger in
-            current.triggers.contains { $0 == trigger }
-        }.map(\.name))
+        let kept = Set(
+            edited.triggers.filter { trigger in
+                current.triggers.contains { $0 == trigger }
+            }.map(\.name))
         return current.triggers.filter { !kept.contains($0.name) }.map { trigger in
-            let sql = switch dialect {
-            case .postgresql: "DROP TRIGGER \(quote(trigger.name)) ON \(qualified(current.ref))"
-            case .mysql: "DROP TRIGGER \(Identifier.qualify([current.ref.database, trigger.name], dialect: dialect))"
-            }
+            let sql =
+                switch dialect {
+                case .postgresql: "DROP TRIGGER \(quote(trigger.name)) ON \(qualified(current.ref))"
+                case .mysql:
+                    "DROP TRIGGER \(Identifier.qualify([current.ref.database, trigger.name], dialect: dialect))"
+                }
             return GeneratedDDL(kind: .dropTrigger, sql: sql, table: current.ref, isDestructive: true)
         }
     }
@@ -515,7 +537,8 @@ public struct DDLGenerator: Sendable {
     public func createTriggerSQL(_ trigger: TriggerInfo, on table: TableRef) -> String {
         let events = trigger.events.map(\.rawValue).joined(separator: " OR ")
         var sql = "CREATE TRIGGER \(quote(trigger.name)) \(trigger.timing.rawValue) "
-        sql += dialect == .mysql
+        sql +=
+            dialect == .mysql
             ? "\(trigger.events.first?.rawValue ?? "INSERT")"
             : events
         sql += " ON \(qualified(table))"
@@ -556,14 +579,16 @@ public struct DDLGenerator: Sendable {
             // Every column is restated in its new place, because MySQL positions a column
             // relative to another and a partial reorder leaves the rest where they were.
             guard current.columns.contains(where: { $0.id == column.id }) else { continue }
-            let place = index == 0
+            let place =
+                index == 0
                 ? "FIRST"
                 : "AFTER \(quote(edited.columns[index - 1].name))"
-            statements.append(GeneratedDDL(
-                kind: .alterColumn,
-                sql: "ALTER TABLE \(qualified(edited.ref)) MODIFY COLUMN \(columnClause(column)) \(place)",
-                table: edited.ref
-            ))
+            statements.append(
+                GeneratedDDL(
+                    kind: .alterColumn,
+                    sql: "ALTER TABLE \(qualified(edited.ref)) MODIFY COLUMN \(columnClause(column)) \(place)",
+                    table: edited.ref
+                ))
         }
         return statements
     }
@@ -593,15 +618,16 @@ public struct DDLGenerator: Sendable {
 
     private func addPartition(_ partition: PartitionInfo, to table: TableRef) -> GeneratedDDL {
         let bound = partition.bound ?? "DEFAULT"
-        let sql = switch dialect {
-        case .postgresql:
-            // A PostgreSQL partition is a table of its own, created as part of the parent.
-            "CREATE TABLE \(Identifier.qualify([table.schema, partition.name], dialect: dialect)) "
-                + "PARTITION OF \(qualified(table)) \(bound)"
-        case .mysql:
-            "ALTER TABLE \(qualified(table)) ADD PARTITION "
-                + "(PARTITION \(quote(partition.name)) \(bound))"
-        }
+        let sql =
+            switch dialect {
+            case .postgresql:
+                // A PostgreSQL partition is a table of its own, created as part of the parent.
+                "CREATE TABLE \(Identifier.qualify([table.schema, partition.name], dialect: dialect)) "
+                    + "PARTITION OF \(qualified(table)) \(bound)"
+            case .mysql:
+                "ALTER TABLE \(qualified(table)) ADD PARTITION "
+                    + "(PARTITION \(quote(partition.name)) \(bound))"
+            }
         return GeneratedDDL(kind: .partition, sql: sql, table: table)
     }
 
@@ -638,26 +664,29 @@ public struct DDLGenerator: Sendable {
 
         if edited.comment != current?.comment, let comment = edited.comment ?? current?.comment {
             let text = edited.comment.map { quoteText($0) } ?? "NULL"
-            let sql = switch dialect {
-            case .postgresql: "COMMENT ON TABLE \(qualified(table)) IS \(text)"
-            case .mysql: "ALTER TABLE \(qualified(table)) COMMENT = \(quoteText(edited.comment ?? ""))"
-            }
+            let sql =
+                switch dialect {
+                case .postgresql: "COMMENT ON TABLE \(qualified(table)) IS \(text)"
+                case .mysql: "ALTER TABLE \(qualified(table)) COMMENT = \(quoteText(edited.comment ?? ""))"
+                }
             _ = comment
             statements.append(GeneratedDDL(kind: .comment, sql: sql, table: table))
         }
 
         guard dialect == .postgresql else { return statements }
-        let currentByID = current.map {
-            Dictionary(uniqueKeysWithValues: $0.columns.map { ($0.id, $0) })
-        } ?? [:]
+        let currentByID =
+            current.map {
+                Dictionary(uniqueKeysWithValues: $0.columns.map { ($0.id, $0) })
+            } ?? [:]
         for column in edited.columns where column.comment != currentByID[column.id]?.comment {
             guard column.comment != nil || currentByID[column.id]?.comment != nil else { continue }
             let text = column.comment.map { quoteText($0) } ?? "NULL"
-            statements.append(GeneratedDDL(
-                kind: .comment,
-                sql: "COMMENT ON COLUMN \(qualified(table)).\(quote(column.name)) IS \(text)",
-                table: table
-            ))
+            statements.append(
+                GeneratedDDL(
+                    kind: .comment,
+                    sql: "COMMENT ON COLUMN \(qualified(table)).\(quote(column.name)) IS \(text)",
+                    table: table
+                ))
         }
         return statements
     }
@@ -668,14 +697,16 @@ public struct DDLGenerator: Sendable {
         guard dialect == .mysql else { return [] }
         var statements: [GeneratedDDL] = []
         if current.options.engine != edited.options.engine, let engine = edited.options.engine {
-            statements.append(GeneratedDDL(
-                kind: .tableOption,
-                sql: "ALTER TABLE \(qualified(edited.ref)) ENGINE = \(engine)",
-                table: edited.ref
-            ))
+            statements.append(
+                GeneratedDDL(
+                    kind: .tableOption,
+                    sql: "ALTER TABLE \(qualified(edited.ref)) ENGINE = \(engine)",
+                    table: edited.ref
+                ))
         }
         if current.options.collation != edited.options.collation
-            || current.options.characterSet != edited.options.characterSet {
+            || current.options.characterSet != edited.options.characterSet
+        {
             var sql = "ALTER TABLE \(qualified(edited.ref))"
             if let set = edited.options.characterSet { sql += " CONVERT TO CHARACTER SET \(set)" }
             if let collation = edited.options.collation { sql += " COLLATE \(collation)" }
@@ -725,10 +756,11 @@ public struct DDLGenerator: Sendable {
     // MARK: - Table
 
     private func renameTable(from old: TableRef, to new: TableRef) -> GeneratedDDL {
-        let sql = switch dialect {
-        case .postgresql: "ALTER TABLE \(qualified(old)) RENAME TO \(quote(new.name))"
-        case .mysql: "RENAME TABLE \(qualified(old)) TO \(qualified(new))"
-        }
+        let sql =
+            switch dialect {
+            case .postgresql: "ALTER TABLE \(qualified(old)) RENAME TO \(quote(new.name))"
+            case .mysql: "RENAME TABLE \(qualified(old)) TO \(qualified(new))"
+            }
         return GeneratedDDL(kind: .renameTable, sql: sql, table: new)
     }
 

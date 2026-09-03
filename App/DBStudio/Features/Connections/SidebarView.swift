@@ -325,9 +325,11 @@ struct SidebarRow: View {
                 toggleExpansion()
             }
         case let .routine(id, schema, name, signature):
-            onOpenSource(SourceObject(kind: .routine(
-                schema: schema, name: name, signature: signature, kind: .function
-            )), id)
+            onOpenSource(
+                SourceObject(
+                    kind: .routine(
+                        schema: schema, name: name, signature: signature, kind: .function
+                    )), id)
         default:
             toggleExpansion()
         }
@@ -341,13 +343,19 @@ struct SidebarRow: View {
         case let .table(id, info):
             tableMenu(connectionID: id, info: info)
         case let .schema(id, ref):
-            Button { _ = workspace.openObjects(ref, connectionID: id) } label: {
+            Button {
+                _ = workspace.openObjects(ref, connectionID: id)
+            } label: {
                 Label("Open Objects", systemImage: Icon.objects)
             }
-            Button { onNewQuery(id, "") } label: {
+            Button {
+                onNewQuery(id, "")
+            } label: {
                 Label("New Query", systemImage: Icon.newQuery)
             }
-            Button { onOpenBuilder(ref, id) } label: {
+            Button {
+                onOpenBuilder(ref, id)
+            } label: {
                 Label("Query Builder", systemImage: Icon.builder)
             }
             Divider()
@@ -356,13 +364,19 @@ struct SidebarRow: View {
             Button(sidebar.isExpanded(item.id) ? "Collapse" : "Expand") { toggleExpansion() }
         case let .routine(id, schema, name, signature):
             Button {
-                onOpenSource(SourceObject(kind: .routine(
-                    schema: schema, name: name, signature: signature, kind: .function
-                )), id)
+                onOpenSource(
+                    SourceObject(
+                        kind: .routine(
+                            schema: schema, name: name, signature: signature, kind: .function
+                        )), id)
             } label: {
                 Label("Open Definition", systemImage: Icon.source)
             }
-            Button { copy(name) } label: { Label("Copy Name", systemImage: Icon.copy) }
+            Button {
+                copy(name)
+            } label: {
+                Label("Copy Name", systemImage: Icon.copy)
+            }
         case let .tableFolder(id, ref, kind):
             // The folder says what it holds, so what it holds comes first; the rest follow
             // once, below a rule.
@@ -375,21 +389,29 @@ struct SidebarRow: View {
             Divider()
             collapseItem
         case let .database(id, name):
-            Button { onNewQuery(id, "") } label: {
+            Button {
+                onNewQuery(id, "")
+            } label: {
                 Label("New Query", systemImage: Icon.newQuery)
             }
             if let ref = mysqlSchema(connectionID: id, database: name) {
                 // On MySQL the database is the schema, so its actions live here.
-                Button { _ = workspace.openObjects(ref, connectionID: id) } label: {
+                Button {
+                    _ = workspace.openObjects(ref, connectionID: id)
+                } label: {
                     Label("Open Objects", systemImage: Icon.objects)
                 }
-                Button { onOpenBuilder(ref, id) } label: {
+                Button {
+                    onOpenBuilder(ref, id)
+                } label: {
                     Label("Query Builder", systemImage: Icon.builder)
                 }
                 Divider()
                 newObjectItems(connectionID: id, schema: ref)
             }
-            Button { onOpenUsers(id, name) } label: {
+            Button {
+                onOpenUsers(id, name)
+            } label: {
                 Label("Users & Privileges…", systemImage: Icon.user)
             }
             Divider()
@@ -398,7 +420,9 @@ struct SidebarRow: View {
             }
             // Closes this database like Navicat does: its tabs go (after asking) and
             // everything opened beneath it folds; the connection itself stays up.
-            Button { onCloseDatabase(id, name, item.id) } label: {
+            Button {
+                onCloseDatabase(id, name, item.id)
+            } label: {
                 Label("Close Database", systemImage: Icon.collapse)
             }
         case let .group(path):
@@ -454,7 +478,9 @@ struct SidebarRow: View {
     @ViewBuilder
     private var collapseItem: some View {
         if sidebar.isExpanded(item.id) {
-            Button { sidebar.collapseSubtree(item.id) } label: {
+            Button {
+                sidebar.collapseSubtree(item.id)
+            } label: {
                 Label("Collapse", systemImage: Icon.collapse)
             }
         } else {
@@ -475,19 +501,27 @@ struct SidebarRow: View {
             if index == 1, first != nil { Divider() }
             switch kind {
             case .table:
-                Button { presentNewTable(connectionID: id, schema: ref) } label: {
+                Button {
+                    presentNewTable(connectionID: id, schema: ref)
+                } label: {
                     Label("New Table…", systemImage: Icon.table)
                 }
             case .view:
-                Button { onOpenBuilder(ref, id) } label: {
+                Button {
+                    onOpenBuilder(ref, id)
+                } label: {
                     Label("New View…", systemImage: Icon.view)
                 }
             case .function:
-                Button { newRoutine(connectionID: id, schema: ref, procedure: false) } label: {
+                Button {
+                    newRoutine(connectionID: id, schema: ref, procedure: false)
+                } label: {
                     Label("New Function…", systemImage: Icon.function)
                 }
             case .procedure:
-                Button { newRoutine(connectionID: id, schema: ref, procedure: true) } label: {
+                Button {
+                    newRoutine(connectionID: id, schema: ref, procedure: true)
+                } label: {
                     Label("New Procedure…", systemImage: Icon.procedure)
                 }
             }
@@ -509,18 +543,36 @@ struct SidebarRow: View {
     @ViewBuilder
     func connectionMenu(_ id: UUID) -> some View {
         if let config = workspace.environment.connections.first(where: { $0.id == id }) {
-            Button { onNewQuery(id, "") } label: { Label("New Query", systemImage: Icon.newQuery) }
-                .keyboardShortcut("t", modifiers: .command)
+            Button {
+                onNewQuery(id, "")
+            } label: {
+                Label("New Query", systemImage: Icon.newQuery)
+            }
+            .keyboardShortcut("t", modifiers: .command)
             Button {
                 onOpenBuilder(SchemaRef(database: "", schema: ""), id)
             } label: {
                 Label("Query Builder", systemImage: Icon.builder)
             }
-            Button { onOpenActivity(id) } label: { Label("Server Activity", systemImage: Icon.activity) }
-            Button { onOpenUsers(id, config.database) } label: { Label("Users & Privileges…", systemImage: Icon.user) }
+            Button {
+                onOpenActivity(id)
+            } label: {
+                Label("Server Activity", systemImage: Icon.activity)
+            }
+            Button {
+                onOpenUsers(id, config.database)
+            } label: {
+                Label("Users & Privileges…", systemImage: Icon.user)
+            }
             Divider()
-            Button { workspace.editingConnection = config } label: { Label("Edit…", systemImage: Icon.edit) }
-            Button { Task { await workspace.environment.duplicate(config) } } label: {
+            Button {
+                workspace.editingConnection = config
+            } label: {
+                Label("Edit…", systemImage: Icon.edit)
+            }
+            Button {
+                Task { await workspace.environment.duplicate(config) }
+            } label: {
                 Label("Duplicate", systemImage: Icon.duplicate)
             }
             Menu {
@@ -542,7 +594,9 @@ struct SidebarRow: View {
                 Label("Move to Folder", systemImage: Icon.group)
             }
             Divider()
-            Button { Task { await sidebar.refresh(connectionID: id) } } label: {
+            Button {
+                Task { await sidebar.refresh(connectionID: id) }
+            } label: {
                 Label("Refresh", systemImage: Icon.refresh)
             }
             Button {
@@ -572,18 +626,26 @@ struct SidebarRow: View {
 
     @ViewBuilder
     func tableMenu(connectionID: UUID, info: TableInfo) -> some View {
-        let isProduction = workspace.environment.connections
+        let isProduction =
+            workspace.environment.connections
             .first { $0.id == connectionID }?.isProduction ?? false
-        let dialect = workspace.environment.connections
+        let dialect =
+            workspace.environment.connections
             .first { $0.id == connectionID }?.dialect ?? .postgresql
-        Button { onOpenTable(info.ref, connectionID, false) } label: {
+        Button {
+            onOpenTable(info.ref, connectionID, false)
+        } label: {
             Label("Open", systemImage: Icon.table)
         }
-        Button { onOpenTable(info.ref, connectionID, true) } label: {
+        Button {
+            onOpenTable(info.ref, connectionID, true)
+        } label: {
             Label("Open in New Tab", systemImage: Icon.openInNewTab)
         }
         if info.kind == .view || info.kind == .materializedView {
-            Button { onOpenSource(SourceObject(kind: .view(info.ref)), connectionID) } label: {
+            Button {
+                onOpenSource(SourceObject(kind: .view(info.ref)), connectionID)
+            } label: {
                 Label("Open Definition", systemImage: Icon.source)
             }
         }
@@ -593,8 +655,14 @@ struct SidebarRow: View {
             Label("Query Rows", systemImage: Icon.newQuery)
         }
         Divider()
-        Button { copy(info.ref.name) } label: { Label("Copy Name", systemImage: Icon.copy) }
-        Button { copy(Identifier.qualified(info.ref, dialect: dialect)) } label: {
+        Button {
+            copy(info.ref.name)
+        } label: {
+            Label("Copy Name", systemImage: Icon.copy)
+        }
+        Button {
+            copy(Identifier.qualified(info.ref, dialect: dialect))
+        } label: {
             Label("Copy Qualified Name", systemImage: Icon.copy)
         }
         Button {
@@ -656,11 +724,14 @@ struct SidebarRow: View {
             }
         }
         Button(role: .destructive) {
-            let verb = info.kind == .view ? "DROP VIEW"
+            let verb =
+                info.kind == .view
+                ? "DROP VIEW"
                 : info.kind == .materializedView ? "DROP MATERIALIZED VIEW" : "DROP TABLE"
             workspace.confirmation = DestructiveConfirmation(
                 title: "Drop “\(info.ref.name)”?",
-                message: "The \(info.kind.displayName.lowercased()) and all of its data are removed. This cannot be undone.",
+                message:
+                    "The \(info.kind.displayName.lowercased()) and all of its data are removed. This cannot be undone.",
                 requiredTypedName: isProduction ? info.ref.name : nil,
                 confirmTitle: "Drop",
                 action: { await runDDL(verb, info: info, connectionID: connectionID) }
@@ -721,7 +792,6 @@ struct ConnectionStateDot: View {
     }
 }
 
-
 /// The starting text of a new routine, in each engine's own words.
 enum RoutineTemplates {
     static func skeleton(procedure: Bool, schema: SchemaRef, dialect: SQLDialect) -> String {
@@ -729,47 +799,46 @@ enum RoutineTemplates {
         switch (dialect, procedure) {
         case (.postgresql, false):
             return """
-            CREATE OR REPLACE FUNCTION \(name)(a integer, b integer)
-            RETURNS integer
-            LANGUAGE sql
-            AS $$
-                SELECT a + b;
-            $$;
-            """
+                CREATE OR REPLACE FUNCTION \(name)(a integer, b integer)
+                RETURNS integer
+                LANGUAGE sql
+                AS $$
+                    SELECT a + b;
+                $$;
+                """
         case (.postgresql, true):
             return """
-            CREATE OR REPLACE PROCEDURE \(name)(target_id integer)
-            LANGUAGE plpgsql
-            AS $$
-            BEGIN
-                -- statements
-            END;
-            $$;
-            """
+                CREATE OR REPLACE PROCEDURE \(name)(target_id integer)
+                LANGUAGE plpgsql
+                AS $$
+                BEGIN
+                    -- statements
+                END;
+                $$;
+                """
         case (.mysql, false):
             return """
-            DELIMITER $$
-            CREATE FUNCTION \(name)(a INT, b INT)
-            RETURNS INT
-            DETERMINISTIC
-            BEGIN
-                RETURN a + b;
-            END $$
-            DELIMITER ;
-            """
+                DELIMITER $$
+                CREATE FUNCTION \(name)(a INT, b INT)
+                RETURNS INT
+                DETERMINISTIC
+                BEGIN
+                    RETURN a + b;
+                END $$
+                DELIMITER ;
+                """
         case (.mysql, true):
             return """
-            DELIMITER $$
-            CREATE PROCEDURE \(name)(IN target_id INT)
-            BEGIN
-                -- statements
-            END $$
-            DELIMITER ;
-            """
+                DELIMITER $$
+                CREATE PROCEDURE \(name)(IN target_id INT)
+                BEGIN
+                    -- statements
+                END $$
+                DELIMITER ;
+                """
         }
     }
 }
-
 
 /// Connections can be dragged; folders take the drop. Everything else is inert.
 struct ConnectionDragModifier: ViewModifier {
@@ -783,7 +852,9 @@ struct ConnectionDragModifier: ViewModifier {
                 .onDrag { NSItemProvider(object: id.uuidString as NSString) }
         case let .group(path):
             content
-                .onDrop(of: [.plainText, .utf8PlainText, .text], delegate: FolderDropDelegate(path: path, workspace: workspace))
+                .onDrop(
+                    of: [.plainText, .utf8PlainText, .text],
+                    delegate: FolderDropDelegate(path: path, workspace: workspace))
         default:
             content
         }
@@ -870,7 +941,9 @@ struct FolderNameSheet: View {
     private var subtitle: String {
         switch editor.kind {
         case let .create(parent, moving):
-            var text = parent.isEmpty ? "A folder at the top level of the sidebar." : "Inside \(parent.joined(separator: " › "))."
+            var text =
+                parent.isEmpty
+                ? "A folder at the top level of the sidebar." : "Inside \(parent.joined(separator: " › "))."
             if moving != nil { text += " The connection moves into it." }
             return text
         case .rename:

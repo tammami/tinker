@@ -129,20 +129,21 @@ public actor SQLiteDatabase {
 
         for (offset, value) in parameters.enumerated() {
             let index = Int32(offset + 1)
-            let code: Int32 = switch value {
-            case .null:
-                sqlite3_bind_null(statement, index)
-            case let .integer(number):
-                sqlite3_bind_int64(statement, index, number)
-            case let .real(number):
-                sqlite3_bind_double(statement, index, number)
-            case let .text(text):
-                sqlite3_bind_text(statement, index, text, -1, Self.transient)
-            case let .blob(data):
-                data.withUnsafeBytes { buffer in
-                    sqlite3_bind_blob(statement, index, buffer.baseAddress, Int32(buffer.count), Self.transient)
+            let code: Int32 =
+                switch value {
+                case .null:
+                    sqlite3_bind_null(statement, index)
+                case let .integer(number):
+                    sqlite3_bind_int64(statement, index, number)
+                case let .real(number):
+                    sqlite3_bind_double(statement, index, number)
+                case let .text(text):
+                    sqlite3_bind_text(statement, index, text, -1, Self.transient)
+                case let .blob(data):
+                    data.withUnsafeBytes { buffer in
+                        sqlite3_bind_blob(statement, index, buffer.baseAddress, Int32(buffer.count), Self.transient)
+                    }
                 }
-            }
             guard code == SQLITE_OK else {
                 throw StoreError.sqlite(
                     code: code, message: String(cString: sqlite3_errmsg(handle)), sql: sql

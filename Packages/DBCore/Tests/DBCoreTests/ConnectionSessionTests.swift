@@ -1,6 +1,7 @@
 import DBTestKit
 import Logging
 import XCTest
+
 @testable import DBCore
 
 final class ConnectionSessionTests: XCTestCase {
@@ -73,8 +74,9 @@ final class ConnectionSessionTests: XCTestCase {
         XCTAssertEqual(seen.first, .disconnected)
         XCTAssertTrue(seen.contains(.connected))
         XCTAssertEqual(seen.last, .disconnected)
-        XCTAssertTrue(seen.contains { if case .connecting = $0 { true } else { false } },
-                      "the session should report the stage it is connecting at: \(seen)")
+        XCTAssertTrue(
+            seen.contains { if case .connecting = $0 { true } else { false } },
+            "the session should report the stage it is connecting at: \(seen)")
     }
 
     func testFailedConnectMarksTheSessionDegraded() async throws {

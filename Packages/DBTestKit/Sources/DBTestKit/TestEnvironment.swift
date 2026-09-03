@@ -153,7 +153,8 @@ public enum TestEnvironment {
         }
         let database = databaseName(in: url)
         guard database == requiredDatabaseName else {
-            throw TestEnvironmentError.wrongDatabase(variable: variable, database: database, expected: requiredDatabaseName)
+            throw TestEnvironmentError.wrongDatabase(
+                variable: variable, database: database, expected: requiredDatabaseName)
         }
         let user = url.user ?? ""
         if refusedUserNames.contains(user.lowercased()) {
@@ -207,7 +208,7 @@ public enum TestGuards {
         if isSuperuser {
             XCTFail(
                 "Refusing to run integration tests as a privileged user. "
-                + "Admin URLs are for testenv/prepare.sh only (SPEC §17.1).",
+                    + "Admin URLs are for testenv/prepare.sh only (SPEC §17.1).",
                 file: file, line: line
             )
             throw TestEnvironmentError.adminUser(variable: "runtime check", user: "<privileged>")
@@ -215,7 +216,7 @@ public enum TestGuards {
         if database != TestEnvironment.requiredDatabaseName {
             XCTFail(
                 "Refusing to run integration tests against database '\(database)'; "
-                + "only '\(TestEnvironment.requiredDatabaseName)' is allowed.",
+                    + "only '\(TestEnvironment.requiredDatabaseName)' is allowed.",
                 file: file, line: line
             )
             throw TestEnvironmentError.wrongDatabase(

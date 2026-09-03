@@ -236,8 +236,8 @@ struct ColumnsPane: View {
 
     private func move(_ index: Int, by offset: Int) {
         guard var columns = controller.edited?.columns,
-              columns.indices.contains(index),
-              columns.indices.contains(index + offset)
+            columns.indices.contains(index),
+            columns.indices.contains(index + offset)
         else { return }
         columns.swapAt(index, index + offset)
         controller.edited?.columns = columns
@@ -268,10 +268,13 @@ struct ColumnsPane: View {
                         field(index, \.type, placeholder: "type")
                     }
                     Cell(width: widths[3]) {
-                        Toggle("", isOn: Binding(
-                            get: { !(controller.edited?.columns[safe: index]?.isNullable ?? true) },
-                            set: { controller.edited?.columns[safe: index]?.isNullable = !$0 }
-                        ))
+                        Toggle(
+                            "",
+                            isOn: Binding(
+                                get: { !(controller.edited?.columns[safe: index]?.isNullable ?? true) },
+                                set: { controller.edited?.columns[safe: index]?.isNullable = !$0 }
+                            )
+                        )
                         .labelsHidden()
                         .disabled(!controller.isEditing)
                         .accessibilityLabel("\(column.name) not null")
@@ -280,10 +283,13 @@ struct ColumnsPane: View {
                         optionalField(index, \.defaultExpression, placeholder: "none")
                     }
                     Cell(width: widths[5]) {
-                        Toggle("", isOn: Binding(
-                            get: { controller.edited?.columns[safe: index]?.isAutoIncrement ?? false },
-                            set: { controller.edited?.columns[safe: index]?.isAutoIncrement = $0 }
-                        ))
+                        Toggle(
+                            "",
+                            isOn: Binding(
+                                get: { controller.edited?.columns[safe: index]?.isAutoIncrement ?? false },
+                                set: { controller.edited?.columns[safe: index]?.isAutoIncrement = $0 }
+                            )
+                        )
                         .labelsHidden()
                         .disabled(!controller.isEditing)
                         .accessibilityLabel("\(column.name) auto increment")
@@ -318,10 +324,10 @@ struct ColumnsPane: View {
                             .disabled(selectedColumn <= 0)
 
                         IconButton(icon: "arrow.down", label: "Move Down") { move(selectedColumn, by: 1) }
-                        .disabled(
-                            selectedColumn < 0
-                                || selectedColumn >= (controller.edited?.columns.count ?? 0) - 1
-                        )
+                            .disabled(
+                                selectedColumn < 0
+                                    || selectedColumn >= (controller.edited?.columns.count ?? 0) - 1
+                            )
 
                         Picker("", selection: $selectedColumn) {
                             Text("Select a column").tag(-1)
@@ -351,10 +357,13 @@ struct ColumnsPane: View {
         if controller.collations.isEmpty {
             optionalField(index, \.collation, placeholder: "default")
         } else {
-            Picker("", selection: Binding(
-                get: { controller.edited?.columns[safe: index]?.collation ?? "" },
-                set: { controller.edited?.columns[safe: index]?.collation = $0.isEmpty ? nil : $0 }
-            )) {
+            Picker(
+                "",
+                selection: Binding(
+                    get: { controller.edited?.columns[safe: index]?.collation ?? "" },
+                    set: { controller.edited?.columns[safe: index]?.collation = $0.isEmpty ? nil : $0 }
+                )
+            ) {
                 Text("default").tag("")
                 ForEach(controller.collations) { collation in
                     Text(collation.name).tag(collation.name)
@@ -369,10 +378,13 @@ struct ColumnsPane: View {
     private func field(
         _ index: Int, _ path: WritableKeyPath<ColumnDefinition, String>, placeholder: String
     ) -> some View {
-        TextField(placeholder, text: Binding(
-            get: { controller.edited?.columns[safe: index]?[keyPath: path] ?? "" },
-            set: { controller.edited?.columns[safe: index]?[keyPath: path] = $0 }
-        ))
+        TextField(
+            placeholder,
+            text: Binding(
+                get: { controller.edited?.columns[safe: index]?[keyPath: path] ?? "" },
+                set: { controller.edited?.columns[safe: index]?[keyPath: path] = $0 }
+            )
+        )
         .textFieldStyle(.plain)
         .disabled(!controller.isEditing)
     }
@@ -380,10 +392,13 @@ struct ColumnsPane: View {
     private func optionalField(
         _ index: Int, _ path: WritableKeyPath<ColumnDefinition, String?>, placeholder: String
     ) -> some View {
-        TextField(placeholder, text: Binding(
-            get: { controller.edited?.columns[safe: index]?[keyPath: path] ?? "" },
-            set: { controller.edited?.columns[safe: index]?[keyPath: path] = $0.isEmpty ? nil : $0 }
-        ))
+        TextField(
+            placeholder,
+            text: Binding(
+                get: { controller.edited?.columns[safe: index]?[keyPath: path] ?? "" },
+                set: { controller.edited?.columns[safe: index]?[keyPath: path] = $0.isEmpty ? nil : $0 }
+            )
+        )
         .textFieldStyle(.plain)
         .disabled(!controller.isEditing)
     }
@@ -424,37 +439,47 @@ struct IndexesPane: View {
             ) { index, position in
                 HStack(spacing: 0) {
                     Cell(width: widths[0]) {
-                        TextField("name", text: Binding(
-                            get: { controller.edited?.indexes[safe: position]?.name ?? "" },
-                            set: { controller.edited?.indexes[safe: position]?.name = $0 }
-                        ))
+                        TextField(
+                            "name",
+                            text: Binding(
+                                get: { controller.edited?.indexes[safe: position]?.name ?? "" },
+                                set: { controller.edited?.indexes[safe: position]?.name = $0 }
+                            )
+                        )
                         .textFieldStyle(.plain)
                         .disabled(!controller.isEditing)
                     }
                     Cell(width: widths[1]) {
-                        TextField("column, column", text: Binding(
-                            get: {
-                                (controller.edited?.indexes[safe: position]?.columns ?? [])
-                                    .map(\.name).joined(separator: ", ")
-                            },
-                            set: { text in
-                                controller.edited?.indexes[safe: position]?.columns = text
-                                    .split(separator: ",")
-                                    .map { IndexColumn(name: $0.trimmingCharacters(in: .whitespaces)) }
-                                    .filter { !$0.name.isEmpty }
-                            }
-                        ))
+                        TextField(
+                            "column, column",
+                            text: Binding(
+                                get: {
+                                    (controller.edited?.indexes[safe: position]?.columns ?? [])
+                                        .map(\.name).joined(separator: ", ")
+                                },
+                                set: { text in
+                                    controller.edited?.indexes[safe: position]?.columns =
+                                        text
+                                        .split(separator: ",")
+                                        .map { IndexColumn(name: $0.trimmingCharacters(in: .whitespaces)) }
+                                        .filter { !$0.name.isEmpty }
+                                }
+                            )
+                        )
                         .textFieldStyle(.plain)
                         .disabled(!controller.isEditing)
                     }
                     Cell(width: widths[2]) {
-                        Picker("", selection: Binding(
-                            get: {
-                                controller.edited?.indexes[safe: position]?.method
-                                    ?? methods.first ?? "btree"
-                            },
-                            set: { controller.edited?.indexes[safe: position]?.method = $0 }
-                        )) {
+                        Picker(
+                            "",
+                            selection: Binding(
+                                get: {
+                                    controller.edited?.indexes[safe: position]?.method
+                                        ?? methods.first ?? "btree"
+                                },
+                                set: { controller.edited?.indexes[safe: position]?.method = $0 }
+                            )
+                        ) {
                             ForEach(methods, id: \.self) { Text($0).tag($0) }
                         }
                         .labelsHidden()
@@ -462,22 +487,28 @@ struct IndexesPane: View {
                         .accessibilityLabel("\(index.name) method")
                     }
                     Cell(width: widths[3]) {
-                        Toggle("", isOn: Binding(
-                            get: { controller.edited?.indexes[safe: position]?.isUnique ?? false },
-                            set: { controller.edited?.indexes[safe: position]?.isUnique = $0 }
-                        ))
+                        Toggle(
+                            "",
+                            isOn: Binding(
+                                get: { controller.edited?.indexes[safe: position]?.isUnique ?? false },
+                                set: { controller.edited?.indexes[safe: position]?.isUnique = $0 }
+                            )
+                        )
                         .labelsHidden()
                         .disabled(!controller.isEditing)
                         .accessibilityLabel("\(index.name) unique")
                     }
                     Cell(width: widths[4]) {
-                        TextField("predicate", text: Binding(
-                            get: { controller.edited?.indexes[safe: position]?.predicate ?? "" },
-                            set: {
-                                controller.edited?.indexes[safe: position]?.predicate =
-                                    $0.isEmpty ? nil : $0
-                            }
-                        ))
+                        TextField(
+                            "predicate",
+                            text: Binding(
+                                get: { controller.edited?.indexes[safe: position]?.predicate ?? "" },
+                                set: {
+                                    controller.edited?.indexes[safe: position]?.predicate =
+                                        $0.isEmpty ? nil : $0
+                                }
+                            )
+                        )
                         .textFieldStyle(.plain)
                         // A partial index is PostgreSQL's; MySQL has no equivalent.
                         .disabled(!controller.isEditing || controller.dialect != .postgresql)
@@ -490,11 +521,12 @@ struct IndexesPane: View {
                     addTitle: "Add Index",
                     onAdd: {
                         let count = (controller.edited?.indexes.count ?? 0) + 1
-                        controller.edited?.indexes.append(IndexDefinition(
-                            name: "\(controller.table.name)_idx_\(count)",
-                            columns: [],
-                            method: methods.first
-                        ))
+                        controller.edited?.indexes.append(
+                            IndexDefinition(
+                                name: "\(controller.table.name)_idx_\(count)",
+                                columns: [],
+                                method: methods.first
+                            ))
                     },
                     onRemove: {
                         guard controller.edited?.indexes.isEmpty == false else { return }
@@ -531,54 +563,68 @@ struct ForeignKeysPane: View {
             ) { key, position in
                 HStack(spacing: 0) {
                     Cell(width: widths[0]) {
-                        TextField("name", text: Binding(
-                            get: { controller.edited?.foreignKeys[safe: position]?.name ?? "" },
-                            set: { controller.edited?.foreignKeys[safe: position]?.name = $0 }
-                        ))
+                        TextField(
+                            "name",
+                            text: Binding(
+                                get: { controller.edited?.foreignKeys[safe: position]?.name ?? "" },
+                                set: { controller.edited?.foreignKeys[safe: position]?.name = $0 }
+                            )
+                        )
                         .textFieldStyle(.plain)
                         .disabled(!controller.isEditing)
                     }
                     Cell(width: widths[1]) {
-                        TextField("column", text: Binding(
-                            get: {
-                                (controller.edited?.foreignKeys[safe: position]?.columns ?? [])
-                                    .joined(separator: ", ")
-                            },
-                            set: {
-                                controller.edited?.foreignKeys[safe: position]?.columns =
-                                    Self.splitNames($0)
-                            }
-                        ))
+                        TextField(
+                            "column",
+                            text: Binding(
+                                get: {
+                                    (controller.edited?.foreignKeys[safe: position]?.columns ?? [])
+                                        .joined(separator: ", ")
+                                },
+                                set: {
+                                    controller.edited?.foreignKeys[safe: position]?.columns =
+                                        Self.splitNames($0)
+                                }
+                            )
+                        )
                         .textFieldStyle(.plain)
                         .disabled(!controller.isEditing)
                     }
                     Cell(width: widths[2]) {
-                        TextField("table", text: Binding(
-                            get: {
-                                controller.edited?.foreignKeys[safe: position]?
-                                    .referencedTable.name ?? ""
-                            },
-                            set: { name in
-                                guard let old = controller.edited?.foreignKeys[safe: position]?
-                                    .referencedTable else { return }
-                                controller.edited?.foreignKeys[safe: position]?.referencedTable =
-                                    TableRef(database: old.database, schema: old.schema, name: name)
-                            }
-                        ))
+                        TextField(
+                            "table",
+                            text: Binding(
+                                get: {
+                                    controller.edited?.foreignKeys[safe: position]?
+                                        .referencedTable.name ?? ""
+                                },
+                                set: { name in
+                                    guard
+                                        let old = controller.edited?.foreignKeys[safe: position]?
+                                            .referencedTable
+                                    else { return }
+                                    controller.edited?.foreignKeys[safe: position]?.referencedTable =
+                                        TableRef(database: old.database, schema: old.schema, name: name)
+                                }
+                            )
+                        )
                         .textFieldStyle(.plain)
                         .disabled(!controller.isEditing)
                     }
                     Cell(width: widths[3]) {
-                        TextField("column", text: Binding(
-                            get: {
-                                (controller.edited?.foreignKeys[safe: position]?
-                                    .referencedColumns ?? []).joined(separator: ", ")
-                            },
-                            set: {
-                                controller.edited?.foreignKeys[safe: position]?
-                                    .referencedColumns = Self.splitNames($0)
-                            }
-                        ))
+                        TextField(
+                            "column",
+                            text: Binding(
+                                get: {
+                                    (controller.edited?.foreignKeys[safe: position]?
+                                        .referencedColumns ?? []).joined(separator: ", ")
+                                },
+                                set: {
+                                    controller.edited?.foreignKeys[safe: position]?
+                                        .referencedColumns = Self.splitNames($0)
+                                }
+                            )
+                        )
                         .textFieldStyle(.plain)
                         .disabled(!controller.isEditing)
                     }
@@ -597,12 +643,13 @@ struct ForeignKeysPane: View {
                     onAdd: {
                         let table = controller.table
                         let count = (controller.edited?.foreignKeys.count ?? 0) + 1
-                        controller.edited?.foreignKeys.append(ForeignKeyDefinition(
-                            name: "\(table.name)_fk_\(count)",
-                            columns: [],
-                            referencedTable: table,
-                            referencedColumns: []
-                        ))
+                        controller.edited?.foreignKeys.append(
+                            ForeignKeyDefinition(
+                                name: "\(table.name)_fk_\(count)",
+                                columns: [],
+                                referencedTable: table,
+                                referencedColumns: []
+                            ))
                     },
                     onRemove: {
                         guard controller.edited?.foreignKeys.isEmpty == false else { return }
@@ -614,19 +661,22 @@ struct ForeignKeysPane: View {
     }
 
     private func actionPicker(_ position: Int, keyName: String, isUpdate: Bool) -> some View {
-        Picker("", selection: Binding(
-            get: {
-                let key = controller.edited?.foreignKeys[safe: position]
-                return (isUpdate ? key?.onUpdate : key?.onDelete) ?? .noAction
-            },
-            set: { action in
-                if isUpdate {
-                    controller.edited?.foreignKeys[safe: position]?.onUpdate = action
-                } else {
-                    controller.edited?.foreignKeys[safe: position]?.onDelete = action
+        Picker(
+            "",
+            selection: Binding(
+                get: {
+                    let key = controller.edited?.foreignKeys[safe: position]
+                    return (isUpdate ? key?.onUpdate : key?.onDelete) ?? .noAction
+                },
+                set: { action in
+                    if isUpdate {
+                        controller.edited?.foreignKeys[safe: position]?.onUpdate = action
+                    } else {
+                        controller.edited?.foreignKeys[safe: position]?.onDelete = action
+                    }
                 }
-            }
-        )) {
+            )
+        ) {
             ForEach(ForeignKeyAction.allCases, id: \.self) { Text($0.rawValue).tag($0) }
         }
         .labelsHidden()
@@ -656,18 +706,24 @@ struct ChecksPane: View {
             ) { _, position in
                 HStack(spacing: 0) {
                     Cell(width: widths[0]) {
-                        TextField("name", text: Binding(
-                            get: { controller.edited?.checks[safe: position]?.name ?? "" },
-                            set: { controller.edited?.checks[safe: position]?.name = $0 }
-                        ))
+                        TextField(
+                            "name",
+                            text: Binding(
+                                get: { controller.edited?.checks[safe: position]?.name ?? "" },
+                                set: { controller.edited?.checks[safe: position]?.name = $0 }
+                            )
+                        )
                         .textFieldStyle(.plain)
                         .disabled(!controller.isEditing)
                     }
                     Cell(width: widths[1]) {
-                        TextField("expression", text: Binding(
-                            get: { controller.edited?.checks[safe: position]?.expression ?? "" },
-                            set: { controller.edited?.checks[safe: position]?.expression = $0 }
-                        ))
+                        TextField(
+                            "expression",
+                            text: Binding(
+                                get: { controller.edited?.checks[safe: position]?.expression ?? "" },
+                                set: { controller.edited?.checks[safe: position]?.expression = $0 }
+                            )
+                        )
                         .textFieldStyle(.plain)
                         .disabled(!controller.isEditing)
                     }
@@ -679,9 +735,10 @@ struct ChecksPane: View {
                     addTitle: "Add Check",
                     onAdd: {
                         let count = (controller.edited?.checks.count ?? 0) + 1
-                        controller.edited?.checks.append(CheckDefinition(
-                            name: "\(controller.table.name)_check_\(count)", expression: ""
-                        ))
+                        controller.edited?.checks.append(
+                            CheckDefinition(
+                                name: "\(controller.table.name)_check_\(count)", expression: ""
+                            ))
                     },
                     onRemove: {
                         guard controller.edited?.checks.isEmpty == false else { return }
@@ -758,13 +815,14 @@ struct TriggersPane: View {
                     addTitle: "Add Trigger",
                     onAdd: {
                         let count = (controller.edited?.triggers.count ?? 0) + 1
-                        controller.edited?.triggers.append(TriggerInfo(
-                            name: "\(controller.table.name)_trg_\(count)",
-                            timing: .before,
-                            events: [.update],
-                            body: isPostgres ? nil : "SET NEW.id = NEW.id",
-                            functionCall: isPostgres ? "" : nil
-                        ))
+                        controller.edited?.triggers.append(
+                            TriggerInfo(
+                                name: "\(controller.table.name)_trg_\(count)",
+                                timing: .before,
+                                events: [.update],
+                                body: isPostgres ? nil : "SET NEW.id = NEW.id",
+                                functionCall: isPostgres ? "" : nil
+                            ))
                     },
                     onRemove: {
                         guard controller.edited?.triggers.isEmpty == false else { return }
@@ -795,19 +853,22 @@ struct TriggersPane: View {
     /// A PostgreSQL trigger can fire on several events; MySQL's fires on exactly one, so
     /// anything past the first is dropped rather than written into SQL the server rejects.
     private func eventsField(_ position: Int) -> some View {
-        TextField(isPostgres ? "INSERT, UPDATE" : "UPDATE", text: Binding(
-            get: {
-                (controller.edited?.triggers[safe: position]?.events ?? [])
-                    .map(\.rawValue).joined(separator: ", ")
-            },
-            set: { text in
-                let events = text.split(separator: ",").compactMap {
-                    TriggerEvent(rawValue: $0.trimmingCharacters(in: .whitespaces).uppercased())
+        TextField(
+            isPostgres ? "INSERT, UPDATE" : "UPDATE",
+            text: Binding(
+                get: {
+                    (controller.edited?.triggers[safe: position]?.events ?? [])
+                        .map(\.rawValue).joined(separator: ", ")
+                },
+                set: { text in
+                    let events = text.split(separator: ",").compactMap {
+                        TriggerEvent(rawValue: $0.trimmingCharacters(in: .whitespaces).uppercased())
+                    }
+                    controller.edited?.triggers[safe: position]?.events =
+                        isPostgres ? events : Array(events.prefix(1))
                 }
-                controller.edited?.triggers[safe: position]?.events =
-                    isPostgres ? events : Array(events.prefix(1))
-            }
-        ))
+            )
+        )
         .textFieldStyle(.plain)
         .disabled(!controller.isEditing)
     }
@@ -869,18 +930,24 @@ struct PartitionsPane: View {
                 ) { partition, position in
                     HStack(spacing: 0) {
                         Cell(width: widths[0]) {
-                            TextField("name", text: Binding(
-                                get: { self.partition(position)?.name ?? "" },
-                                set: { self.setPartition(position, name: $0, bound: nil) }
-                            ))
+                            TextField(
+                                "name",
+                                text: Binding(
+                                    get: { self.partition(position)?.name ?? "" },
+                                    set: { self.setPartition(position, name: $0, bound: nil) }
+                                )
+                            )
                             .textFieldStyle(.plain)
                             .disabled(!controller.isEditing)
                         }
                         Cell(width: widths[1]) {
-                            TextField(boundPlaceholder, text: Binding(
-                                get: { self.partition(position)?.bound ?? "" },
-                                set: { self.setPartition(position, name: nil, bound: $0) }
-                            ))
+                            TextField(
+                                boundPlaceholder,
+                                text: Binding(
+                                    get: { self.partition(position)?.bound ?? "" },
+                                    set: { self.setPartition(position, name: nil, bound: $0) }
+                                )
+                            )
                             .textFieldStyle(.plain)
                             .disabled(!controller.isEditing)
                         }
@@ -896,10 +963,11 @@ struct PartitionsPane: View {
                         addTitle: "Add Partition",
                         onAdd: {
                             let count = partitioning.partitions.count + 1
-                            appendPartition(PartitionInfo(
-                                name: "\(controller.table.name)_p\(count)",
-                                bound: boundPlaceholder
-                            ))
+                            appendPartition(
+                                PartitionInfo(
+                                    name: "\(controller.table.name)_p\(count)",
+                                    bound: boundPlaceholder
+                                ))
                         },
                         onRemove: { removeLastPartition() }
                     )
@@ -925,7 +993,7 @@ struct PartitionsPane: View {
 
     private func setPartition(_ position: Int, name: String?, bound: String?) {
         guard let partitioning = controller.edited?.partitioning,
-              let existing = partitioning.partitions[safe: position]
+            let existing = partitioning.partitions[safe: position]
         else { return }
         var partitions = partitioning.partitions
         partitions[position] = PartitionInfo(
@@ -950,7 +1018,7 @@ struct PartitionsPane: View {
 
     private func removeLastPartition() {
         guard let partitioning = controller.edited?.partitioning,
-              !partitioning.partitions.isEmpty
+            !partitioning.partitions.isEmpty
         else { return }
         controller.edited?.partitioning = PartitioningInfo(
             strategy: partitioning.strategy, key: partitioning.key,
@@ -968,23 +1036,29 @@ struct TablePane: View {
     var body: some View {
         Form {
             Section("Table") {
-                TextField("Name", text: Binding(
-                    get: { controller.edited?.ref.name ?? "" },
-                    set: { name in
-                        guard var definition = controller.edited else { return }
-                        let old = definition.ref
-                        definition.ref = TableRef(
-                            database: old.database, schema: old.schema, name: name
-                        )
-                        controller.edited = definition
-                    }
-                ))
+                TextField(
+                    "Name",
+                    text: Binding(
+                        get: { controller.edited?.ref.name ?? "" },
+                        set: { name in
+                            guard var definition = controller.edited else { return }
+                            let old = definition.ref
+                            definition.ref = TableRef(
+                                database: old.database, schema: old.schema, name: name
+                            )
+                            controller.edited = definition
+                        }
+                    )
+                )
                 .disabled(!controller.isEditing)
 
-                TextField("Comment", text: Binding(
-                    get: { controller.edited?.comment ?? "" },
-                    set: { controller.edited?.comment = $0.isEmpty ? nil : $0 }
-                ))
+                TextField(
+                    "Comment",
+                    text: Binding(
+                        get: { controller.edited?.comment ?? "" },
+                        set: { controller.edited?.comment = $0.isEmpty ? nil : $0 }
+                    )
+                )
                 .disabled(!controller.isEditing)
             }
 

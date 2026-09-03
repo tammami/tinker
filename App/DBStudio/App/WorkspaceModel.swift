@@ -248,9 +248,11 @@ public final class WorkspaceModel {
 
     /// Opens a table, focusing the tab that already shows it unless `forceNew`.
     public func openTable(_ table: TableRef, connectionID: UUID, forceNew: Bool = false) -> WorkspaceTab {
-        if !forceNew, let existing = tabs.first(where: {
-            $0.connectionID == connectionID && $0.tableRef == table
-        }) {
+        if !forceNew,
+            let existing = tabs.first(where: {
+                $0.connectionID == connectionID && $0.tableRef == table
+            })
+        {
             selectedTabID = existing.id
             return existing
         }
@@ -292,7 +294,9 @@ public final class WorkspaceModel {
 
     /// The tabs that work inside one database of a connection. A query tab counts when its
     /// session is on that database; `queryDatabase` answers that from the tab's controller.
-    public func tabs(for connectionID: UUID, database: String, queryDatabase: (WorkspaceTab) -> String?) -> [WorkspaceTab] {
+    public func tabs(
+        for connectionID: UUID, database: String, queryDatabase: (WorkspaceTab) -> String?
+    ) -> [WorkspaceTab] {
         tabs.filter { tab in
             guard tab.connectionID == connectionID else { return false }
             switch tab.kind {
@@ -382,7 +386,7 @@ public final class WorkspaceModel {
 
     public func cycleTab(forward: Bool) {
         guard !tabs.isEmpty, let current = selectedTabID,
-              let index = tabs.firstIndex(where: { $0.id == current })
+            let index = tabs.firstIndex(where: { $0.id == current })
         else {
             selectedTabID = tabs.first?.id
             return

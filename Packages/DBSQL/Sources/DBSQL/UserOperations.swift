@@ -89,11 +89,15 @@ public enum UserOperations {
             if request.canCreateDatabase { options.append("CREATEDB") }
             if request.canCreateRole { options.append("CREATEROLE") }
             options.append("PASSWORD \(SQLLiteral.quoteString(password, dialect: dialect))")
-            statements.append("CREATE ROLE \(Identifier.quote(name, dialect: dialect)) \(options.joined(separator: " "))")
+            statements.append(
+                "CREATE ROLE \(Identifier.quote(name, dialect: dialect)) \(options.joined(separator: " "))")
         case .mysql:
-            statements.append("CREATE USER \(account(request, dialect: dialect)) IDENTIFIED BY \(SQLLiteral.quoteString(password, dialect: dialect))")
+            statements.append(
+                "CREATE USER \(account(request, dialect: dialect)) IDENTIFIED BY \(SQLLiteral.quoteString(password, dialect: dialect))"
+            )
             if request.isSuperuser {
-                statements.append("GRANT ALL PRIVILEGES ON *.* TO \(account(request, dialect: dialect)) WITH GRANT OPTION")
+                statements.append(
+                    "GRANT ALL PRIVILEGES ON *.* TO \(account(request, dialect: dialect)) WITH GRANT OPTION")
             }
         }
         statements.append(contentsOf: grants(request, dialect: dialect))
@@ -114,10 +118,13 @@ public enum UserOperations {
             if let password = request.password, !password.isEmpty {
                 options.append("PASSWORD \(SQLLiteral.quoteString(password, dialect: dialect))")
             }
-            statements.append("ALTER ROLE \(Identifier.quote(name, dialect: dialect)) \(options.joined(separator: " "))")
+            statements.append(
+                "ALTER ROLE \(Identifier.quote(name, dialect: dialect)) \(options.joined(separator: " "))")
         case .mysql:
             if let password = request.password, !password.isEmpty {
-                statements.append("ALTER USER \(account(request, dialect: dialect)) IDENTIFIED BY \(SQLLiteral.quoteString(password, dialect: dialect))")
+                statements.append(
+                    "ALTER USER \(account(request, dialect: dialect)) IDENTIFIED BY \(SQLLiteral.quoteString(password, dialect: dialect))"
+                )
             }
         }
         statements.append(contentsOf: grants(request, dialect: dialect))
@@ -134,7 +141,8 @@ public enum UserOperations {
     /// The GRANT statements for the chosen database, or none when nothing was chosen.
     public static func grants(_ request: UserRequest, dialect: SQLDialect) -> [String] {
         guard let database = request.database, !database.isEmpty, !request.privileges.isEmpty else { return [] }
-        let list = request.privileges.contains(.all)
+        let list =
+            request.privileges.contains(.all)
             ? "ALL PRIVILEGES"
             : request.privileges.map(\.rawValue).sorted().joined(separator: ", ")
         let option = request.grantOption ? " WITH GRANT OPTION" : ""
@@ -151,13 +159,16 @@ public enum UserOperations {
             statements.append("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT \(list) ON TABLES TO \(role)")
             return statements
         case .mysql:
-            return ["GRANT \(list) ON \(Identifier.quote(database, dialect: dialect)).* TO \(account(request, dialect: dialect))\(option)"]
+            return [
+                "GRANT \(list) ON \(Identifier.quote(database, dialect: dialect)).* TO \(account(request, dialect: dialect))\(option)"
+            ]
         }
     }
 
     /// `'name'@'host'`, each part a string literal.
     public static func account(_ request: UserRequest, dialect: SQLDialect) -> String {
         let host = request.host.isEmpty ? "%" : request.host
-        return "\(SQLLiteral.quoteString(request.name, dialect: dialect))@\(SQLLiteral.quoteString(host, dialect: dialect))"
+        return
+            "\(SQLLiteral.quoteString(request.name, dialect: dialect))@\(SQLLiteral.quoteString(host, dialect: dialect))"
     }
 }

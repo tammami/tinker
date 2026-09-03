@@ -65,7 +65,8 @@ public struct PostgresIntrospector: SchemaIntrospector {
     // MARK: - Databases and schemas
 
     public func databases() async throws -> [DatabaseInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT d.datname,
                    d.datname = current_database(),
                    shobj_description(d.oid, 'pg_database'),
@@ -88,7 +89,8 @@ public struct PostgresIntrospector: SchemaIntrospector {
     }
 
     public func schemas(in database: String) async throws -> [SchemaInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT n.nspname,
                    pg_get_userbyid(n.nspowner),
                    obj_description(n.oid, 'pg_namespace')
@@ -110,7 +112,8 @@ public struct PostgresIntrospector: SchemaIntrospector {
     // MARK: - Tables
 
     public func tables(in schema: SchemaRef) async throws -> [TableInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT c.relname,
                    c.relkind::text,
                    obj_description(c.oid, 'pg_class'),
@@ -153,7 +156,8 @@ public struct PostgresIntrospector: SchemaIntrospector {
         // `attgenerated` arrived in PostgreSQL 12; older servers report generated columns
         // only through the default expression.
         let generatedExpression = version.isAtLeast(12) ? "a.attgenerated::text" : "''::text"
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT a.attnum,
                    a.attname,
                    pg_catalog.format_type(a.atttypid, a.atttypmod),
@@ -187,11 +191,12 @@ public struct PostgresIntrospector: SchemaIntrospector {
             let defaultExpression = row[5].text
             let identity = row[7].text ?? ""
             let generated = row[8].text ?? ""
-            let labels: [String]? = if case let .array(items) = row[11] {
-                items.compactMap(\.text)
-            } else {
-                nil
-            }
+            let labels: [String]? =
+                if case let .array(items) = row[11] {
+                    items.compactMap(\.text)
+                } else {
+                    nil
+                }
             return ColumnInfo(
                 ordinal: Int(ordinal),
                 name: name,
@@ -214,7 +219,8 @@ public struct PostgresIntrospector: SchemaIntrospector {
     // MARK: - Indexes, keys
 
     public func indexes(of table: TableRef) async throws -> [IndexInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT ic.relname,
                    i.indisunique,
                    i.indisprimary,
@@ -258,7 +264,8 @@ public struct PostgresIntrospector: SchemaIntrospector {
     }
 
     public func foreignKeys(of table: TableRef) async throws -> [ForeignKeyInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT con.conname,
                    ARRAY(
                        SELECT a.attname FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
@@ -311,7 +318,8 @@ public struct PostgresIntrospector: SchemaIntrospector {
     }
 
     public func primaryKey(of table: TableRef) async throws -> [String]? {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT ARRAY(
                 SELECT a.attname
                 FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
@@ -332,10 +340,12 @@ public struct PostgresIntrospector: SchemaIntrospector {
 
     public func routines(in schema: SchemaRef) async throws -> [RoutineInfo] {
         // `prokind` replaced `proisagg`/`proiswindow` in PostgreSQL 11.
-        let kindExpression = version.isAtLeast(11)
+        let kindExpression =
+            version.isAtLeast(11)
             ? "p.prokind::text"
             : "CASE WHEN p.proisagg THEN 'a' WHEN p.proiswindow THEN 'w' ELSE 'f' END"
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT p.proname,
                    \(kindExpression),
                    pg_get_function_identity_arguments(p.oid),
@@ -351,12 +361,13 @@ public struct PostgresIntrospector: SchemaIntrospector {
 
         return result.rows.compactMap { row in
             guard let name = row[0].text else { return nil }
-            let kind: RoutineKind = switch row[1].text ?? "f" {
-            case "p": .procedure
-            case "a": .aggregate
-            case "w": .window
-            default: .function
-            }
+            let kind: RoutineKind =
+                switch row[1].text ?? "f" {
+                case "p": .procedure
+                case "a": .aggregate
+                case "w": .window
+                default: .function
+                }
             return RoutineInfo(
                 name: name,
                 kind: kind,
@@ -388,7 +399,9 @@ public struct PostgresIntrospector: SchemaIntrospector {
             }
             if column.isGenerated, let expression = column.defaultExpression {
                 line += " GENERATED ALWAYS AS (\(expression)) STORED"
-            } else if let expression = column.defaultExpression, !column.isAutoIncrement || !expression.hasPrefix("nextval(") {
+            } else if let expression = column.defaultExpression,
+                !column.isAutoIncrement || !expression.hasPrefix("nextval(")
+            {
                 line += " DEFAULT \(expression)"
             } else if let expression = column.defaultExpression {
                 line += " DEFAULT \(expression)"
@@ -397,7 +410,8 @@ public struct PostgresIntrospector: SchemaIntrospector {
             lines.append(line)
         }
 
-        let constraints = try await query("""
+        let constraints = try await query(
+            """
             SELECT con.conname, pg_get_constraintdef(con.oid)
             FROM pg_catalog.pg_constraint con
             JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
@@ -412,7 +426,8 @@ public struct PostgresIntrospector: SchemaIntrospector {
 
         var ddl = "CREATE TABLE \(qualified) (\n\(lines.joined(separator: ",\n"))\n);"
 
-        let indexes = try await query("""
+        let indexes = try await query(
+            """
             SELECT pg_get_indexdef(i.indexrelid)
             FROM pg_catalog.pg_index i
             JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
@@ -429,7 +444,8 @@ public struct PostgresIntrospector: SchemaIntrospector {
             ddl += "\n\(definition);"
         }
 
-        let tableComment = try await query("""
+        let tableComment = try await query(
+            """
             SELECT obj_description(c.oid, 'pg_class')
             FROM pg_catalog.pg_class c
             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -447,7 +463,8 @@ public struct PostgresIntrospector: SchemaIntrospector {
     }
 
     public func approximateRowCount(_ table: TableRef) async throws -> Int64? {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT c.reltuples::int8
             FROM pg_catalog.pg_class c
             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -464,7 +481,8 @@ extension PostgresIntrospector {
     public func checkConstraints(of table: TableRef) async throws -> [CheckConstraintInfo] {
         // `pg_get_constraintdef` renders "CHECK ((id > 0))"; the designer wants the
         // predicate on its own, which is what `conbin` deparses to.
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT c.conname,
                    pg_get_expr(c.conbin, c.conrelid),
                    c.convalidated
@@ -486,7 +504,8 @@ extension PostgresIntrospector {
     public func triggers(of table: TableRef) async throws -> [TriggerInfo] {
         // tgtype is a bit mask: 1 row-level, 2 before, 4 insert, 8 delete, 16 update,
         // 32 truncate, 64 instead-of.
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT t.tgname,
                    t.tgtype::int,
                    pg_get_expr(t.tgqual, t.tgrelid),
@@ -511,9 +530,7 @@ extension PostgresIntrospector {
             if raw & 16 != 0 { events.append(.update) }
             if raw & 32 != 0 { events.append(.truncate) }
 
-            let timing: TriggerTiming = if raw & 64 != 0 { .insteadOf }
-                else if raw & 2 != 0 { .before }
-                else { .after }
+            let timing: TriggerTiming = if raw & 64 != 0 { .insteadOf } else if raw & 2 != 0 { .before } else { .after }
 
             let call = [row[4].text, row[3].text]
                 .compactMap { $0 }
@@ -531,7 +548,8 @@ extension PostgresIntrospector {
     }
 
     public func partitioning(of table: TableRef) async throws -> PartitioningInfo? {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT pg_get_partkeydef(c.oid)
             FROM pg_catalog.pg_class c
             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -540,8 +558,8 @@ extension PostgresIntrospector {
 
         // `pg_get_partkeydef` renders "RANGE (created_at)"; split the strategy off the key.
         guard let definition = result.rows.first?.first?.text,
-              let open = definition.firstIndex(of: "("),
-              definition.hasSuffix(")")
+            let open = definition.firstIndex(of: "("),
+            definition.hasSuffix(")")
         else { return nil }
         let strategyText = definition[definition.startIndex ..< open]
             .trimmingCharacters(in: .whitespaces)
@@ -549,7 +567,8 @@ extension PostgresIntrospector {
         guard let strategy = PartitionStrategy(rawValue: strategyText) else { return nil }
         let key = String(definition[definition.index(after: open) ..< definition.index(before: definition.endIndex)])
 
-        let children = try await query("""
+        let children = try await query(
+            """
             SELECT c.relname,
                    pg_get_expr(c.relpartbound, c.oid),
                    c.reltuples::bigint
@@ -578,7 +597,8 @@ extension PostgresIntrospector {
     public func collations(in database: String) async throws -> [CollationInfo] {
         // A PostgreSQL collation belongs to a schema, not to a character set, and the same
         // name appears in several encodings; the designer only needs the names.
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT DISTINCT c.collname
             FROM pg_catalog.pg_collation c
             JOIN pg_catalog.pg_namespace n ON n.oid = c.collnamespace
@@ -596,7 +616,8 @@ extension PostgresIntrospector {
 
 extension PostgresIntrospector: ServerIntrospector {
     public func activity() async throws -> [ServerSessionInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT a.pid::text,
                    a.usename,
                    a.datname,
@@ -636,12 +657,17 @@ extension PostgresIntrospector: ServerIntrospector {
         }
         let result = try await query("SELECT pg_terminate_backend($1)", [.int(Int64(pid))])
         if result.rows.first?.first != .bool(true) {
-            throw DBError.server(ServerError(message: "The server did not terminate backend \(pid); it may have already ended, or the role lacks permission"))
+            throw DBError.server(
+                ServerError(
+                    message:
+                        "The server did not terminate backend \(pid); it may have already ended, or the role lacks permission"
+                ))
         }
     }
 
     public func users() async throws -> [ServerUserInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT r.rolname, r.rolsuper, r.rolcanlogin, r.rolcreatedb, r.rolcreaterole,
                    r.rolreplication, r.rolconnlimit, r.rolvaliduntil::text,
                    ARRAY(SELECT b.rolname FROM pg_catalog.pg_auth_members m
@@ -670,7 +696,8 @@ extension PostgresIntrospector: ServerIntrospector {
     }
 
     public func variables() async throws -> [ServerVariableInfo] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT s.name, s.setting, s.unit, s.category, s.short_desc
             FROM pg_catalog.pg_settings s
             ORDER BY s.category, s.name
@@ -685,7 +712,8 @@ extension PostgresIntrospector: ServerIntrospector {
     }
 
     public func viewDefinition(_ table: TableRef) async throws -> String {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT c.relkind::text, pg_get_viewdef(c.oid, true)
             FROM pg_catalog.pg_class c
             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -701,7 +729,8 @@ extension PostgresIntrospector: ServerIntrospector {
 
     /// Which databases the role may connect to, and the attributes it carries.
     public func grants(for user: ServerUserInfo) async throws -> [String] {
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT d.datname
             FROM pg_catalog.pg_database d
             WHERE d.datallowconn AND NOT d.datistemplate
@@ -725,7 +754,8 @@ extension PostgresIntrospector: ServerIntrospector {
         in schema: SchemaRef, name: String, signature: String, kind: RoutineKind
     ) async throws -> String {
         // The identity arguments pick one overload; a routine with none has an empty string.
-        let result = try await query("""
+        let result = try await query(
+            """
             SELECT pg_get_functiondef(p.oid)
             FROM pg_catalog.pg_proc p
             JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace

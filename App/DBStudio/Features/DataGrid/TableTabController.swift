@@ -88,16 +88,18 @@ public final class TableTabController: DataGridDelegate {
             let columns = try await session.introspection(.columns(table)) {
                 try await $0.columns(of: table)
             }
-            let identity = try await session.introspection(.primaryKey(table)) {
-                try await $0.rowIdentity(of: table)
-            } ?? []
+            let identity =
+                try await session.introspection(.primaryKey(table)) {
+                    try await $0.rowIdentity(of: table)
+                } ?? []
             let estimate = try? await session.introspection(.rowCount(table)) {
                 try await $0.approximateRowCount(table)
             }
             columnsInfo = columns
-            foreignKeys = (try? await session.introspection(.foreignKeys(table)) {
-                try await $0.foreignKeys(of: table)
-            }) ?? []
+            foreignKeys =
+                (try? await session.introspection(.foreignKeys(table)) {
+                    try await $0.foreignKeys(of: table)
+                }) ?? []
 
             let preferences = await environment.gridPreferences(
                 connectionID: connectionID, table: table.id
@@ -109,7 +111,8 @@ public final class TableTabController: DataGridDelegate {
                 return FilterRule(column: stored.column, op: op, values: stored.values)
             }
 
-            let identityKind = identity.count == 1
+            let identityKind =
+                identity.count == 1
                 ? columns.first { $0.name == identity[0] }?.kind
                 : nil
             let model = GridModel(
@@ -176,7 +179,9 @@ public final class TableTabController: DataGridDelegate {
         }
         if let reason = model.readOnlyReason { parts.append(reason) }
         if model.edits.pendingStatementCount > 0 {
-            parts.append("\(model.edits.pendingStatementCount) pending change\(model.edits.pendingStatementCount == 1 ? "" : "s")")
+            parts.append(
+                "\(model.edits.pendingStatementCount) pending change\(model.edits.pendingStatementCount == 1 ? "" : "s")"
+            )
         }
         parts.append(model.strategy(forPage: max(0, selection.focusRow / 1_000)).explanation)
         statusText = parts.joined(separator: " • ")
@@ -287,7 +292,7 @@ public final class TableTabController: DataGridDelegate {
         var rules: [FilterRule] = []
         for (local, remote) in zip(key.columns, key.referencedColumns) {
             guard let index = model.columns.firstIndex(where: { $0.name == local }),
-                  let value = model.value(row: row, column: index), !value.isNull
+                let value = model.value(row: row, column: index), !value.isNull
             else { return nil }
             rules.append(FilterRule(column: remote, op: .equal, values: [value]))
         }
@@ -418,7 +423,7 @@ public final class TableTabController: DataGridDelegate {
     /// when the paste runs past the end (SPEC §12.4).
     public func paste() {
         guard let model, model.isEditable,
-              let text = NSPasteboard.general.string(forType: .string)
+            let text = NSPasteboard.general.string(forType: .string)
         else { return }
         let rows = ClipboardFormatter.parseTSV(text)
         guard !rows.isEmpty else { return }
@@ -443,8 +448,9 @@ public final class TableTabController: DataGridDelegate {
         bumpRevision()
         updateStatus()
         if invalid > 0 {
-            errorText = "\(invalid) pasted value\(invalid == 1 ? "" : "s") did not fit the column type and " +
-                "\(invalid == 1 ? "was" : "were") left unchanged"
+            errorText =
+                "\(invalid) pasted value\(invalid == 1 ? "" : "s") did not fit the column type and "
+                + "\(invalid == 1 ? "was" : "were") left unchanged"
         }
     }
 

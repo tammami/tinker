@@ -84,10 +84,11 @@ struct DBCLI {
                 config.port = forward.localPort
             }
             defer { if let tunnel { Task { await tunnel.close() } } }
-            let connection: any SQLConnection = switch config.dialect {
-            case .postgresql: try await PostgresDriver.connect(config, logger: logger)
-            case .mysql: try await MySQLDriver.connect(config, logger: logger)
-            }
+            let connection: any SQLConnection =
+                switch config.dialect {
+                case .postgresql: try await PostgresDriver.connect(config, logger: logger)
+                case .mysql: try await MySQLDriver.connect(config, logger: logger)
+                }
             defer { Task { await connection.close() } }
 
             let version = await connection.serverVersion
@@ -125,7 +126,8 @@ struct DBCLI {
     // MARK: - Running statements
 
     static func run(sql: String, on connection: any SQLConnection, options: Options) async throws {
-        let dialect: SQLDialect = await connection.serverVersion.flavor == .postgresql
+        let dialect: SQLDialect =
+            await connection.serverVersion.flavor == .postgresql
             ? .postgresql : .mysql
         let statements = StatementSplitter.split(sql, dialect: dialect)
         guard !statements.isEmpty else {
@@ -168,12 +170,14 @@ struct DBCLI {
             case let .complete(completion):
                 completed = true
                 let tag = completion.serverTag ?? "OK"
-                let milliseconds = Double(completion.durationTotal.components.attoseconds) / 1e15
+                let milliseconds =
+                    Double(completion.durationTotal.components.attoseconds) / 1e15
                     + Double(completion.durationTotal.components.seconds) * 1_000
-                standardError(String(
-                    format: "%@ • %d column(s) • %d row(s) • %.1f ms\n",
-                    tag, columns.count, rowCount, milliseconds
-                ))
+                standardError(
+                    String(
+                        format: "%@ • %d column(s) • %d row(s) • %.1f ms\n",
+                        tag, columns.count, rowCount, milliseconds
+                    ))
                 for notice in completion.notices { standardError("notice: \(notice)\n") }
             }
         }
@@ -190,7 +194,8 @@ struct DBCLI {
         case let .array(items): return "{" + items.map { $0.text ?? "NULL" }.joined(separator: ",") + "}"
         default:
             let text = value.text ?? ""
-            return text
+            return
+                text
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "\t", with: "\\t")
                 .replacingOccurrences(of: "\n", with: "\\n")
@@ -263,11 +268,12 @@ struct DBCLI {
         guard let components = URLComponents(string: text), let scheme = components.scheme?.lowercased() else {
             throw CLIError("Cannot parse \(text) as a URL")
         }
-        let dialect: SQLDialect = switch scheme {
-        case "postgres", "postgresql", "pg": .postgresql
-        case "mysql", "mariadb": .mysql
-        default: throw CLIError("Unsupported scheme \(scheme)")
-        }
+        let dialect: SQLDialect =
+            switch scheme {
+            case "postgres", "postgresql", "pg": .postgresql
+            case "mysql", "mariadb": .mysql
+            default: throw CLIError("Unsupported scheme \(scheme)")
+            }
         var database = components.path
         if database.hasPrefix("/") { database.removeFirst() }
 
@@ -316,7 +322,8 @@ struct DBCLI {
             try await secrets.setSecret(password, for: reference)
             auth = .password(reference)
         } else {
-            let path = options.sshKey
+            let path =
+                options.sshKey
                 ?? (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/id_ed25519")
             auth = .privateKey(path: path, passphrase: nil)
         }
@@ -368,26 +375,27 @@ struct DBCLI {
     }
 
     static func printUsage() {
-        print("""
-        dbcli — DBStudio's driver harness
+        print(
+            """
+            dbcli — DBStudio's driver harness
 
-        USAGE
-          dbcli <url> "<sql>"          run statements, printing rows as TSV
-          dbcli <url> --introspect     dump the schema as JSON
-          dbcli <url> --ping           check the connection
+            USAGE
+              dbcli <url> "<sql>"          run statements, printing rows as TSV
+              dbcli <url> --introspect     dump the schema as JSON
+              dbcli <url> --ping           check the connection
 
-        OPTIONS
-          --ssh <user@host[:port]>     tunnel the connection over SSH
-          --ssh-key <path>             private key to use (default ~/.ssh/id_ed25519)
-          --ssh-password <password>    use password authentication instead of a key
-          --cancel-after <duration>    cancel the running statement (e.g. 2s, 500ms)
-          --no-header                  omit the column-name row
-          -v, --verbose                debug logging
-          -h, --help                   this text
+            OPTIONS
+              --ssh <user@host[:port]>     tunnel the connection over SSH
+              --ssh-key <path>             private key to use (default ~/.ssh/id_ed25519)
+              --ssh-password <password>    use password authentication instead of a key
+              --cancel-after <duration>    cancel the running statement (e.g. 2s, 500ms)
+              --no-header                  omit the column-name row
+              -v, --verbose                debug logging
+              -h, --help                   this text
 
-        URL
-          postgresql://user:password@host:5432/database?sslmode=require
-          mysql://user:password@host:3306/database
-        """)
+            URL
+              postgresql://user:password@host:5432/database?sslmode=require
+              mysql://user:password@host:3306/database
+            """)
     }
 }

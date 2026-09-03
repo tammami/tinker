@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import DBCore
 
 final class SQLDialectTests: XCTestCase {

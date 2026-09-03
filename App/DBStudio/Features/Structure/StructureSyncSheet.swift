@@ -35,7 +35,8 @@ struct StructureSyncSheet: View {
         SheetFrame(
             title: "Structure Sync",
             icon: Icon.structure,
-            subtitle: "Compare \(source.name) against another table and write the DDL that would make that one match. Nothing runs: the script opens in a query tab.",
+            subtitle:
+                "Compare \(source.name) against another table and write the DDL that would make that one match. Nothing runs: the script opens in a query tab.",
             contentInset: 0
         ) {
             VStack(spacing: 0) {
@@ -84,7 +85,8 @@ struct StructureSyncSheet: View {
         .onAppear {
             targetSchema = source.schema
             targetTable = source.name
-            targetConnectionID = connections.first { $0.id != sourceConnectionID }?.id
+            targetConnectionID =
+                connections.first { $0.id != sourceConnectionID }?.id
                 ?? connections.first?.id
         }
     }
@@ -118,7 +120,8 @@ struct StructureSyncSheet: View {
             }
 
             let script = result.script(includingDestructive: includeDestructive)
-            summary = result.isIdentical
+            summary =
+                result.isIdentical
                 ? "The target already matches."
                 : "\(result.statements.count) statement"
                     + (result.statements.count == 1 ? "" : "s")
@@ -155,9 +158,10 @@ struct StructureSyncSheet: View {
         let columns = try await session.introspection(.columns(ref)) {
             try await $0.columns(of: ref)
         }
-        let primaryKey = try await session.introspection(.primaryKey(ref)) {
-            try await $0.primaryKey(of: ref)
-        } ?? []
+        let primaryKey =
+            try await session.introspection(.primaryKey(ref)) {
+                try await $0.primaryKey(of: ref)
+            } ?? []
         let indexes = try await session.introspection(.indexes(ref)) {
             try await $0.indexes(of: ref)
         }

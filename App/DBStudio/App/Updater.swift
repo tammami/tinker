@@ -46,7 +46,7 @@ public final class Updater {
 
     public var feedURL: URL? {
         guard let text = Bundle.main.object(forInfoDictionaryKey: Self.feedURLKey) as? String,
-              !text.isEmpty
+            !text.isEmpty
         else { return nil }
         return URL(string: text)
     }

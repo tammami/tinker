@@ -138,7 +138,8 @@ public struct DMLGenerator: Sendable {
     public func insert(values: [String: DBValue], returnRow: Bool = true) throws -> GeneratedStatement {
         guard !values.isEmpty else {
             // An all-defaults row is still a legitimate insert.
-            let sql = dialect == .postgresql
+            let sql =
+                dialect == .postgresql
                 ? "INSERT INTO \(qualifiedTable) DEFAULT VALUES" + (returnRow ? " RETURNING *" : "")
                 : "INSERT INTO \(qualifiedTable) () VALUES ()"
             return GeneratedStatement(

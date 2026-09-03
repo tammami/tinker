@@ -58,10 +58,13 @@ public final class SQLTextView: NSTextView {
         // 36 is Return, 76 the keypad's Enter. ⌘↩ runs the selection or the current
         // statement, ⌘⇧↩ everything, ⌘⌥↩ only the selection.
         if event.keyCode == 36 || event.keyCode == 76 {
-            let scope: SQLRunScope = event.modifierFlags.contains(.shift) ? .all
+            let scope: SQLRunScope =
+                event.modifierFlags.contains(.shift)
+                ? .all
                 : event.modifierFlags.contains(.option) ? .selection : .current
             let selected = selectedRange()
-            let selection: Range<Int>? = selected.length > 0
+            let selection: Range<Int>? =
+                selected.length > 0
                 ? selected.location ..< NSMaxRange(selected) : nil
             MainActor.assumeIsolated {
                 self.coordinator?.delegate?.editorDidRequestRun(scope, selection: selection)
@@ -111,10 +114,10 @@ public final class SQLTextView: NSTextView {
         // It never becomes key, so the keys arrive here and are forwarded by hand.
         if let coordinator, coordinator.completion.isVisible {
             switch event.keyCode {
-            case 125: return coordinator.completion.moveSelection(by: 1)     // down
-            case 126: return coordinator.completion.moveSelection(by: -1)    // up
-            case 36, 48: return coordinator.completion.acceptSelection()     // return, tab
-            case 53: return coordinator.completion.dismiss()                 // escape
+            case 125: return coordinator.completion.moveSelection(by: 1)  // down
+            case 126: return coordinator.completion.moveSelection(by: -1)  // up
+            case 36, 48: return coordinator.completion.acceptSelection()  // return, tab
+            case 53: return coordinator.completion.dismiss()  // escape
             default: break
             }
         }
@@ -152,9 +155,11 @@ public final class SQLTextView: NSTextView {
         let block = text.substring(with: range)
         let lines = block.components(separatedBy: "\n")
         let meaningful = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        let allCommented = !meaningful.isEmpty && meaningful.allSatisfy {
-            $0.trimmingCharacters(in: .whitespaces).hasPrefix("--")
-        }
+        let allCommented =
+            !meaningful.isEmpty
+            && meaningful.allSatisfy {
+                $0.trimmingCharacters(in: .whitespaces).hasPrefix("--")
+            }
         let updated = lines.map { line -> String in
             guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return line }
             if allCommented {
@@ -239,9 +244,9 @@ public final class SQLGutterView: NSView {
         border.stroke()
 
         guard let textView,
-              let layoutManager = textView.layoutManager,
-              let container = textView.textContainer,
-              let clipView
+            let layoutManager = textView.layoutManager,
+            let container = textView.textContainer,
+            let clipView
         else { return }
 
         let text = textView.string as NSString

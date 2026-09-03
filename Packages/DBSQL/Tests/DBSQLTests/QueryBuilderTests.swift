@@ -1,5 +1,6 @@
 import DBCore
 import XCTest
+
 @testable import DBSQL
 
 final class QueryBuilderTests: XCTestCase {
@@ -17,7 +18,8 @@ final class QueryBuilderTests: XCTestCase {
         var model = QueryBuilderModel()
         let c = model.add(customers)
         let o = model.add(orders)
-        model.joins.append(.init(kind: .left, leftTable: c, leftColumn: "id", rightTable: o, rightColumn: "customer_id"))
+        model.joins.append(
+            .init(kind: .left, leftTable: c, leftColumn: "id", rightTable: o, rightColumn: "customer_id"))
         model.fields = [
             .init(table: c, column: "name"),
             .init(table: o, column: "total", aggregate: .sum, alias: "revenue"),
@@ -34,22 +36,24 @@ final class QueryBuilderTests: XCTestCase {
         model.offset = 10
         model.isDistinct = true
 
-        XCTAssertEqual(model.sql(dialect: .postgresql), """
-        SELECT DISTINCT
-            "customers"."name",
-            SUM("orders"."total") AS "revenue",
-            COUNT(*) AS "orders"
-        FROM "public"."customers"
-        LEFT JOIN "public"."orders"
-            ON "customers"."id" = "orders"."customer_id"
-        WHERE "customers"."name"::text LIKE '%a!_b%' ESCAPE '!'
-            OR "orders"."total" > 10
-        GROUP BY "customers"."name"
-        HAVING "orders"."total" IS NOT NULL
-        ORDER BY "orders"."total" DESC
-        LIMIT 50
-        OFFSET 10
-        """)
+        XCTAssertEqual(
+            model.sql(dialect: .postgresql),
+            """
+            SELECT DISTINCT
+                "customers"."name",
+                SUM("orders"."total") AS "revenue",
+                COUNT(*) AS "orders"
+            FROM "public"."customers"
+            LEFT JOIN "public"."orders"
+                ON "customers"."id" = "orders"."customer_id"
+            WHERE "customers"."name"::text LIKE '%a!_b%' ESCAPE '!'
+                OR "orders"."total" > 10
+            GROUP BY "customers"."name"
+            HAVING "orders"."total" IS NOT NULL
+            ORDER BY "orders"."total" DESC
+            LIMIT 50
+            OFFSET 10
+            """)
         let mysql = model.sql(dialect: .mysql) ?? ""
         XCTAssertTrue(mysql.contains("LEFT JOIN `db`.`orders`"), mysql)
         XCTAssertTrue(mysql.contains("CAST(`customers`.`name` AS CHAR) LIKE '%a!_b%' ESCAPE '!'"), mysql)
@@ -61,13 +65,15 @@ final class QueryBuilderTests: XCTestCase {
         let b = model.add(customers)
         XCTAssertEqual(model.table(b)?.alias, "customers_2")
         model.joins.append(.init(leftTable: a, leftColumn: "id", rightTable: b, rightColumn: "id"))
-        XCTAssertEqual(model.sql(dialect: .postgresql), """
-        SELECT
-            *
-        FROM "public"."customers"
-        INNER JOIN "public"."customers" AS "customers_2"
-            ON "customers"."id" = "customers_2"."id"
-        """)
+        XCTAssertEqual(
+            model.sql(dialect: .postgresql),
+            """
+            SELECT
+                *
+            FROM "public"."customers"
+            INNER JOIN "public"."customers" AS "customers_2"
+                ON "customers"."id" = "customers_2"."id"
+            """)
     }
 
     func testUnjoinedTablesBecomeCrossJoinsAndRemovalCleansUp() {
@@ -87,7 +93,8 @@ final class QueryBuilderTests: XCTestCase {
         var model = QueryBuilderModel()
         let c = model.add(customers)
         let o = model.add(orders)
-        let key = ForeignKeyInfo(name: "fk", columns: ["customer_id"], referencedTable: customers, referencedColumns: ["id"])
+        let key = ForeignKeyInfo(
+            name: "fk", columns: ["customer_id"], referencedTable: customers, referencedColumns: ["id"])
         model.addJoins(fromForeignKeys: [key], of: o)
         XCTAssertEqual(model.joins.count, 1)
         XCTAssertEqual(model.joins.first?.leftTable, c)
@@ -104,21 +111,24 @@ final class QueryBuilderTests: XCTestCase {
         model.columns = [c: ["id", "name"], o: ["id", "customer_id", "total"]]
         model.joins.append(.init(leftTable: c, leftColumn: "id", rightTable: o, rightColumn: "customer_id"))
         // Nothing chosen: every column, both `id`s told apart.
-        XCTAssertEqual(model.sql(dialect: .mysql), """
-        SELECT
-            `customers`.`id` AS `customers_id`,
-            `customers`.`name`,
-            `orders`.`id` AS `orders_id`,
-            `orders`.`customer_id`,
-            `orders`.`total`
-        FROM `db`.`customers`
-        INNER JOIN `db`.`orders`
-            ON `customers`.`id` = `orders`.`customer_id`
-        """)
+        XCTAssertEqual(
+            model.sql(dialect: .mysql),
+            """
+            SELECT
+                `customers`.`id` AS `customers_id`,
+                `customers`.`name`,
+                `orders`.`id` AS `orders_id`,
+                `orders`.`customer_id`,
+                `orders`.`total`
+            FROM `db`.`customers`
+            INNER JOIN `db`.`orders`
+                ON `customers`.`id` = `orders`.`customer_id`
+            """)
         // One star among explicit fields expands too; a chosen alias is kept.
         model.fields = [.init(table: c, column: "*"), .init(table: o, column: "id", alias: "order_id")]
         XCTAssertTrue(model.sql(dialect: .postgresql)?.contains(#""orders"."id" AS "order_id""#) ?? false)
-        XCTAssertFalse(model.sql(dialect: .postgresql)?.contains("customers_id") ?? true, "no clash once the other id is aliased")
+        XCTAssertFalse(
+            model.sql(dialect: .postgresql)?.contains("customers_id") ?? true, "no clash once the other id is aliased")
         // A single table keeps its plain star.
         model.remove(table: o)
         model.fields = []
@@ -130,7 +140,8 @@ final class QueryBuilderTests: XCTestCase {
         let c = model.add(customers)
         model.conditions = [.init(table: c, column: "name", op: .equal, values: [.string("")])]
         XCTAssertFalse(model.sql(dialect: .postgresql)?.contains("WHERE") ?? true)
-        let view = model.createViewSQL(name: TableRef(database: "db", schema: "public", name: "v"), dialect: .postgresql)
+        let view = model.createViewSQL(
+            name: TableRef(database: "db", schema: "public", name: "v"), dialect: .postgresql)
         XCTAssertEqual(view, "CREATE OR REPLACE VIEW \"public\".\"v\" AS\nSELECT\n    *\nFROM \"public\".\"customers\"")
     }
 }

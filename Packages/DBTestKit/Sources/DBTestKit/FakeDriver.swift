@@ -103,13 +103,16 @@ public actor FakeConnection: SQLConnection {
         AsyncThrowingStream { continuation in
             Task {
                 await self.note(sql)
-                continuation.yield(.columns([
-                    ColumnMeta(id: 0, name: "value", nativeTypeName: "int4", kind: .int),
-                ]))
+                continuation.yield(
+                    .columns([
+                        ColumnMeta(id: 0, name: "value", nativeTypeName: "int4", kind: .int)
+                    ]))
                 continuation.yield(.rows(RowBatch(rows: [[.int(1)]], startIndex: 0)))
-                continuation.yield(.complete(QueryCompletion(
-                    affectedRows: 1, serverTag: "SELECT 1", durationTotal: .milliseconds(1)
-                )))
+                continuation.yield(
+                    .complete(
+                        QueryCompletion(
+                            affectedRows: 1, serverTag: "SELECT 1", durationTotal: .milliseconds(1)
+                        )))
                 continuation.finish()
             }
         }
@@ -173,7 +176,8 @@ public final class FakeIntrospector: SchemaIntrospector, @unchecked Sendable {
     public func columns(of table: TableRef) async throws -> [ColumnInfo] {
         note("columns")
         return [
-            ColumnInfo(ordinal: 1, name: "id", nativeType: "integer", kind: .int, isNullable: false, isPrimaryKey: true),
+            ColumnInfo(
+                ordinal: 1, name: "id", nativeType: "integer", kind: .int, isNullable: false, isPrimaryKey: true),
             ColumnInfo(ordinal: 2, name: "name", nativeType: "text", kind: .string, isNullable: true),
         ]
     }

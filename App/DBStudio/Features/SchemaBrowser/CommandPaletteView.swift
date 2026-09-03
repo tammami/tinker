@@ -118,28 +118,31 @@ public struct CommandPaletteView: View {
         let ws = workspace
 
         for tab in ws.tabs {
-            commands.append(PaletteCommand(
-                id: "tab-\(tab.id)", group: .tabs, title: tab.title,
-                subtitle: ws.environment.connections.first { $0.id == tab.connectionID }?.name,
-                icon: tab.icon
-            ) { ws.selectedTabID = tab.id })
+            commands.append(
+                PaletteCommand(
+                    id: "tab-\(tab.id)", group: .tabs, title: tab.title,
+                    subtitle: ws.environment.connections.first { $0.id == tab.connectionID }?.name,
+                    icon: tab.icon
+                ) { ws.selectedTabID = tab.id })
         }
 
         for match in controller.sidebar.knownTables.prefix(400) {
             let connection = ws.environment.connections.first { $0.id == match.connection }
-            commands.append(PaletteCommand(
-                id: "table-\(match.connection)-\(match.table.id)", group: .tables,
-                title: match.table.name,
-                subtitle: [match.table.ref.schema, connection?.name].compactMap { $0 }.joined(separator: " · "),
-                icon: match.table.kind.symbolName
-            ) { controller.openTable(match.table.ref, connectionID: match.connection) })
+            commands.append(
+                PaletteCommand(
+                    id: "table-\(match.connection)-\(match.table.id)", group: .tables,
+                    title: match.table.name,
+                    subtitle: [match.table.ref.schema, connection?.name].compactMap { $0 }.joined(separator: " · "),
+                    icon: match.table.kind.symbolName
+                ) { controller.openTable(match.table.ref, connectionID: match.connection) })
         }
 
         for config in ws.environment.connections {
-            commands.append(PaletteCommand(
-                id: "conn-\(config.id)", group: .connections, title: config.name,
-                subtitle: "New query on \(config.user)@\(config.host)", icon: Icon.connection
-            ) { controller.newQueryTab(connectionID: config.id) })
+            commands.append(
+                PaletteCommand(
+                    id: "conn-\(config.id)", group: .connections, title: config.name,
+                    subtitle: "New query on \(config.user)@\(config.host)", icon: Icon.connection
+                ) { controller.newQueryTab(connectionID: config.id) })
         }
 
         let actions: [(String, String, String?, @MainActor () -> Void)] = [
@@ -149,7 +152,14 @@ public struct CommandPaletteView: View {
             ("New Table…", Icon.table, "⌘⇧N", { ws.isNewTablePresented = true }),
             ("Query Builder", Icon.builder, "⌘⇧B", { controller.showQueryBuilder() }),
             ("Server Activity", Icon.activity, "⌘⇧A", { controller.showServerActivity() }),
-            ("Users & Privileges", Icon.user, "⌘⇧U", { if let id = ws.activeConnectionID { controller.openUsers(connectionID: id, database: ws.activeConnection?.database) } }),
+            (
+                "Users & Privileges", Icon.user, "⌘⇧U",
+                {
+                    if let id = ws.activeConnectionID {
+                        controller.openUsers(connectionID: id, database: ws.activeConnection?.database)
+                    }
+                }
+            ),
             ("New Folder…", Icon.group, nil, { ws.folderEditor = FolderEditor(kind: .create(parent: [])) }),
             ("Query History…", Icon.history, "⌘Y", { ws.isHistoryPresented = true }),
             ("Snippets…", Icon.snippet, "⌘⇧K", { ws.isSnippetsPresented = true }),
@@ -171,9 +181,10 @@ public struct CommandPaletteView: View {
             ("Close Tab", Icon.close, "⌘W", { controller.closeSelectedTab() }),
         ]
         for (title, icon, shortcut, run) in actions {
-            commands.append(PaletteCommand(
-                id: "action-\(title)", group: .actions, title: title, icon: icon, shortcut: shortcut, run: run
-            ))
+            commands.append(
+                PaletteCommand(
+                    id: "action-\(title)", group: .actions, title: title, icon: icon, shortcut: shortcut, run: run
+                ))
         }
         return commands
     }
@@ -185,7 +196,8 @@ public struct CommandPaletteView: View {
             // With nothing typed: the open tabs, then the actions. Tables wait for a word.
             return all.filter { $0.group == .tabs || $0.group == .actions }
         }
-        return all
+        return
+            all
             .compactMap { command -> (Int, PaletteCommand)? in
                 let haystack = (command.title + " " + (command.subtitle ?? "")).lowercased()
                 guard let score = SidebarModel.fuzzyScore(needle: needle, haystack: haystack) else { return nil }

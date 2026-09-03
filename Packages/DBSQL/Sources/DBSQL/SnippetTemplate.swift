@@ -57,7 +57,11 @@ public enum SnippetTemplate {
                 while end < template.endIndex, template[end].isNumber { end = template.index(after: end) }
                 let number = Int(template[next ..< end])
                 let position = output.utf16.count
-                if number == 0 { finalCaret = position } else if firstRange == nil { firstRange = position ..< position }
+                if number == 0 {
+                    finalCaret = position
+                } else if firstRange == nil {
+                    firstRange = position ..< position
+                }
                 index = end
             } else {
                 output.append(character)

@@ -119,13 +119,14 @@ public enum ClipboardFormatter {
         var lines: [String] = []
         if options.includeHeader { lines.append(columns.map(\.name).joined(separator: "\t")) }
         for row in rows {
-            lines.append(row.map { field in
-                // Tabs and newlines would break the row structure a spreadsheet expects.
-                cellText(field, nullText: options.nullText)
-                    .replacingOccurrences(of: "\t", with: " ")
-                    .replacingOccurrences(of: "\n", with: " ")
-                    .replacingOccurrences(of: "\r", with: " ")
-            }.joined(separator: "\t"))
+            lines.append(
+                row.map { field in
+                    // Tabs and newlines would break the row structure a spreadsheet expects.
+                    cellText(field, nullText: options.nullText)
+                        .replacingOccurrences(of: "\t", with: " ")
+                        .replacingOccurrences(of: "\n", with: " ")
+                        .replacingOccurrences(of: "\r", with: " ")
+                }.joined(separator: "\t"))
         }
         return lines.joined(separator: "\n")
     }
@@ -141,7 +142,8 @@ public enum ClipboardFormatter {
 
     /// Quotes a CSV field when it holds a delimiter, a quote or a line break.
     public static func csvField(_ text: String, delimiter: Character = ",", quote: Character = "\"") -> String {
-        let needsQuoting = text.contains(delimiter) || text.contains(quote)
+        let needsQuoting =
+            text.contains(delimiter) || text.contains(quote)
             || text.contains("\n") || text.contains("\r")
         guard needsQuoting else { return text }
         let escaped = text.replacingOccurrences(of: String(quote), with: String(repeating: String(quote), count: 2))
@@ -150,9 +152,10 @@ public enum ClipboardFormatter {
 
     static func json(columns: [ColumnMeta], rows: [[DBValue]]) -> String {
         let objects = rows.map { row in
-            "{" + zip(columns, row).map { column, value in
-                "\(jsonString(column.name)): \(jsonValue(value))"
-            }.joined(separator: ", ") + "}"
+            "{"
+                + zip(columns, row).map { column, value in
+                    "\(jsonString(column.name)): \(jsonValue(value))"
+                }.joined(separator: ", ") + "}"
         }
         return "[\n  " + objects.joined(separator: ",\n  ") + "\n]"
     }
@@ -160,9 +163,10 @@ public enum ClipboardFormatter {
     /// One JSON object per line, the shape most tools stream.
     public static func ndjson(columns: [ColumnMeta], rows: [[DBValue]]) -> String {
         rows.map { row in
-            "{" + zip(columns, row).map { column, value in
-                "\(jsonString(column.name)):\(jsonValue(value))"
-            }.joined(separator: ",") + "}"
+            "{"
+                + zip(columns, row).map { column, value in
+                    "\(jsonString(column.name)):\(jsonValue(value))"
+                }.joined(separator: ",") + "}"
         }.joined(separator: "\n")
     }
 
@@ -215,15 +219,18 @@ public enum ClipboardFormatter {
         var lines = ["| " + columns.map { escape($0.name) }.joined(separator: " | ") + " |"]
         lines.append("| " + columns.map { _ in "---" }.joined(separator: " | ") + " |")
         for row in rows {
-            lines.append("| " + row.map { escape(cellText($0, nullText: options.nullText)) }
-                .joined(separator: " | ") + " |")
+            lines.append(
+                "| "
+                    + row.map { escape(cellText($0, nullText: options.nullText)) }
+                    .joined(separator: " | ") + " |")
         }
         return lines.joined(separator: "\n")
     }
 
     static func sqlInserts(columns: [ColumnMeta], rows: [[DBValue]], options: Options) -> String {
         let dialect = options.dialect
-        let name = options.table.map { Identifier.qualified($0, dialect: dialect) }
+        let name =
+            options.table.map { Identifier.qualified($0, dialect: dialect) }
             ?? Identifier.quote("table", dialect: dialect)
         let columnList = columns.map { Identifier.quote($0.name, dialect: dialect) }.joined(separator: ", ")
         return rows.map { row in

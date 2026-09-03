@@ -4,6 +4,7 @@ import Foundation
 import NIOCore
 import NIOSSH
 import XCTest
+
 @testable import DBTunnel
 
 final class KnownHostsTests: XCTestCase {
@@ -195,9 +196,11 @@ final class SSHAuthenticationTests: XCTestCase {
     func testAWrongPassphraseIsReported() throws {
         let key = try SSHKeyFixture.generate(type: "ed25519", passphrase: "right")
         defer { key.remove() }
-        XCTAssertThrowsError(try SSHTunnelProvider.privateKeyAuthentication(
-            username: "me", contents: key.contents, passphrase: Data("wrong".utf8), path: key.path
-        )) { error in
+        XCTAssertThrowsError(
+            try SSHTunnelProvider.privateKeyAuthentication(
+                username: "me", contents: key.contents, passphrase: Data("wrong".utf8), path: key.path
+            )
+        ) { error in
             guard case let DBError.tunnelFailed(_, message)? = error as? DBError else {
                 return XCTFail("expected .tunnelFailed, got \(error)")
             }
@@ -206,9 +209,11 @@ final class SSHAuthenticationTests: XCTestCase {
     }
 
     func testGarbageKeyFileIsRejectedClearly() {
-        XCTAssertThrowsError(try SSHTunnelProvider.privateKeyAuthentication(
-            username: "me", contents: "not a key", passphrase: nil, path: "/tmp/bogus"
-        )) { error in
+        XCTAssertThrowsError(
+            try SSHTunnelProvider.privateKeyAuthentication(
+                username: "me", contents: "not a key", passphrase: nil, path: "/tmp/bogus"
+            )
+        ) { error in
             guard case let DBError.tunnelFailed(stage, message)? = error as? DBError else {
                 return XCTFail("expected .tunnelFailed, got \(error)")
             }
@@ -217,7 +222,6 @@ final class SSHAuthenticationTests: XCTestCase {
         }
     }
 }
-
 
 /// Generates real OpenSSH key pairs with `ssh-keygen`, which ships with macOS.
 enum SSHKeyFixture {

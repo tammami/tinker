@@ -1,6 +1,7 @@
 import DBCore
 import DBSQL
 import XCTest
+
 @testable import DBGrid
 
 final class RowBufferTests: XCTestCase {

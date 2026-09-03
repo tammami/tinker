@@ -1,5 +1,6 @@
 import DBCore
 import XCTest
+
 @testable import DBSQL
 
 final class TableOperationsTests: XCTestCase {

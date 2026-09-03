@@ -188,9 +188,10 @@ public struct SQLEditorView: NSViewRepresentable {
         if textView.string != text {
             let selected = textView.selectedRange()
             textView.string = text
-            textView.setSelectedRange(NSRange(
-                location: min(selected.location, text.utf16.count), length: 0
-            ))
+            textView.setSelectedRange(
+                NSRange(
+                    location: min(selected.location, text.utf16.count), length: 0
+                ))
             coordinator.applyHighlighting()
         } else if coordinator.lastErrorPosition != errorPosition {
             coordinator.lastErrorPosition = errorPosition
@@ -255,7 +256,7 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
             let offset = notification.userInfo?["offset"] as? Int
             MainActor.assumeIsolated {
                 guard let self, let textView = self.textView, textView.window?.isKeyWindow == true,
-                      let offset
+                    let offset
                 else { return }
                 let clamped = min(max(0, offset), textView.string.utf16.count)
                 textView.setSelectedRange(NSRange(location: clamped, length: 0))
@@ -290,7 +291,8 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         while start > 0 {
             let character = text.character(at: start - 1)
             guard let scalar = Unicode.Scalar(character) else { break }
-            let isWord = CharacterSet.alphanumerics.contains(scalar)
+            let isWord =
+                CharacterSet.alphanumerics.contains(scalar)
                 || scalar == "_" || scalar == "." || scalar == "$"
             if !isWord { break }
             start -= 1
@@ -307,7 +309,8 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         let text = textView.string as NSString
         let prefix = text.substring(with: range)
         // The statement under the cursor is what makes the columns alias-aware.
-        let statement = StatementSplitter.split(textView.string, dialect: dialect)
+        let statement =
+            StatementSplitter.split(textView.string, dialect: dialect)
             .first { $0.utf16Range.contains(range.location) }?.text ?? textView.string
 
         let candidates = delegate.editorCompletionCandidates(prefix: prefix, statement: statement)
@@ -380,17 +383,19 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
             guard NSMaxRange(range) <= storage.length else { continue }
             switch token.kind {
             case .keyword:
-                storage.addAttributes([
-                    .foregroundColor: NSColor.systemPink,
-                    .font: NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask),
-                ], range: range)
+                storage.addAttributes(
+                    [
+                        .foregroundColor: NSColor.systemPink,
+                        .font: NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask),
+                    ], range: range)
             case .string:
                 storage.addAttribute(.foregroundColor, value: NSColor.systemRed, range: range)
             case .comment:
-                storage.addAttributes([
-                    .foregroundColor: NSColor.systemGreen,
-                    .font: NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask),
-                ], range: range)
+                storage.addAttributes(
+                    [
+                        .foregroundColor: NSColor.systemGreen,
+                        .font: NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask),
+                    ], range: range)
             case .number:
                 storage.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: range)
             case .parameter:
@@ -406,13 +411,15 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         if let errorPosition, errorPosition > 0, errorPosition <= storage.length {
             let start = errorPosition - 1
             let token = SQLTokenizer.token(at: start, in: source, dialect: dialect)
-            let range = token.map { NSRange(location: $0.utf16Range.lowerBound, length: $0.utf16Range.count) }
+            let range =
+                token.map { NSRange(location: $0.utf16Range.lowerBound, length: $0.utf16Range.count) }
                 ?? NSRange(location: start, length: 1)
             if NSMaxRange(range) <= storage.length {
-                storage.addAttributes([
-                    .underlineStyle: NSUnderlineStyle.thick.rawValue | NSUnderlineStyle.patternDot.rawValue,
-                    .underlineColor: NSColor.systemRed,
-                ], range: range)
+                storage.addAttributes(
+                    [
+                        .underlineStyle: NSUnderlineStyle.thick.rawValue | NSUnderlineStyle.patternDot.rawValue,
+                        .underlineColor: NSColor.systemRed,
+                    ], range: range)
             }
         }
         storage.endEditing()
@@ -465,7 +472,6 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         }
     }
 }
-
 
 public extension Notification.Name {
     /// Posted when a query tab runs, so any open suggestion list closes.

@@ -3,6 +3,7 @@ import DBSQL
 import DBTestKit
 import Logging
 import XCTest
+
 @testable import DBPostgres
 
 /// Integration tests against every server named in `DBSTUDIO_TEST_PG_URL(S)`.
@@ -64,7 +65,7 @@ final class PostgresIntegrationTests: XCTestCase {
         let servers = try TestEnvironment.requireServers(for: .postgresql)
         guard let server = servers.first else { return }
         var config = server.resolvedConfig(connectTimeout: .seconds(5))
-        config.port = 1   // nothing listens here
+        config.port = 1  // nothing listens here
         do {
             _ = try await PostgresDriver.connect(config, logger: logger)
             XCTFail("expected the connection to fail")
@@ -88,8 +89,9 @@ final class PostgresIntegrationTests: XCTestCase {
             await connection.close()
             // Some local servers authorise loopback with `trust`, so no password is checked.
             // That is a property of the server, not a defect, and it is reported as a gap.
-            TestLog.note("pg_hba does not require a password for \(config.user) on \(config.host); "
-                + "authentication-failure path NOT covered on this server")
+            TestLog.note(
+                "pg_hba does not require a password for \(config.user) on \(config.host); "
+                    + "authentication-failure path NOT covered on this server")
             throw XCTSkip("server does not enforce passwords for this user")
         } catch let error as DBError {
             guard case let .authenticationFailed(user) = error else {
@@ -129,7 +131,8 @@ final class PostgresIntegrationTests: XCTestCase {
                 XCTAssertEqual(result.rows.first?.first, .bool(true), "sslmode=require connected without TLS")
                 TestLog.note("TLS require: encrypted on \(server.host)")
             } catch DBError.tlsRequiredButUnavailable {
-                TestLog.note("TLS require: server has no TLS support; encrypted-connection path NOT covered on \(server.host)")
+                TestLog.note(
+                    "TLS require: server has no TLS support; encrypted-connection path NOT covered on \(server.host)")
             }
         }
     }
@@ -152,7 +155,8 @@ final class PostgresIntegrationTests: XCTestCase {
 
     func testEveryMappedTypeRoundTrips() async throws {
         try await withEachServer { connection, _ in
-            let result = try await connection.executeCollecting("""
+            let result = try await connection.executeCollecting(
+                """
                 SELECT c_bool, c_int2, c_int4, c_int8, c_float4, c_float8, c_numeric,
                        c_text, c_varchar, c_char, c_name, c_bytea,
                        c_date, c_time, c_timetz, c_timestamp, c_timestamptz,
@@ -204,7 +208,8 @@ final class PostgresIntegrationTests: XCTestCase {
                 "SELECT c_timestamptz = $1::timestamptz FROM all_types WHERE id = 1",
                 parameters: [.string(stamp.serverText)]
             )
-            XCTAssertEqual(sameInstant.rows.first?.first, .bool(true), "serverText \(stamp.serverText) did not round-trip")
+            XCTAssertEqual(
+                sameInstant.rows.first?.first, .bool(true), "serverText \(stamp.serverText) did not round-trip")
             XCTAssertEqual(row.count, 27)
         }
     }
@@ -221,7 +226,8 @@ final class PostgresIntegrationTests: XCTestCase {
 
     func testExtremesAndUnicode() async throws {
         try await withEachServer { connection, _ in
-            let result = try await connection.executeCollecting("""
+            let result = try await connection.executeCollecting(
+                """
                 SELECT c_int2, c_int4, c_int8, c_float4, c_float8, c_numeric,
                        c_text, c_bytea, c_date, c_timestamp, c_int_array, c_text_array
                 FROM all_types WHERE id = 3
@@ -280,7 +286,8 @@ final class PostgresIntegrationTests: XCTestCase {
         try await withEachServer { connection, _ in
             var kinds: [String] = []
             var rowTotal = 0
-            for try await event in connection.execute("SELECT * FROM big_table ORDER BY id LIMIT 1200", parameters: []) {
+            for try await event in connection.execute("SELECT * FROM big_table ORDER BY id LIMIT 1200", parameters: [])
+            {
                 switch event {
                 case .columns: kinds.append("columns")
                 case let .rows(batch):
@@ -339,10 +346,12 @@ final class PostgresIntegrationTests: XCTestCase {
 
     func testParameterTypesTheServerInfers() async throws {
         try await withEachServer { connection, _ in
-            let result = try await connection.executeCollecting("""
+            let result = try await connection.executeCollecting(
+                """
                 SELECT $1::numeric AS exact, $2::timestamptz AS moment, $3::bytea AS blob,
                        $4::uuid AS identifier, $5::jsonb AS document, $6::int[] AS numbers
-                """, parameters: [
+                """,
+                parameters: [
                     .decimal("0.10000000000000000001"),
                     .string("2024-03-10 02:30:00+00"),
                     .bytes(Data([0, 1, 255])),
@@ -439,7 +448,8 @@ final class PostgresIntegrationTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(700))
             // The probe must not match itself: pg_stat_activity.query holds the text of
             // the statement doing the asking, which mentions the sleep it is looking for.
-            let active = try await connection.executeCollecting("""
+            let active = try await connection.executeCollecting(
+                """
                 SELECT count(*) FROM pg_stat_activity
                 WHERE pid = \(connection.backendID) AND state = 'active'
                   AND query LIKE ('%pg' || '_sleep%') AND query NOT LIKE '%pg_stat_activity%'
@@ -729,7 +739,8 @@ extension PostgresIntegrationTests {
             XCTAssertTrue(procedure.contains("PROCEDURE public.touch_customer"), procedure)
 
             do {
-                _ = try await introspector.routineDefinition(in: schema, name: "no_such", signature: "", kind: .function)
+                _ = try await introspector.routineDefinition(
+                    in: schema, name: "no_such", signature: "", kind: .function)
                 XCTFail("expected not found")
             } catch let error as DBError {
                 XCTAssertTrue(error.errorDescription?.contains("no_such") ?? false)
@@ -754,7 +765,8 @@ extension PostgresIntegrationTests {
                 _ = try await connection.executeCollecting(statements[0])
                 XCTFail("expected the server to refuse")
             } catch let error as DBError {
-                XCTAssertTrue(error.errorDescription?.lowercased().contains("permission") ?? false, error.errorDescription ?? "")
+                XCTAssertTrue(
+                    error.errorDescription?.lowercased().contains("permission") ?? false, error.errorDescription ?? "")
             }
         }
     }

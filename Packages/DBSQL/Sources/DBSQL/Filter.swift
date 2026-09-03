@@ -35,7 +35,7 @@ public enum FilterOperator: String, Sendable, Hashable, Codable, CaseIterable {
         switch self {
         case .isNull, .isNotNull: 0
         case .between: 2
-        case .inList: -1        // one or more
+        case .inList: -1  // one or more
         default: 1
         }
     }
@@ -115,23 +115,25 @@ public enum FilterCompiler {
                 clauses.append("\(column) IS NOT NULL")
             case .equal, .notEqual, .lessThan, .lessOrEqual, .greaterThan, .greaterOrEqual:
                 guard let value = rule.values.first else { continue }
-                let comparison = switch rule.op {
-                case .equal: "="
-                case .notEqual: "<>"
-                case .lessThan: "<"
-                case .lessOrEqual: "<="
-                case .greaterThan: ">"
-                default: ">="
-                }
+                let comparison =
+                    switch rule.op {
+                    case .equal: "="
+                    case .notEqual: "<>"
+                    case .lessThan: "<"
+                    case .lessOrEqual: "<="
+                    case .greaterThan: ">"
+                    default: ">="
+                    }
                 clauses.append("\(column) \(comparison) \(placeholder(value))")
             case .contains, .startsWith, .endsWith:
                 guard let value = rule.values.first, let text = value.text else { continue }
                 let escaped = escapeLikePattern(text)
-                let pattern = switch rule.op {
-                case .contains: "%\(escaped)%"
-                case .startsWith: "\(escaped)%"
-                default: "%\(escaped)"
-                }
+                let pattern =
+                    switch rule.op {
+                    case .contains: "%\(escaped)%"
+                    case .startsWith: "\(escaped)%"
+                    default: "%\(escaped)"
+                    }
                 // Casting to text lets the same filter work on numeric and date columns.
                 let lhs = dialect == .postgresql ? "\(column)::text" : "CAST(\(column) AS CHAR)"
                 clauses.append("\(lhs) LIKE \(placeholder(.string(pattern))) ESCAPE '!'")

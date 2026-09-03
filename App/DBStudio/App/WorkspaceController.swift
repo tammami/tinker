@@ -134,7 +134,8 @@ public final class WorkspaceController {
         if let expandedDatabase = sidebar.expanded
             .filter({ $0.contains(marker) && $0.contains("/db/") && !$0.contains("/schema/") })
             .sorted().first,
-           let name = expandedDatabase.components(separatedBy: "/db/").last {
+            let name = expandedDatabase.components(separatedBy: "/db/").last
+        {
             return SchemaRef(database: name, schema: config.dialect == .mysql ? name : "public")
         }
         let database = config.database ?? ""
@@ -227,7 +228,8 @@ public final class WorkspaceController {
         }
         var message = "\(open.count) open tab\(open.count == 1 ? "" : "s") on this connection will be closed."
         if unsaved > 0 {
-            message += " \(unsaved) of them \(unsaved == 1 ? "has" : "have") uncommitted changes or an open transaction, which will be lost."
+            message +=
+                " \(unsaved) of them \(unsaved == 1 ? "has" : "have") uncommitted changes or an open transaction, which will be lost."
         }
         workspace.confirmation = DestructiveConfirmation(
             title: "Disconnect from “\(config.name)”?",
@@ -263,7 +265,8 @@ public final class WorkspaceController {
         let unsaved = open.filter { hasUnsavedWork($0) }.count
         var message = "\(open.count) open tab\(open.count == 1 ? "" : "s") on this database will be closed."
         if unsaved > 0 {
-            message += " \(unsaved) of them \(unsaved == 1 ? "has" : "have") uncommitted changes or an open transaction, which will be lost."
+            message +=
+                " \(unsaved) of them \(unsaved == 1 ? "has" : "have") uncommitted changes or an open transaction, which will be lost."
         }
         workspace.confirmation = DestructiveConfirmation(
             title: "Close “\(name)”?",
@@ -336,9 +339,9 @@ public final class WorkspaceController {
             return
         }
         guard let tab = workspace.selectedTab,
-              let controller = tableControllers[tab.id],
-              let model = controller.model,
-              let config = workspace.activeConnection
+            let controller = tableControllers[tab.id],
+            let model = controller.model,
+            let config = workspace.activeConnection
         else { return }
         let statements = controller.pendingStatements()
         guard !statements.isEmpty else { return }
@@ -392,7 +395,8 @@ public final class WorkspaceController {
     /// ⌘F: the editor's find bar in a query tab; the search field of any other tab.
     public func findInEditor(replace: Bool) {
         if let tab = workspace.selectedTab, tab.isQueryTab {
-            let tag = replace
+            let tag =
+                replace
                 ? NSTextFinder.Action.showReplaceInterface.rawValue
                 : NSTextFinder.Action.showFindInterface.rawValue
             let item = NSMenuItem()
@@ -406,7 +410,7 @@ public final class WorkspaceController {
 
     public func toggleReadOnly() {
         guard let id = workspace.activeConnectionID,
-              let session = environment.session(for: id)
+            let session = environment.session(for: id)
         else { return }
         Task {
             let current = await session.isReadOnly
@@ -430,7 +434,8 @@ public final class WorkspaceController {
     public func cycleResultTab(forward: Bool) {
         guard let controller = activeQueryController, !controller.results.isEmpty else { return }
         let index = controller.results.firstIndex { $0.id == controller.selectedResultID } ?? 0
-        let next = forward
+        let next =
+            forward
             ? (index + 1) % controller.results.count
             : (index - 1 + controller.results.count) % controller.results.count
         controller.selectedResultID = controller.results[next].id
@@ -440,8 +445,8 @@ public final class WorkspaceController {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url,
-              let text = try? String(contentsOf: url, encoding: .utf8),
-              let id = workspace.activeConnectionID
+            let text = try? String(contentsOf: url, encoding: .utf8),
+            let id = workspace.activeConnectionID
         else { return }
         let tab = newQueryTab(connectionID: id, sql: text)
         tab.title = url.lastPathComponent

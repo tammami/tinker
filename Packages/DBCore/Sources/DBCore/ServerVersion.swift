@@ -44,8 +44,10 @@ public struct ServerVersion: Sendable, Hashable, Codable, CustomStringConvertibl
             }
         }
         if !current.isEmpty { numbers.append(Int(current) ?? 0) }
-        return (numbers.count > 0 ? numbers[0] : 0,
-                numbers.count > 1 ? numbers[1] : 0,
-                numbers.count > 2 ? numbers[2] : 0)
+        return (
+            numbers.count > 0 ? numbers[0] : 0,
+            numbers.count > 1 ? numbers[1] : 0,
+            numbers.count > 2 ? numbers[2] : 0
+        )
     }
 }

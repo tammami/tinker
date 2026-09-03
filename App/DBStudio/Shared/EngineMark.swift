@@ -67,16 +67,19 @@ private struct ElephantMark: Shape {
         path.addLine(to: p(0.32, 0.62))
         path.closeSubpath()
         // Ears: one bump either side, sitting below the widest part of the dome.
-        path.addEllipse(in: CGRect(
-            x: rect.minX, y: rect.minY + h * 0.30, width: w * 0.26, height: h * 0.40
-        ))
-        path.addEllipse(in: CGRect(
-            x: rect.minX + w * 0.74, y: rect.minY + h * 0.30, width: w * 0.26, height: h * 0.40
-        ))
+        path.addEllipse(
+            in: CGRect(
+                x: rect.minX, y: rect.minY + h * 0.30, width: w * 0.26, height: h * 0.40
+            ))
+        path.addEllipse(
+            in: CGRect(
+                x: rect.minX + w * 0.74, y: rect.minY + h * 0.30, width: w * 0.26, height: h * 0.40
+            ))
         // Trunk: straight down the middle, thick enough to stay visible.
         path.addRoundedRect(
-            in: CGRect(x: rect.minX + w * 0.38, y: rect.minY + h * 0.52,
-                       width: w * 0.24, height: h * 0.48),
+            in: CGRect(
+                x: rect.minX + w * 0.38, y: rect.minY + h * 0.52,
+                width: w * 0.24, height: h * 0.48),
             cornerSize: CGSize(width: w * 0.12, height: w * 0.12)
         )
         return path

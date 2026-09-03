@@ -50,7 +50,8 @@ extension DBValue {
         case let .array(items):
             // Arrays are PostgreSQL-only; in MySQL the closest honest rendering is JSON text.
             guard dialect == .postgresql else {
-                return SQLLiteral.quoteString("[\(items.map { $0.text ?? "null" }.joined(separator: ","))]", dialect: dialect)
+                return SQLLiteral.quoteString(
+                    "[\(items.map { $0.text ?? "null" }.joined(separator: ","))]", dialect: dialect)
             }
             return "ARRAY[\(items.map { $0.sqlLiteral(dialect: dialect) }.joined(separator: ", "))]"
         case let .raw(typeName, text, bytes):
@@ -120,7 +121,8 @@ public enum SQLLiteral {
             }
             if dialect == .mysql, scalar == "?" {
                 scanner.advance()
-                output += nextParameter < parameters.count
+                output +=
+                    nextParameter < parameters.count
                     ? parameters[nextParameter].sqlLiteral(dialect: dialect)
                     : "?"
                 nextParameter += 1

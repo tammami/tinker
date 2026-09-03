@@ -105,7 +105,8 @@ public enum MySQLDriver: SQLDriver {
             }
         }
         if let certFile = config.tls.clientCertFile, let keyFile = config.tls.clientKeyFile,
-           !certFile.isEmpty, !keyFile.isEmpty {
+            !certFile.isEmpty, !keyFile.isEmpty
+        {
             do {
                 tls.certificateChain = try NIOSSLCertificate.fromPEMFile(certFile).map { .certificate($0) }
                 tls.privateKey = .privateKey(try NIOSSLPrivateKey(file: keyFile, format: .pem))
@@ -115,11 +116,12 @@ public enum MySQLDriver: SQLDriver {
         }
         // MySQL's `verify-identity` is PostgreSQL's `verify-full`; `required` encrypts
         // without checking the certificate, which is what most local servers can offer.
-        tls.certificateVerification = switch config.tls.mode {
-        case .disable, .prefer, .require: .none
-        case .verifyCA: .noHostnameVerification
-        case .verifyFull: .fullVerification
-        }
+        tls.certificateVerification =
+            switch config.tls.mode {
+            case .disable, .prefer, .require: .none
+            case .verifyCA: .noHostnameVerification
+            case .verifyFull: .fullVerification
+            }
         return tls
     }
 
@@ -153,7 +155,8 @@ public enum MySQLDriver: SQLDriver {
         }
         let text = String(reflecting: error)
         if text.contains("connection refused") || text.contains("Connection refused")
-            || text.contains("ECONNREFUSED") || text.contains("connectTimeout") {
+            || text.contains("ECONNREFUSED") || text.contains("connectTimeout")
+        {
             return .tunnelFailed(stage: .tcp, underlying: text)
         }
         if text.lowercased().contains("nodename") || text.lowercased().contains("name or service") {

@@ -72,10 +72,11 @@ enum PostgresErrorMapper {
             if sqlState == "3D000" {
                 return .connectionFailed(underlying: message, hint: "The database does not exist on this server")
             }
-            return .server(ServerError(
-                sqlState: sqlState, code: nil, message: message,
-                detail: info[.detail], hint: info[.hint], position: nil
-            ))
+            return .server(
+                ServerError(
+                    sqlState: sqlState, code: nil, message: message,
+                    detail: info[.detail], hint: info[.hint], position: nil
+                ))
         }
 
         switch psql.code {
@@ -87,8 +88,9 @@ enum PostgresErrorMapper {
             return .authenticationFailed(user: config.user)
         case .connectionError:
             let text = underlyingText(psql)
-            let stage: TunnelStage = text.lowercased().contains("nodename")
-                || text.lowercased().contains("name or service") ? .dns : .tcp
+            let stage: TunnelStage =
+                text.lowercased().contains("nodename")
+                    || text.lowercased().contains("name or service") ? .dns : .tcp
             return .tunnelFailed(stage: stage, underlying: text)
         default:
             return .connectionFailed(underlying: underlyingText(psql), hint: nil)

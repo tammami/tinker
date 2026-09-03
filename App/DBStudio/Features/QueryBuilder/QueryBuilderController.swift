@@ -85,7 +85,8 @@ public final class QueryBuilderController {
             if availableSchemas.isEmpty { await loadSchemas(session) }
             // A connection with no default database opens on nothing; take the first schema.
             if schema.schema.isEmpty || !availableSchemas.contains(schema),
-               let first = availableSchemas.first {
+                let first = availableSchemas.first
+            {
                 schema = first
             }
             let schema = schema
@@ -108,9 +109,10 @@ public final class QueryBuilderController {
                 .filter { !system.contains($0.database) }
         case .postgresql:
             let database = schema.database.isEmpty ? (session.config.database ?? "") : schema.database
-            let schemas = (try? await session.introspection(.schemas(database: database)) {
-                try await $0.schemas(in: database)
-            }) ?? []
+            let schemas =
+                (try? await session.introspection(.schemas(database: database)) {
+                    try await $0.schemas(in: database)
+                }) ?? []
             availableSchemas = schemas.filter { !$0.isSystem }.map(\.ref)
         }
         if let current = availableSchemas.first(where: { $0 == schema }) {
@@ -175,7 +177,8 @@ public final class QueryBuilderController {
 
     /// Ticks or unticks a column in the SELECT list.
     public func toggleField(table id: UUID, column: String) {
-        if let index = model.fields.firstIndex(where: { $0.table == id && $0.column == column && $0.aggregate == .none }) {
+        if let index = model.fields.firstIndex(where: { $0.table == id && $0.column == column && $0.aggregate == .none }
+        ) {
             model.fields.remove(at: index)
         } else {
             model.fields.append(.init(table: id, column: column))

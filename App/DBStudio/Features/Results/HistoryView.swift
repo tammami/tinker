@@ -32,10 +32,14 @@ public struct HistoryView: View {
                     .frame(width: 260, height: 24)
                     .background(Color(nsColor: .textBackgroundColor))
                     .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius))
-                    .overlay(RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius).strokeBorder(Color.primary.opacity(0.1)))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius).strokeBorder(
+                            Color.primary.opacity(0.1)))
                     Toggle("This connection only", isOn: $onlyThisConnection).toggleStyle(.checkbox)
                     Spacer()
-                    Text("\(entries.count) entr\(entries.count == 1 ? "y" : "ies")").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    Text("\(entries.count) entr\(entries.count == 1 ? "y" : "ies")").font(.caption).foregroundStyle(
+                        .secondary
+                    ).monospacedDigit()
                     Button(role: .destructive) {
                         Task {
                             await environment.clearHistory()
@@ -50,9 +54,12 @@ public struct HistoryView: View {
                 Divider()
 
                 if entries.isEmpty {
-                    EmptyStateView(icon: Icon.history, title: "No history yet",
-                                   message: search.isEmpty ? "Statements appear here after they run." : "Nothing matches “\(search)”.")
-                        .frame(height: 380)
+                    EmptyStateView(
+                        icon: Icon.history, title: "No history yet",
+                        message: search.isEmpty
+                            ? "Statements appear here after they run." : "Nothing matches “\(search)”."
+                    )
+                    .frame(height: 380)
                 } else {
                     Table(entries, selection: $selection) {
                         TableColumn("When") { entry in
@@ -88,7 +95,11 @@ public struct HistoryView: View {
                     .frame(height: 380)
                     .contextMenu(forSelectionType: QueryHistoryEntry.ID.self) { selection in
                         if let id = selection.first, let entry = entries.first(where: { $0.id == id }) {
-                            Button { onInsert(entry.sql) } label: { Label("Insert into Editor", systemImage: Icon.query) }
+                            Button {
+                                onInsert(entry.sql)
+                            } label: {
+                                Label("Insert into Editor", systemImage: Icon.query)
+                            }
                             Button {
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(entry.sql, forType: .string)

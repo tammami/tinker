@@ -31,7 +31,8 @@ public enum TemporalText {
         var body = text.trimmingCharacters(in: .whitespaces)
         var offset = ""
         if kind != .date, let range = body.range(of: #"([+-]\d{2}(:?\d{2})?|Z)$"#, options: .regularExpression),
-           range.lowerBound > body.startIndex, body[body.index(before: range.lowerBound)] != "-" || kind == .time {
+            range.lowerBound > body.startIndex, body[body.index(before: range.lowerBound)] != "-" || kind == .time
+        {
             // A trailing zone only counts when it follows a time, not the date's own dashes.
             if body[..<range.lowerBound].contains(":") {
                 offset = String(body[range])
@@ -43,11 +44,12 @@ public enum TemporalText {
             fraction = String(body[dot...])
             body = String(body[..<dot])
         }
-        let formats: [String] = switch kind {
-        case .date: ["yyyy-MM-dd"]
-        case .time: ["HH:mm:ss", "HH:mm"]
-        default: ["yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd HH:mm", "yyyy-MM-dd"]
-        }
+        let formats: [String] =
+            switch kind {
+            case .date: ["yyyy-MM-dd"]
+            case .time: ["HH:mm:ss", "HH:mm"]
+            default: ["yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd HH:mm", "yyyy-MM-dd"]
+            }
         for format in formats {
             let formatter = DateFormatter()
             formatter.calendar = calendar
@@ -68,11 +70,12 @@ public enum TemporalText {
         formatter.calendar = calendar
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = zone(for: offset) ?? .current
-        formatter.dateFormat = switch kind {
-        case .date: "yyyy-MM-dd"
-        case .time: "HH:mm:ss"
-        default: "yyyy-MM-dd HH:mm:ss"
-        }
+        formatter.dateFormat =
+            switch kind {
+            case .date: "yyyy-MM-dd"
+            case .time: "HH:mm:ss"
+            default: "yyyy-MM-dd HH:mm:ss"
+            }
         var text = formatter.string(from: date)
         if kind != .date { text += fraction }
         if kind != .date { text += offset }
@@ -93,4 +96,3 @@ public enum TemporalText {
         kind == .date || kind == .time || kind == .timestamp
     }
 }
-

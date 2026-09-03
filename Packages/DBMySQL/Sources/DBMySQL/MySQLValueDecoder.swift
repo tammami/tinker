@@ -60,7 +60,8 @@ public struct MySQLValueDecoder: Sendable {
             // Only `BIGINT UNSIGNED` can exceed Int64, which is the one case `uint` exists for.
             if isUnsigned {
                 if let text = data.format == .text ? readString(&buffer) : nil,
-                   let value = UInt64(text) {
+                    let value = UInt64(text)
+                {
                     return .uint(value)
                 }
                 if let value = buffer.getInteger(at: buffer.readerIndex, endianness: .little, as: UInt64.self) {
@@ -78,16 +79,18 @@ public struct MySQLValueDecoder: Sendable {
 
         case .date, .newdate:
             guard let time = data.time, let year = time.year else { return .null }
-            return .date(DBDate(
-                year: Int(year), month: Int(time.month ?? 1), day: Int(time.day ?? 1)
-            ))
+            return .date(
+                DBDate(
+                    year: Int(year), month: Int(time.month ?? 1), day: Int(time.day ?? 1)
+                ))
 
         case .time, .time2:
             guard let time = data.time else { return .null }
-            return .time(DBTime(
-                hour: Int(time.hour ?? 0), minute: Int(time.minute ?? 0),
-                second: Int(time.second ?? 0), microsecond: Int(time.microsecond ?? 0)
-            ))
+            return .time(
+                DBTime(
+                    hour: Int(time.hour ?? 0), minute: Int(time.minute ?? 0),
+                    second: Int(time.second ?? 0), microsecond: Int(time.microsecond ?? 0)
+                ))
 
         case .datetime, .datetime2, .timestamp, .timestamp2:
             guard let time = data.time, let year = time.year else { return .null }
@@ -105,10 +108,12 @@ public struct MySQLValueDecoder: Sendable {
 
         case .bit:
             let bytes = buffer.readBytes(length: buffer.readableBytes) ?? []
-            return .raw(typeName: "bit", text: Self.bitText(bytes, length: Int(column.columnLength)), bytes: Data(bytes))
+            return .raw(
+                typeName: "bit", text: Self.bitText(bytes, length: Int(column.columnLength)), bytes: Data(bytes))
 
         case .geometry:
-            return .raw(typeName: "geometry", text: nil, bytes: Data(buffer.readBytes(length: buffer.readableBytes) ?? []))
+            return .raw(
+                typeName: "geometry", text: nil, bytes: Data(buffer.readBytes(length: buffer.readableBytes) ?? []))
 
         case .enum, .set:
             return .string(readString(&buffer))

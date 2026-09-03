@@ -1,5 +1,6 @@
 import DBCore
 import XCTest
+
 @testable import DBSQL
 
 final class DMLGeneratorTests: XCTestCase {
@@ -187,9 +188,10 @@ final class FilterCompilerTests: XCTestCase {
     func testEmptyRulesProduceNoClause() {
         XCTAssertNil(FilterCompiler.compile([], dialect: .postgresql).whereClause)
         // An operator with too few operands is skipped rather than producing broken SQL.
-        XCTAssertNil(FilterCompiler.compile(
-            [FilterRule(column: "a", op: .between, values: [.int(1)])], dialect: .postgresql
-        ).whereClause)
+        XCTAssertNil(
+            FilterCompiler.compile(
+                [FilterRule(column: "a", op: .between, values: [.int(1)])], dialect: .postgresql
+            ).whereClause)
     }
 
     func testFilterRuleRoundTripsThroughCoding() throws {
@@ -270,7 +272,7 @@ final class PagePlannerTests: XCTestCase {
         XCTAssertEqual(
             query.sql,
             "SELECT \"id\", \"name\" FROM \"public\".\"big\" WHERE \"status\" = $1 "
-            + "ORDER BY \"name\" DESC LIMIT 1000 OFFSET 1000"
+                + "ORDER BY \"name\" DESC LIMIT 1000 OFFSET 1000"
         )
         XCTAssertEqual(query.parameters, [.string("on")])
     }
@@ -329,10 +331,12 @@ final class SQLTokenizerTests: XCTestCase {
     func testTokenKinds() {
         let tokens = SQLTokenizer.tokenize("SELECT 'a', 1.5, \"c\", $1 -- x", dialect: .postgresql)
             .filter { $0.kind != .whitespace }
-        XCTAssertEqual(tokens.map(\.kind), [
-            .keyword, .string, .punctuation, .number, .punctuation, .quotedIdentifier, .punctuation,
-            .parameter, .comment,
-        ])
+        XCTAssertEqual(
+            tokens.map(\.kind),
+            [
+                .keyword, .string, .punctuation, .number, .punctuation, .quotedIdentifier, .punctuation,
+                .parameter, .comment,
+            ])
     }
 
     func testRangesAddressTheOriginalText() {

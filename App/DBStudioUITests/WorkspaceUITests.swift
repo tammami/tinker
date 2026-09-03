@@ -119,7 +119,8 @@ final class WorkspaceUITests: XCTestCase {
         app.typeKey("y", modifierFlags: .command)
 
         let search = window.textFields["Search history"].firstMatch
-        let opened = search.waitForExistence(timeout: 10)
+        let opened =
+            search.waitForExistence(timeout: 10)
             || app.sheets.firstMatch.waitForExistence(timeout: 5)
         XCTAssertTrue(opened, "⌘Y did nothing while the editor had focus")
     }

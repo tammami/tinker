@@ -90,7 +90,9 @@ struct NewTableSheet: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .disabled(!(controller?.hasPendingChanges ?? false) || name.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(
+                    !(controller?.hasPendingChanges ?? false) || name.trimmingCharacters(in: .whitespaces).isEmpty
+                )
                 .help("Review the CREATE TABLE statement, then run it")
             }
             .padding(.horizontal, DesignTokens.Spacing.lg)

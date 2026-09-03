@@ -16,9 +16,10 @@ public struct WorkspaceView: View {
     public init(environment: AppEnvironment, settings: AppSettings) {
         self.environment = environment
         self.settings = settings
-        _controller = State(initialValue: WorkspaceController(
-            environment: environment, settings: settings
-        ))
+        _controller = State(
+            initialValue: WorkspaceController(
+                environment: environment, settings: settings
+            ))
     }
 
     /// `@Bindable` on the model, so the sheets that need a binding still have one.
@@ -38,7 +39,8 @@ public struct WorkspaceView: View {
                 onOpenSource: { object, id in controller.openSource(object, connectionID: id) },
                 onOpenActivity: { id in controller.openServerActivity(connectionID: id) },
                 onOpenBuilder: { schema, id in
-                    controller.openQueryBuilder(schema.schema.isEmpty ? controller.defaultSchema(for: id) : schema, connectionID: id)
+                    controller.openQueryBuilder(
+                        schema.schema.isEmpty ? controller.defaultSchema(for: id) : schema, connectionID: id)
                 },
                 onDisconnect: { id in controller.disconnect(id) },
                 onCloseTabs: { id in controller.closeTabs(for: id) },
@@ -228,7 +230,8 @@ public struct WorkspaceView: View {
     /// Puts text in the front editor, or opens a new tab with it.
     private func insertIntoEditor(_ sql: String) {
         if let tab = workspace.selectedTab, tab.isQueryTab,
-           let controller = queryControllers[tab.id] {
+            let controller = queryControllers[tab.id]
+        {
             controller.insertAtCaret(sql)
         } else if let id = workspace.activeConnectionID {
             newQuery(id, sql)
@@ -494,11 +497,13 @@ public struct WorkspaceView: View {
             }
             Spacer()
             if let tab = workspace.selectedTab, tab.isQueryTab,
-               let controller = queryControllers[tab.id], controller.isInTransaction {
+                let controller = queryControllers[tab.id], controller.isInTransaction
+            {
                 Label("Transaction open", systemImage: Icon.transaction).foregroundStyle(.orange)
             }
             if let tab = workspace.selectedTab, let controller = tableControllers[tab.id],
-               let model = controller.model, model.edits.pendingStatementCount > 0 {
+                let model = controller.model, model.edits.pendingStatementCount > 0
+            {
                 Label(
                     "\(model.edits.pendingStatementCount) pending change\(model.edits.pendingStatementCount == 1 ? "" : "s")",
                     systemImage: Icon.edit
@@ -537,11 +542,12 @@ public struct WorkspaceView: View {
     }
 
     func selectionRows(tab: WorkspaceTab, grid: GridModel) -> [[DBValue]] {
-        let selection: GridSelection = switch tab.kind {
-        case .table: tableControllers[tab.id]?.selection ?? GridSelection()
-        case .query: queryControllers[tab.id]?.selection ?? GridSelection()
-        case .objects, .serverActivity, .source, .queryBuilder: GridSelection()
-        }
+        let selection: GridSelection =
+            switch tab.kind {
+            case .table: tableControllers[tab.id]?.selection ?? GridSelection()
+            case .query: queryControllers[tab.id]?.selection ?? GridSelection()
+            case .objects, .serverActivity, .source, .queryBuilder: GridSelection()
+            }
         let columns = selection.columns(totalColumns: grid.columns.count)
         return selection.rows(totalRows: grid.displayRowCount).map { row in
             columns.map { grid.value(row: row, column: $0) ?? .null }
@@ -589,7 +595,8 @@ public struct WorkspaceView: View {
     /// One controller per Objects tab, kept for as long as the tab is.
     func objectsController(for tab: WorkspaceTab, schema: SchemaRef) -> ObjectsController {
         if let existing = controller.objectsControllers[tab.id] { return existing }
-        let dialect = environment.connections
+        let dialect =
+            environment.connections
             .first { $0.id == tab.connectionID }?.dialect ?? .postgresql
         let made = ObjectsController(
             schema: schema, connectionID: tab.connectionID,
@@ -609,16 +616,19 @@ public struct WorkspaceView: View {
     var designerContext: (connectionID: UUID, schema: SchemaRef, dialect: SQLDialect, isProduction: Bool)? {
         // Asked for from the sidebar: that folder's schema, whatever tab is in front.
         if let context = workspace.newTableContext,
-           let config = environment.connections.first(where: { $0.id == context.connectionID }) {
+            let config = environment.connections.first(where: { $0.id == context.connectionID })
+        {
             return (context.connectionID, context.schema, config.dialect, config.isProduction)
         }
-        guard let connectionID = workspace.selectedTab?.connectionID
-            ?? workspace.tabs.first?.connectionID
-            ?? environment.connections.first?.id,
+        guard
+            let connectionID = workspace.selectedTab?.connectionID
+                ?? workspace.tabs.first?.connectionID
+                ?? environment.connections.first?.id,
             let config = environment.connections.first(where: { $0.id == connectionID })
         else { return nil }
 
-        let schema = selectedTableRef?.schemaRef
+        let schema =
+            selectedTableRef?.schemaRef
             ?? SchemaRef(
                 database: config.database ?? "",
                 // MySQL's schema layer is the database itself; PostgreSQL's default is public.
@@ -634,8 +644,10 @@ public struct WorkspaceView: View {
     }
 
     func noConnectionSheet(_ message: String, dismiss: @escaping () -> Void) -> some View {
-        SheetFrame(title: message, icon: Icon.info, subtitle: "Open a connection first.",
-                   width: DesignTokens.Metrics.compactSheetWidth) {
+        SheetFrame(
+            title: message, icon: Icon.info, subtitle: "Open a connection first.",
+            width: DesignTokens.Metrics.compactSheetWidth
+        ) {
             EmptyView()
         } footer: {
             Spacer()

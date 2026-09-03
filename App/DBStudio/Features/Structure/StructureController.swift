@@ -60,12 +60,14 @@ public final class StructureController {
             // that opens locked would have to be unlocked before anything could be typed.
             let blank = TableDefinition(
                 ref: table,
-                columns: [ColumnDefinition(
-                    name: "id",
-                    type: dialect == .postgresql ? "integer" : "int",
-                    isNullable: false,
-                    isAutoIncrement: true
-                )],
+                columns: [
+                    ColumnDefinition(
+                        name: "id",
+                        type: dialect == .postgresql ? "integer" : "int",
+                        isNullable: false,
+                        isAutoIncrement: true
+                    )
+                ],
                 primaryKey: ["id"]
             )
             loaded = TableDefinition(ref: table)
@@ -100,10 +102,16 @@ public final class StructureController {
             async let columnsRead = session.introspection(.columns(table)) { try await $0.columns(of: table) }
             async let primaryKeyRead = session.introspection(.primaryKey(table)) { try await $0.primaryKey(of: table) }
             async let indexesRead = session.introspection(.indexes(table)) { try await $0.indexes(of: table) }
-            async let foreignKeysRead = session.introspection(.foreignKeys(table)) { try await $0.foreignKeys(of: table) }
-            async let checksRead = session.introspection(.checkConstraints(table)) { try await $0.checkConstraints(of: table) }
+            async let foreignKeysRead = session.introspection(.foreignKeys(table)) {
+                try await $0.foreignKeys(of: table)
+            }
+            async let checksRead = session.introspection(.checkConstraints(table)) {
+                try await $0.checkConstraints(of: table)
+            }
             async let triggersRead = session.introspection(.triggers(table)) { try await $0.triggers(of: table) }
-            async let partitioningRead = session.introspection(.partitioning(table)) { try await $0.partitioning(of: table) }
+            async let partitioningRead = session.introspection(.partitioning(table)) {
+                try await $0.partitioning(of: table)
+            }
 
             let info = try await infoRead.first { $0.ref == table }
             let columns = try await columnsRead
@@ -136,9 +144,10 @@ public final class StructureController {
     /// Loaded lazily: the picker needs them, the rest of the tab does not.
     public func loadCollationsIfNeeded() async {
         guard collations.isEmpty, let session else { return }
-        collations = (try? await session.introspection(.collations(database: table.database)) {
-            try await $0.collations(in: table.database)
-        }) ?? []
+        collations =
+            (try? await session.introspection(.collations(database: table.database)) {
+                try await $0.collations(in: table.database)
+            }) ?? []
     }
 
     // MARK: - The pending change
@@ -196,7 +205,8 @@ public final class StructureController {
 
             if result.isSuccess {
                 errorText = nil
-                statusText = "Applied \(result.applied.count) statement"
+                statusText =
+                    "Applied \(result.applied.count) statement"
                     + (result.applied.count == 1 ? "" : "s")
             } else {
                 statusText = nil
@@ -220,7 +230,8 @@ public final class StructureController {
             text += "\n\nNothing was changed: the transaction was rolled back."
         } else if !result.applied.isEmpty {
             let applied = result.applied.map { "  \($0.sql)" }.joined(separator: "\n")
-            text += "\n\nMySQL commits each structure statement as it runs, so these had "
+            text +=
+                "\n\nMySQL commits each structure statement as it runs, so these had "
                 + "already taken effect and were not undone:\n\(applied)"
         }
         return text

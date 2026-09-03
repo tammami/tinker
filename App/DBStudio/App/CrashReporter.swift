@@ -1,6 +1,6 @@
+import AppKit
 import Foundation
 import Logging
-import AppKit
 import os
 
 /// Collects diagnostics locally, and only with the user's consent.
@@ -21,7 +21,8 @@ public final class CrashReporter {
 
     /// Where reports are written.
     public nonisolated static var reportsDirectory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        let base =
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
         return base.appendingPathComponent("\(Product.name)/Diagnostics", isDirectory: true)
     }
@@ -92,8 +93,12 @@ public final class CrashReporter {
         return (contents ?? [])
             .filter { $0.pathExtension == "txt" }
             .sorted { left, right in
-                let leftDate = (try? left.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                let rightDate = (try? right.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                let leftDate =
+                    (try? left.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                    ?? .distantPast
+                let rightDate =
+                    (try? right.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                    ?? .distantPast
                 return leftDate > rightDate
             }
     }

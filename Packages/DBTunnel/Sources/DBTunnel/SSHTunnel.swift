@@ -152,7 +152,8 @@ public struct SSHTunnelProvider: TunnelProvider {
         } catch let error as DBError {
             throw error
         } catch {
-            let hint = passphrase == nil
+            let hint =
+                passphrase == nil
                 ? " If the key is encrypted, enter its passphrase."
                 : " Check the passphrase."
             throw DBError.tunnelFailed(
@@ -248,12 +249,12 @@ public actor SSHPortForward: Tunnel {
             group: SSHTunnelProvider.eventLoopGroup,
             childGroup: client.eventLoop
         )
-            .serverChannelOption(ChannelOptions.backlog, value: 16)
-            .serverChannelOption(.socketOption(.so_reuseaddr), value: 1)
-            .childChannelInitializer { channel in
-                Self.forward(channel, through: client, to: remoteHost, port: remotePort, logger: logger)
-            }
-            .childChannelOption(.socketOption(.so_reuseaddr), value: 1)
+        .serverChannelOption(ChannelOptions.backlog, value: 16)
+        .serverChannelOption(.socketOption(.so_reuseaddr), value: 1)
+        .childChannelInitializer { channel in
+            Self.forward(channel, through: client, to: remoteHost, port: remotePort, logger: logger)
+        }
+        .childChannelOption(.socketOption(.so_reuseaddr), value: 1)
 
         do {
             // Port 0 asks the kernel for a free port, and loopback keeps the forward off
@@ -267,9 +268,11 @@ public actor SSHPortForward: Tunnel {
             throw DBError.tunnelFailed(stage: .portForward, underlying: "The forward did not get a local port")
         }
         localPort = port
-        logger.debug("ssh forward listening", metadata: [
-            "localPort": "\(port)", "target": "\(remoteHost):\(remotePort)",
-        ])
+        logger.debug(
+            "ssh forward listening",
+            metadata: [
+                "localPort": "\(port)", "target": "\(remoteHost):\(remotePort)",
+            ])
     }
 
     /// Wires one accepted local connection to a fresh `direct-tcpip` channel.

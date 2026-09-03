@@ -22,11 +22,13 @@ final class StructureSyncTests: XCTestCase {
         ]
         // Deliberately different identities, as two servers would give.
         let source = definition(sourceTable, columns: columns)
-        let target = definition(targetTable, columns: columns.map {
-            ColumnDefinition(
-                name: $0.name, type: $0.type, isNullable: $0.isNullable
-            )
-        })
+        let target = definition(
+            targetTable,
+            columns: columns.map {
+                ColumnDefinition(
+                    name: $0.name, type: $0.type, isNullable: $0.isNullable
+                )
+            })
 
         let result = sync().compare(source: source, target: target)
         XCTAssertTrue(result.isIdentical, result.statements.map(\.sql).joined(separator: "\n"))
@@ -35,15 +37,19 @@ final class StructureSyncTests: XCTestCase {
 
     /// Objects are matched by name, or every column would read as dropped and re-added.
     func testAColumnMissingFromTheTargetIsAdded() {
-        let source = definition(sourceTable, columns: [
-            ColumnDefinition(name: "id", type: "integer", isNullable: false),
-            ColumnDefinition(name: "name", type: "text"),
-            ColumnDefinition(name: "email", type: "text", isNullable: false),
-        ])
-        let target = definition(targetTable, columns: [
-            ColumnDefinition(name: "id", type: "integer", isNullable: false),
-            ColumnDefinition(name: "name", type: "text"),
-        ])
+        let source = definition(
+            sourceTable,
+            columns: [
+                ColumnDefinition(name: "id", type: "integer", isNullable: false),
+                ColumnDefinition(name: "name", type: "text"),
+                ColumnDefinition(name: "email", type: "text", isNullable: false),
+            ])
+        let target = definition(
+            targetTable,
+            columns: [
+                ColumnDefinition(name: "id", type: "integer", isNullable: false),
+                ColumnDefinition(name: "name", type: "text"),
+            ])
 
         let result = sync().compare(source: source, target: target)
         XCTAssertEqual(result.statements.map(\.kind), [.addColumn])
@@ -55,14 +61,18 @@ final class StructureSyncTests: XCTestCase {
     }
 
     func testAChangedTypeIsAltered() {
-        let source = definition(sourceTable, columns: [
-            ColumnDefinition(name: "id", type: "integer", isNullable: false),
-            ColumnDefinition(name: "name", type: "varchar(200)"),
-        ])
-        let target = definition(targetTable, columns: [
-            ColumnDefinition(name: "id", type: "integer", isNullable: false),
-            ColumnDefinition(name: "name", type: "text"),
-        ])
+        let source = definition(
+            sourceTable,
+            columns: [
+                ColumnDefinition(name: "id", type: "integer", isNullable: false),
+                ColumnDefinition(name: "name", type: "varchar(200)"),
+            ])
+        let target = definition(
+            targetTable,
+            columns: [
+                ColumnDefinition(name: "id", type: "integer", isNullable: false),
+                ColumnDefinition(name: "name", type: "text"),
+            ])
 
         let result = sync().compare(source: source, target: target)
         XCTAssertEqual(result.statements.map(\.kind), [.alterColumn])
@@ -72,13 +82,17 @@ final class StructureSyncTests: XCTestCase {
     /// A column the target has and the source does not is a drop, and a drop is never in
     /// the script unless it is asked for.
     func testADroppedColumnIsHeldBackFromTheScript() {
-        let source = definition(sourceTable, columns: [
-            ColumnDefinition(name: "id", type: "integer", isNullable: false),
-        ])
-        let target = definition(targetTable, columns: [
-            ColumnDefinition(name: "id", type: "integer", isNullable: false),
-            ColumnDefinition(name: "legacy", type: "text"),
-        ])
+        let source = definition(
+            sourceTable,
+            columns: [
+                ColumnDefinition(name: "id", type: "integer", isNullable: false)
+            ])
+        let target = definition(
+            targetTable,
+            columns: [
+                ColumnDefinition(name: "id", type: "integer", isNullable: false),
+                ColumnDefinition(name: "legacy", type: "text"),
+            ])
 
         let result = sync().compare(source: source, target: target)
         XCTAssertEqual(result.destructive.count, 1)
@@ -98,22 +112,30 @@ final class StructureSyncTests: XCTestCase {
     }
 
     func testIndexesAndChecksAreMatchedByName() {
-        var source = definition(sourceTable, columns: [
-            ColumnDefinition(name: "id", type: "integer", isNullable: false),
-            ColumnDefinition(name: "email", type: "text"),
-        ])
-        source.indexes = [IndexDefinition(
-            name: "customers_email_idx", columns: [IndexColumn(name: "email")], isUnique: true
-        )]
+        var source = definition(
+            sourceTable,
+            columns: [
+                ColumnDefinition(name: "id", type: "integer", isNullable: false),
+                ColumnDefinition(name: "email", type: "text"),
+            ])
+        source.indexes = [
+            IndexDefinition(
+                name: "customers_email_idx", columns: [IndexColumn(name: "email")], isUnique: true
+            )
+        ]
         source.checks = [CheckDefinition(name: "positive", expression: "id > 0")]
 
-        var target = definition(targetTable, columns: source.columns.map {
-            ColumnDefinition(name: $0.name, type: $0.type, isNullable: $0.isNullable)
-        })
+        var target = definition(
+            targetTable,
+            columns: source.columns.map {
+                ColumnDefinition(name: $0.name, type: $0.type, isNullable: $0.isNullable)
+            })
         // Same name, not unique: the sync should rebuild it rather than create a second.
-        target.indexes = [IndexDefinition(
-            name: "customers_email_idx", columns: [IndexColumn(name: "email")], isUnique: false
-        )]
+        target.indexes = [
+            IndexDefinition(
+                name: "customers_email_idx", columns: [IndexColumn(name: "email")], isUnique: false
+            )
+        ]
 
         let result = sync().compare(source: source, target: target)
         XCTAssertEqual(result.statements.map(\.kind), [.dropIndex, .createIndex, .addCheck])
@@ -121,19 +143,25 @@ final class StructureSyncTests: XCTestCase {
 
     /// A foreign key points into the target's own schema, not back at the source's.
     func testAForeignKeyIsRepointedAtTheTarget() {
-        var source = definition(sourceTable, columns: [
-            ColumnDefinition(name: "id", type: "integer", isNullable: false),
-        ])
-        source.foreignKeys = [ForeignKeyDefinition(
-            name: "customers_org_fk",
-            columns: ["org_id"],
-            referencedTable: TableRef(database: "prod", schema: "public", name: "orgs"),
-            referencedColumns: ["id"],
-            onDelete: .cascade
-        )]
-        let target = definition(targetTable, columns: source.columns.map {
-            ColumnDefinition(name: $0.name, type: $0.type, isNullable: $0.isNullable)
-        })
+        var source = definition(
+            sourceTable,
+            columns: [
+                ColumnDefinition(name: "id", type: "integer", isNullable: false)
+            ])
+        source.foreignKeys = [
+            ForeignKeyDefinition(
+                name: "customers_org_fk",
+                columns: ["org_id"],
+                referencedTable: TableRef(database: "prod", schema: "public", name: "orgs"),
+                referencedColumns: ["id"],
+                onDelete: .cascade
+            )
+        ]
+        let target = definition(
+            targetTable,
+            columns: source.columns.map {
+                ColumnDefinition(name: $0.name, type: $0.type, isNullable: $0.isNullable)
+            })
 
         let result = sync().compare(source: source, target: target)
         XCTAssertEqual(result.statements.map(\.kind), [.addForeignKey])
@@ -162,9 +190,11 @@ final class StructureSyncTests: XCTestCase {
 
     /// A table the target does not have at all is created rather than diffed.
     func testCreatingATableTheTargetLacks() {
-        var source = definition(sourceTable, columns: [
-            ColumnDefinition(name: "id", type: "integer", isNullable: false),
-        ])
+        var source = definition(
+            sourceTable,
+            columns: [
+                ColumnDefinition(name: "id", type: "integer", isNullable: false)
+            ])
         source.indexes = [IndexDefinition(name: "i", columns: [IndexColumn(name: "id")])]
 
         let schema = SchemaRef(database: "dev", schema: "public")

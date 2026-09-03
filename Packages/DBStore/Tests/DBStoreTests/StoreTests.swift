@@ -1,6 +1,7 @@
 import DBCore
 import Foundation
 import XCTest
+
 @testable import DBStore
 
 final class DBStoreTests: XCTestCase {
@@ -146,9 +147,10 @@ final class DBStoreTests: XCTestCase {
         var config = makeConfig()
         config.name = "prod"
         try await store.save(config)
-        try await store.record(QueryHistoryEntry(
-            connectionID: config.id, sql: "SELECT 1", succeeded: true
-        ))
+        try await store.record(
+            QueryHistoryEntry(
+                connectionID: config.id, sql: "SELECT 1", succeeded: true
+            ))
         try await store.setSetting(["theme": "dark"], for: "appearance")
         await store.close()
 
@@ -192,16 +194,18 @@ final class DBStoreTests: XCTestCase {
     func testHistoryRecordsAndSearches() async throws {
         let store = try await makeStore()
         let connectionID = UUID()
-        try await store.record(QueryHistoryEntry(
-            connectionID: connectionID, database: "app", sql: "SELECT * FROM users",
-            startedAt: Date(timeIntervalSince1970: 1_000), duration: .milliseconds(12),
-            rowCount: 3, succeeded: true
-        ))
-        try await store.record(QueryHistoryEntry(
-            connectionID: connectionID, sql: "DROP TABLE nope",
-            startedAt: Date(timeIntervalSince1970: 2_000),
-            error: "relation \"nope\" does not exist", succeeded: false
-        ))
+        try await store.record(
+            QueryHistoryEntry(
+                connectionID: connectionID, database: "app", sql: "SELECT * FROM users",
+                startedAt: Date(timeIntervalSince1970: 1_000), duration: .milliseconds(12),
+                rowCount: 3, succeeded: true
+            ))
+        try await store.record(
+            QueryHistoryEntry(
+                connectionID: connectionID, sql: "DROP TABLE nope",
+                startedAt: Date(timeIntervalSince1970: 2_000),
+                error: "relation \"nope\" does not exist", succeeded: false
+            ))
 
         let all = try await store.history()
         XCTAssertEqual(all.count, 2)
@@ -231,10 +235,11 @@ final class DBStoreTests: XCTestCase {
             """
         }
         try await store.database.executeBatch(statements)
-        try await store.record(QueryHistoryEntry(
-            connectionID: connectionID, sql: "SELECT newest",
-            startedAt: Date(timeIntervalSince1970: 1_000_000), succeeded: true
-        ))
+        try await store.record(
+            QueryHistoryEntry(
+                connectionID: connectionID, sql: "SELECT newest",
+                startedAt: Date(timeIntervalSince1970: 1_000_000), succeeded: true
+            ))
 
         let count = try await store.historyCount()
         XCTAssertEqual(count, DBStore.queryHistoryLimit)

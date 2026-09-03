@@ -92,12 +92,13 @@ public enum StatementSplitter {
                 let leadingUTF16 = String(raw.prefix(trimmedLeading)).utf16.count
                 let trailingUTF16 = String(raw.suffix(trimmedTrailing)).utf16.count
                 let extraLines = raw.prefix(trimmedLeading).filter { $0 == "\n" }.count
-                statements.append(SQLStatement(
-                    text: String(trimmed),
-                    utf16Range: (statementStartUTF16 + leadingUTF16) ..< (endUTF16 - trailingUTF16),
-                    startLine: statementStartLine + extraLines,
-                    terminator: terminator
-                ))
+                statements.append(
+                    SQLStatement(
+                        text: String(trimmed),
+                        utf16Range: (statementStartUTF16 + leadingUTF16) ..< (endUTF16 - trailingUTF16),
+                        startLine: statementStartLine + extraLines,
+                        terminator: terminator
+                    ))
             }
         }
 
@@ -107,7 +108,8 @@ public enum StatementSplitter {
             // `DELIMITER x` is a client directive, not SQL. MySQL dumps rely on it to define
             // routines whose bodies contain semicolons.
             if dialect == .mysql, isAtStatementStart(scanner, from: statementStart),
-               scanner.matchesKeyword("DELIMITER", at: scanner.index) {
+                scanner.matchesKeyword("DELIMITER", at: scanner.index)
+            {
                 scanner.advance(9)
                 while let scalar = scanner.peek(), scalar == " " || scalar == "\t" { scanner.advance() }
                 var token = String.UnicodeScalarView()

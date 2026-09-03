@@ -63,20 +63,26 @@ public struct QueryBuilderView: View {
                 Text("Query Builder").font(.system(size: 13, weight: .semibold))
             }
             BarDivider()
-            Picker("Schema", selection: Binding(
-                get: { controller.schema },
-                set: { new in Task { await controller.select(schema: new) } }
-            )) {
+            Picker(
+                "Schema",
+                selection: Binding(
+                    get: { controller.schema },
+                    set: { new in Task { await controller.select(schema: new) } }
+                )
+            ) {
                 if !controller.availableSchemas.contains(controller.schema) {
                     Text(controller.schema.schema.isEmpty ? "Choose…" : controller.schema.schema).tag(controller.schema)
                 }
                 ForEach(controller.availableSchemas, id: \.self) { schema in
-                    Label(schema.schema, systemImage: controller.dialect == .mysql ? Icon.database : Icon.schema).tag(schema)
+                    Label(schema.schema, systemImage: controller.dialect == .mysql ? Icon.database : Icon.schema).tag(
+                        schema)
                 }
             }
             .labelsHidden()
             .frame(width: 180)
-            .help(controller.dialect == .mysql ? "The database whose tables are listed" : "The schema whose tables are listed")
+            .help(
+                controller.dialect == .mysql
+                    ? "The database whose tables are listed" : "The schema whose tables are listed")
             Toggle("Distinct", isOn: $controller.model.isDistinct).toggleStyle(.checkbox)
             Spacer()
             Button {
@@ -217,15 +223,18 @@ public struct QueryBuilderView: View {
     private func columnPicker(
         table: Binding<UUID>, column: Binding<String>, allowStar: Bool = false, width: CGFloat = 220
     ) -> some View {
-        Picker("Column", selection: Binding(
-            get: { "\(table.wrappedValue.uuidString)|\(column.wrappedValue)" },
-            set: { key in
-                let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
-                guard parts.count == 2, let id = UUID(uuidString: parts[0]) else { return }
-                table.wrappedValue = id
-                column.wrappedValue = parts[1]
-            }
-        )) {
+        Picker(
+            "Column",
+            selection: Binding(
+                get: { "\(table.wrappedValue.uuidString)|\(column.wrappedValue)" },
+                set: { key in
+                    let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+                    guard parts.count == 2, let id = UUID(uuidString: parts[0]) else { return }
+                    table.wrappedValue = id
+                    column.wrappedValue = parts[1]
+                }
+            )
+        ) {
             ForEach(placedTables) { placed in
                 if allowStar {
                     Text("\(placed.alias).*").tag("\(placed.id.uuidString)|*")
@@ -246,7 +255,9 @@ public struct QueryBuilderView: View {
     }
 
     private var firstColumn: (UUID, String)? {
-        guard let table = placedTables.first(where: { $0.id == controller.selectedTable }) ?? placedTables.first else { return nil }
+        guard let table = placedTables.first(where: { $0.id == controller.selectedTable }) ?? placedTables.first else {
+            return nil
+        }
         return (table.id, controller.columnNames(of: table.id).first ?? "*")
     }
 
@@ -264,9 +275,11 @@ public struct QueryBuilderView: View {
                 }
                 .labelsHidden()
                 .frame(width: 90)
-                TextField("alias", text: Binding(get: { field.alias ?? "" }, set: { field.alias = $0.isEmpty ? nil : $0 }))
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 140)
+                TextField(
+                    "alias", text: Binding(get: { field.alias ?? "" }, set: { field.alias = $0.isEmpty ? nil : $0 })
+                )
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 140)
                 IconButton(icon: "minus.circle", label: "Remove field") {
                     controller.model.fields.removeAll { $0.id == field.id }
                 }
@@ -283,17 +296,21 @@ public struct QueryBuilderView: View {
     private var fromPane: some View {
         ForEach(placedTables) { table in
             HStack(spacing: DesignTokens.Spacing.sm) {
-                Image(systemName: Icon.table).foregroundStyle(Color.accentColor).frame(width: DesignTokens.Metrics.iconWidth)
+                Image(systemName: Icon.table).foregroundStyle(Color.accentColor).frame(
+                    width: DesignTokens.Metrics.iconWidth)
                 Text(table.ref.name).font(.callout)
                 Text("AS").font(.caption).foregroundStyle(.tertiary)
-                TextField("alias", text: Binding(
-                    get: { table.alias },
-                    set: { new in
-                        if let index = controller.model.tables.firstIndex(where: { $0.id == table.id }) {
-                            controller.model.tables[index].alias = new.isEmpty ? table.ref.name : new
+                TextField(
+                    "alias",
+                    text: Binding(
+                        get: { table.alias },
+                        set: { new in
+                            if let index = controller.model.tables.firstIndex(where: { $0.id == table.id }) {
+                                controller.model.tables[index].alias = new.isEmpty ? table.ref.name : new
+                            }
                         }
-                    }
-                ))
+                    )
+                )
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 140)
                 IconButton(icon: "minus.circle", label: "Remove table") { controller.remove(table: table.id) }
@@ -322,10 +339,11 @@ public struct QueryBuilderView: View {
         addButton("Add Join") {
             guard placedTables.count >= 2 else { return }
             let a = placedTables[0], b = placedTables[1]
-            controller.model.joins.append(.init(
-                leftTable: a.id, leftColumn: controller.columnNames(of: a.id).first ?? "id",
-                rightTable: b.id, rightColumn: controller.columnNames(of: b.id).first ?? "id"
-            ))
+            controller.model.joins.append(
+                .init(
+                    leftTable: a.id, leftColumn: controller.columnNames(of: a.id).first ?? "id",
+                    rightTable: b.id, rightColumn: controller.columnNames(of: b.id).first ?? "id"
+                ))
         }
         .disabled(placedTables.count < 2)
     }
@@ -346,27 +364,36 @@ public struct QueryBuilderView: View {
                 HStack(spacing: DesignTokens.Spacing.sm) {
                     if index > 0 {
                         Picker("Conjunction", selection: item.conjunction) {
-                            ForEach(QueryBuilderModel.Condition.Conjunction.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                            ForEach(QueryBuilderModel.Condition.Conjunction.allCases, id: \.self) {
+                                Text($0.rawValue).tag($0)
+                            }
                         }
                         .labelsHidden()
                         .frame(width: 70)
                     } else {
-                        Text("WHERE").font(.caption.weight(.semibold)).foregroundStyle(.secondary).frame(width: 70, alignment: .leading)
+                        Text("WHERE").font(.caption.weight(.semibold)).foregroundStyle(.secondary).frame(
+                            width: 70, alignment: .leading)
                     }
                     columnPicker(table: item.table, column: item.column, width: 190)
                     Picker("Operator", selection: item.op) {
-                        ForEach(FilterOperator.allCases.filter { $0 != .anyContains }, id: \.self) { Text($0.symbol).tag($0) }
+                        ForEach(FilterOperator.allCases.filter { $0 != .anyContains }, id: \.self) {
+                            Text($0.symbol).tag($0)
+                        }
                     }
                     .labelsHidden()
                     .frame(width: 120)
                     if item.wrappedValue.op.operandCount != 0 {
                         TextField(
-                            item.wrappedValue.op == .inList ? "value, value" : item.wrappedValue.op == .between ? "low, high" : "value",
+                            item.wrappedValue.op == .inList
+                                ? "value, value" : item.wrappedValue.op == .between ? "low, high" : "value",
                             text: Binding(
                                 get: { item.wrappedValue.values.compactMap(\.text).joined(separator: ", ") },
                                 set: { text in
-                                    let parts = text.split(separator: ",").map { DBValue.string($0.trimmingCharacters(in: .whitespaces)) }
-                                    item.wrappedValue.values = (item.wrappedValue.op == .inList || item.wrappedValue.op == .between)
+                                    let parts = text.split(separator: ",").map {
+                                        DBValue.string($0.trimmingCharacters(in: .whitespaces))
+                                    }
+                                    item.wrappedValue.values =
+                                        (item.wrappedValue.op == .inList || item.wrappedValue.op == .between)
                                         ? parts : [.string(text)]
                                 }
                             )
@@ -382,7 +409,9 @@ public struct QueryBuilderView: View {
                 .controlSize(.small)
             }
             addButton("Add Condition") {
-                if let (table, column) = firstColumn { binding.wrappedValue.append(.init(table: table, column: column)) }
+                if let (table, column) = firstColumn {
+                    binding.wrappedValue.append(.init(table: table, column: column))
+                }
             }
             Text("Values are written as literals so the statement can be saved as a view.")
                 .font(.caption).foregroundStyle(.tertiary)
@@ -402,7 +431,9 @@ public struct QueryBuilderView: View {
             .controlSize(.small)
         }
         addButton("Add Group Column") {
-            if let (table, column) = firstColumn { controller.model.groupBy.append(.init(table: table, column: column)) }
+            if let (table, column) = firstColumn {
+                controller.model.groupBy.append(.init(table: table, column: column))
+            }
         }
     }
 
@@ -425,17 +456,21 @@ public struct QueryBuilderView: View {
             .controlSize(.small)
         }
         addButton("Add Ordering") {
-            if let (table, column) = firstColumn { controller.model.orderBy.append(.init(table: table, column: column)) }
+            if let (table, column) = firstColumn {
+                controller.model.orderBy.append(.init(table: table, column: column))
+            }
         }
     }
 
     private var limitPane: some View {
         HStack(spacing: DesignTokens.Spacing.md) {
             FieldRow(label: "Limit", labelWidth: 50) {
-                TextField("none", value: $controller.model.limit, format: .number).textFieldStyle(.roundedBorder).frame(width: 100)
+                TextField("none", value: $controller.model.limit, format: .number).textFieldStyle(.roundedBorder).frame(
+                    width: 100)
             }
             FieldRow(label: "Offset", labelWidth: 50) {
-                TextField("0", value: $controller.model.offset, format: .number).textFieldStyle(.roundedBorder).frame(width: 100)
+                TextField("0", value: $controller.model.offset, format: .number).textFieldStyle(.roundedBorder).frame(
+                    width: 100)
             }
             Spacer()
         }
@@ -461,8 +496,9 @@ public struct QueryBuilderView: View {
                 ReadOnlySQLView(text: sql, dialect: controller.dialect, fontName: fontName, fontSize: fontSize)
                     .id(sql)
             } else {
-                EmptyStateView(icon: Icon.builder, title: "Nothing to build yet",
-                               message: "Drag a table from the list onto the canvas to begin.")
+                EmptyStateView(
+                    icon: Icon.builder, title: "Nothing to build yet",
+                    message: "Drag a table from the list onto the canvas to begin.")
             }
         }
     }
@@ -489,18 +525,23 @@ public struct QueryBuilderView: View {
                 Divider()
             }
             if let grid = preview.selectedResult?.grid {
-                DataGridView(model: grid, selection: Binding(get: { preview.selection }, set: { preview.selection = $0 }),
-                             revision: preview.revision, delegate: preview)
+                DataGridView(
+                    model: grid, selection: Binding(get: { preview.selection }, set: { preview.selection = $0 }),
+                    revision: preview.revision, delegate: preview)
             } else {
-                EmptyStateView(icon: Icon.run, title: "No preview yet",
-                               message: "Press Preview to run the statement and see its rows here.")
+                EmptyStateView(
+                    icon: Icon.run, title: "No preview yet",
+                    message: "Press Preview to run the statement and see its rows here.")
             }
         }
     }
 
     private var createViewSheet: some View {
-        SheetFrame(title: "Create View", icon: Icon.view,
-                   subtitle: "Saves the statement as a view in \(controller.schema.schema). CREATE OR REPLACE, so re-running updates it.") {
+        SheetFrame(
+            title: "Create View", icon: Icon.view,
+            subtitle:
+                "Saves the statement as a view in \(controller.schema.schema). CREATE OR REPLACE, so re-running updates it."
+        ) {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                 FieldRow(label: "View name") {
                     TextField("name", text: $viewName).textFieldStyle(.roundedBorder)
@@ -581,9 +622,12 @@ struct BuilderCanvas: View {
         .background(Color(nsColor: .textBackgroundColor))
         .overlay {
             if controller.model.tables.isEmpty {
-                EmptyStateView(icon: Icon.builder, title: "Drop tables here",
-                               message: "Related tables are joined automatically from their foreign keys. Drag a column onto another card's column to add a join by hand.")
-                    .allowsHitTesting(false)
+                EmptyStateView(
+                    icon: Icon.builder, title: "Drop tables here",
+                    message:
+                        "Related tables are joined automatically from their foreign keys. Drag a column onto another card's column to add a join by hand."
+                )
+                .allowsHitTesting(false)
             }
         }
     }
@@ -591,10 +635,13 @@ struct BuilderCanvas: View {
     /// Big enough for every card plus room to drop the next one.
     private var extent: CGSize {
         let maxX = controller.model.tables.map { CGFloat($0.x) + BuilderMetrics.cardWidth }.max() ?? 0
-        let maxY = controller.model.tables.map { table in
-            CGFloat(table.y) + BuilderMetrics.cardHeight(columnCount: controller.columnNames(of: table.id).count)
-        }.max() ?? 0
-        return CGSize(width: max(1_200, maxX + BuilderMetrics.canvasPadding), height: max(700, maxY + BuilderMetrics.canvasPadding))
+        let maxY =
+            controller.model.tables.map { table in
+                CGFloat(table.y) + BuilderMetrics.cardHeight(columnCount: controller.columnNames(of: table.id).count)
+            }.max() ?? 0
+        return CGSize(
+            width: max(1_200, maxX + BuilderMetrics.canvasPadding),
+            height: max(700, maxY + BuilderMetrics.canvasPadding))
     }
 
     private func arrange() {
@@ -610,12 +657,13 @@ struct BuilderCanvas: View {
         Canvas { context, _ in
             for join in controller.model.joins {
                 guard let from = anchor(table: join.leftTable, column: join.leftColumn),
-                      let to = anchor(table: join.rightTable, column: join.rightColumn)
+                    let to = anchor(table: join.rightTable, column: join.rightColumn)
                 else { continue }
                 draw(context: &context, from: from, to: to, color: .accentColor, dashed: false)
             }
             if let pending = controller.pendingConnection,
-               let from = anchor(table: pending.table, column: pending.column, towards: pending.point) {
+                let from = anchor(table: pending.table, column: pending.column, towards: pending.point)
+            {
                 draw(context: &context, from: from, to: pending.point, color: .secondary, dashed: true)
             }
         }
@@ -649,7 +697,7 @@ struct BuilderCanvas: View {
 
     private func otherEnd(of id: UUID) -> CGPoint? {
         guard let join = controller.model.joins.first(where: { $0.leftTable == id || $0.rightTable == id }),
-              let other = controller.model.table(join.leftTable == id ? join.rightTable : join.leftTable)
+            let other = controller.model.table(join.leftTable == id ? join.rightTable : join.leftTable)
         else { return nil }
         return CGPoint(x: CGFloat(other.x) + BuilderMetrics.cardWidth / 2, y: CGFloat(other.y))
     }
@@ -719,7 +767,9 @@ struct TableCard: View {
                     .onChanged { value in
                         if dragStart == nil { dragStart = CGPoint(x: table.x, y: table.y) }
                         guard let start = dragStart else { return }
-                        controller.move(table: table.id, to: CGPoint(x: start.x + value.translation.width, y: start.y + value.translation.height))
+                        controller.move(
+                            table: table.id,
+                            to: CGPoint(x: start.x + value.translation.width, y: start.y + value.translation.height))
                     }
                     .onEnded { _ in dragStart = nil }
             )
@@ -736,7 +786,8 @@ struct TableCard: View {
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius))
         .overlay(
             RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius)
-                .strokeBorder(isSelected ? Color.accentColor : Color.primary.opacity(0.15), lineWidth: isSelected ? 1.5 : 1)
+                .strokeBorder(
+                    isSelected ? Color.accentColor : Color.primary.opacity(0.15), lineWidth: isSelected ? 1.5 : 1)
         )
         .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
     }
@@ -791,7 +842,8 @@ struct TableCard: View {
                 width: BuilderMetrics.cardWidth, height: BuilderMetrics.cardHeight(columnCount: names.count)
             )
             guard frame.contains(point) else { continue }
-            let rowIndex = Int((point.y - CGFloat(other.y) - BuilderMetrics.headerHeight - 3) / BuilderMetrics.rowHeight)
+            let rowIndex = Int(
+                (point.y - CGFloat(other.y) - BuilderMetrics.headerHeight - 3) / BuilderMetrics.rowHeight)
             guard rowIndex >= 1, rowIndex - 1 < names.count else { return nil }
             return (other.id, names[rowIndex - 1])
         }

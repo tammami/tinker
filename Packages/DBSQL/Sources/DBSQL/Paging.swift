@@ -61,11 +61,11 @@ public struct PagePlanner: Sendable {
         identityKind: DBValueKind?
     ) -> PagingStrategy {
         guard userSort.isEmpty,
-              page > Self.offsetPageLimit,
-              identityColumns.count == 1,
-              let column = identityColumns.first,
-              let kind = identityKind,
-              kind == .int || kind == .uint
+            page > Self.offsetPageLimit,
+            identityColumns.count == 1,
+            let column = identityColumns.first,
+            let kind = identityKind,
+            kind == .int || kind == .uint
         else { return .offset }
         return .keyset(column: column)
     }
@@ -101,13 +101,15 @@ public struct PagePlanner: Sendable {
             orderTerms = [SortTerm(column: column, ascending: true)]
         }
 
-        let selectList = columns.isEmpty
+        let selectList =
+            columns.isEmpty
             ? "*"
             : columns.map { Identifier.quote($0, dialect: dialect) }.joined(separator: ", ")
         var sql = "SELECT \(selectList) FROM \(Identifier.qualified(table, dialect: dialect))"
         if !predicates.isEmpty { sql += " WHERE \(predicates.joined(separator: " AND "))" }
         if !orderTerms.isEmpty {
-            let order = orderTerms
+            let order =
+                orderTerms
                 .map { "\(Identifier.quote($0.column, dialect: dialect)) \($0.ascending ? "ASC" : "DESC")" }
                 .joined(separator: ", ")
             sql += " ORDER BY \(order)"

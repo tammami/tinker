@@ -295,7 +295,8 @@ extension TableDefinition {
                 )
             },
             primaryKey: primaryKey,
-            indexes: indexInfos
+            indexes:
+                indexInfos
                 .filter { !$0.isPrimary }
                 .map { index in
                     IndexDefinition(

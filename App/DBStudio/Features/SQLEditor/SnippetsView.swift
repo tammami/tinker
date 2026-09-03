@@ -31,7 +31,8 @@ public struct SnippetsView: View {
             .frame(height: 420)
         } footer: {
             Button {
-                let fresh = Snippet(name: "New snippet", body: "SELECT * FROM ${1:table} WHERE ${2:condition};", dialect: nil)
+                let fresh = Snippet(
+                    name: "New snippet", body: "SELECT * FROM ${1:table} WHERE ${2:condition};", dialect: nil)
                 draft = fresh
                 selectedID = nil
             } label: {
@@ -69,8 +70,10 @@ public struct SnippetsView: View {
             .frame(height: DesignTokens.Metrics.barHeight)
             Divider()
             if visible.isEmpty {
-                EmptyStateView(icon: Icon.snippet, title: snippets.isEmpty ? "No snippets yet" : "No match",
-                               message: snippets.isEmpty ? "Save SQL you type often, with placeholders for the parts that change." : nil)
+                EmptyStateView(
+                    icon: Icon.snippet, title: snippets.isEmpty ? "No snippets yet" : "No match",
+                    message: snippets.isEmpty
+                        ? "Save SQL you type often, with placeholders for the parts that change." : nil)
             } else {
                 List(selection: $selectedID) {
                     ForEach(visible) { snippet in
@@ -119,10 +122,13 @@ public struct SnippetsView: View {
                 HStack(spacing: DesignTokens.Spacing.sm) {
                     TextField("Name", text: Binding(get: { current.name }, set: { draft?.name = $0 }))
                         .textFieldStyle(.roundedBorder)
-                    Picker("Engine", selection: Binding(
-                        get: { current.dialect ?? "" },
-                        set: { draft?.dialect = $0.isEmpty ? nil : $0 }
-                    )) {
+                    Picker(
+                        "Engine",
+                        selection: Binding(
+                            get: { current.dialect ?? "" },
+                            set: { draft?.dialect = $0.isEmpty ? nil : $0 }
+                        )
+                    ) {
                         Text("Any engine").tag("")
                         Text("PostgreSQL").tag(SQLDialect.postgresql.rawValue)
                         Text("MySQL").tag(SQLDialect.mysql.rawValue)
@@ -140,10 +146,13 @@ public struct SnippetsView: View {
                 HStack {
                     Text("Preview: ")
                         .font(.caption).foregroundStyle(.secondary)
-                    Text(SnippetTemplate.expand(current.body).text.split(whereSeparator: \.isNewline).first.map(String.init) ?? "")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    Text(
+                        SnippetTemplate.expand(current.body).text.split(whereSeparator: \.isNewline).first.map(
+                            String.init) ?? ""
+                    )
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
                     Spacer()
                     Button {
                         Task {
@@ -161,8 +170,9 @@ public struct SnippetsView: View {
             }
             .padding(DesignTokens.Spacing.lg)
         } else {
-            EmptyStateView(icon: Icon.snippet, title: "Choose a snippet",
-                           message: "Pick one on the left to read, edit or insert it.")
+            EmptyStateView(
+                icon: Icon.snippet, title: "Choose a snippet",
+                message: "Pick one on the left to read, edit or insert it.")
         }
     }
 

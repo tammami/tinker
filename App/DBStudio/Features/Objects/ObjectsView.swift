@@ -73,32 +73,36 @@ public final class ObjectsController {
 
     /// What the list shows: the kind filter and the search applied, then the ordering.
     public var visible: [TableInfo] {
-        let byKind: [TableInfo] = switch kindFilter {
-        case .all: objects
-        case .tables: objects.filter { $0.kind.isEditable }
-        case .views: objects.filter { $0.kind == .view || $0.kind == .materializedView }
-        case .routines: []
-        }
-        let filtered = search.isEmpty
+        let byKind: [TableInfo] =
+            switch kindFilter {
+            case .all: objects
+            case .tables: objects.filter { $0.kind.isEditable }
+            case .views: objects.filter { $0.kind == .view || $0.kind == .materializedView }
+            case .routines: []
+            }
+        let filtered =
+            search.isEmpty
             ? byKind
             : byKind.filter { $0.name.localizedCaseInsensitiveContains(search) }
         return filtered.sorted { left, right in
-            let ordered: Bool = switch sortColumn {
-            case .name: left.name.localizedStandardCompare(right.name) == .orderedAscending
-            case .kind: left.kind.rawValue < right.kind.rawValue
-            case .rows: (left.approximateRowCount ?? -1) < (right.approximateRowCount ?? -1)
-            case .size: (left.sizeBytes ?? -1) < (right.sizeBytes ?? -1)
-            case .engine: (left.engine ?? "") < (right.engine ?? "")
-            case .collation: (left.collation ?? "") < (right.collation ?? "")
-            case .comment: (left.comment ?? "") < (right.comment ?? "")
-            }
+            let ordered: Bool =
+                switch sortColumn {
+                case .name: left.name.localizedStandardCompare(right.name) == .orderedAscending
+                case .kind: left.kind.rawValue < right.kind.rawValue
+                case .rows: (left.approximateRowCount ?? -1) < (right.approximateRowCount ?? -1)
+                case .size: (left.sizeBytes ?? -1) < (right.sizeBytes ?? -1)
+                case .engine: (left.engine ?? "") < (right.engine ?? "")
+                case .collation: (left.collation ?? "") < (right.collation ?? "")
+                case .comment: (left.comment ?? "") < (right.comment ?? "")
+                }
             return sortAscending ? ordered : !ordered
         }
     }
 
     public var visibleRoutines: [RoutineInfo] {
         guard kindFilter == .routines || kindFilter == .all else { return [] }
-        let filtered = search.isEmpty
+        let filtered =
+            search.isEmpty
             ? routines
             : routines.filter { $0.name.localizedCaseInsensitiveContains(search) }
         return filtered.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -172,7 +176,7 @@ public struct ObjectsView: View {
             Divider()
 
             if let error = controller.errorText {
-                InlineBanner(kind: .error, message: error) { }
+                InlineBanner(kind: .error, message: error) {}
                 Divider()
             }
 
@@ -190,8 +194,11 @@ public struct ObjectsView: View {
             StatusBarView {
                 let tables = controller.visible.count
                 let routines = controller.visibleRoutines.count
-                Text("\(tables) object\(tables == 1 ? "" : "s")" + (routines > 0 ? ", \(routines) function\(routines == 1 ? "" : "s")" : ""))
-                    .monospacedDigit()
+                Text(
+                    "\(tables) object\(tables == 1 ? "" : "s")"
+                        + (routines > 0 ? ", \(routines) function\(routines == 1 ? "" : "s")" : "")
+                )
+                .monospacedDigit()
                 Spacer()
                 // The figures are the server's estimates, and say so.
                 Label("Row counts are the server's estimates, not a count", systemImage: Icon.info)
@@ -281,9 +288,15 @@ public struct ObjectsView: View {
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { onOpen(object.ref) }
         .contextMenu {
-            Button { onOpen(object.ref) } label: { Label("Open", systemImage: Icon.table) }
+            Button {
+                onOpen(object.ref)
+            } label: {
+                Label("Open", systemImage: Icon.table)
+            }
             if object.kind == .view || object.kind == .materializedView {
-                Button { onOpenSource(SourceObject(kind: .view(object.ref))) } label: {
+                Button {
+                    onOpenSource(SourceObject(kind: .view(object.ref)))
+                } label: {
                     Label("Open Definition", systemImage: Icon.source)
                 }
             }
@@ -313,14 +326,20 @@ public struct ObjectsView: View {
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { openRoutine(routine) }
         .contextMenu {
-            Button { openRoutine(routine) } label: { Label("Open Definition", systemImage: Icon.source) }
+            Button {
+                openRoutine(routine)
+            } label: {
+                Label("Open Definition", systemImage: Icon.source)
+            }
         }
     }
 
     private func openRoutine(_ routine: RoutineInfo) {
-        onOpenSource(SourceObject(kind: .routine(
-            schema: controller.schema, name: routine.name, signature: routine.signature, kind: routine.kind
-        )))
+        onOpenSource(
+            SourceObject(
+                kind: .routine(
+                    schema: controller.schema, name: routine.name, signature: routine.signature, kind: routine.kind
+                )))
     }
 
     private func cell<Content: View>(

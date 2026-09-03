@@ -90,7 +90,8 @@ public enum PostgresDriver: SQLDriver {
             }
         }
         if let certFile = config.tls.clientCertFile, let keyFile = config.tls.clientKeyFile,
-           !certFile.isEmpty, !keyFile.isEmpty {
+            !certFile.isEmpty, !keyFile.isEmpty
+        {
             do {
                 tlsConfiguration.certificateChain = try NIOSSLCertificate.fromPEMFile(certFile).map { .certificate($0) }
                 tlsConfiguration.privateKey = .privateKey(try NIOSSLPrivateKey(file: keyFile, format: .pem))
@@ -98,11 +99,12 @@ public enum PostgresDriver: SQLDriver {
                 throw DBError.tunnelFailed(stage: .tls, underlying: "Cannot read client certificate or key: \(error)")
             }
         }
-        tlsConfiguration.certificateVerification = switch config.tls.mode {
-        case .disable, .prefer, .require: .none
-        case .verifyCA: .noHostnameVerification
-        case .verifyFull: .fullVerification
-        }
+        tlsConfiguration.certificateVerification =
+            switch config.tls.mode {
+            case .disable, .prefer, .require: .none
+            case .verifyCA: .noHostnameVerification
+            case .verifyFull: .fullVerification
+            }
 
         let context: NIOSSLContext
         do {

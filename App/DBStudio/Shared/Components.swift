@@ -87,8 +87,8 @@ struct KeyCap: View {
     var body: some View {
         Text(keys)
             .font(.caption2.monospaced())
-            .padding(.horizontal, DesignTokens.Spacing.xs + 1)
-            .padding(.vertical, 1)
+            .padding(.horizontal, DesignTokens.Spacing.xs + 2)
+            .padding(.vertical, DesignTokens.Spacing.xs - 1)
             .background(Color.primary.opacity(0.07))
             .overlay(
                 RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius)
@@ -96,6 +96,44 @@ struct KeyCap: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius))
             .foregroundStyle(.secondary)
+    }
+}
+
+/// One keyboard hint: a key cap and what it does.
+struct KeyHint: View {
+    let keys: String
+    let label: String
+
+    var body: some View {
+        HStack(spacing: DesignTokens.Spacing.xs + 2) {
+            KeyCap(keys: keys)
+            Text(label).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// The foot of a palette-style sheet: keyboard hints on the left, a count on the right.
+///
+/// Taller than a status line and inset like the sheet's own content, so the key caps sit
+/// clear of the rounded corner rather than against it.
+struct SheetHintBar<Trailing: View>: View {
+    let hints: [(keys: String, label: String)]
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(spacing: DesignTokens.Spacing.lg) {
+            ForEach(Array(hints.enumerated()), id: \.offset) { _, hint in
+                KeyHint(keys: hint.keys, label: hint.label)
+            }
+            Spacer()
+            trailing
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, DesignTokens.Spacing.lg)
+        .frame(height: DesignTokens.Metrics.barHeight)
+        .background(.bar)
     }
 }
 
@@ -304,6 +342,7 @@ struct FieldRow<Content: View>: View {
 struct SectionHeading: View {
     let text: String
     var trailing: String?
+    var inset: CGFloat = DesignTokens.Spacing.md
 
     var body: some View {
         HStack {
@@ -316,7 +355,7 @@ struct SectionHeading: View {
                 Text(trailing).font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
             }
         }
-        .padding(.horizontal, DesignTokens.Spacing.md)
+        .padding(.horizontal, inset)
         .padding(.top, DesignTokens.Spacing.md)
         .padding(.bottom, DesignTokens.Spacing.xs)
     }

@@ -41,7 +41,8 @@ public struct CommandPaletteView: View {
                     .onSubmit(runHighlighted)
                 KeyCap(keys: "esc")
             }
-            .padding(DesignTokens.Spacing.md)
+            .padding(.horizontal, DesignTokens.Spacing.lg)
+            .padding(.vertical, DesignTokens.Spacing.md)
             Divider()
 
             if matches.isEmpty {
@@ -53,7 +54,7 @@ public struct CommandPaletteView: View {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(Array(matches.enumerated()), id: \.element.id) { index, command in
                                 if index == 0 || matches[index - 1].group != command.group {
-                                    SectionHeading(text: command.group.rawValue)
+                                    SectionHeading(text: command.group.rawValue, inset: DesignTokens.Spacing.lg)
                                 }
                                 row(command, isHighlighted: index == highlighted)
                                     .id(index)
@@ -70,16 +71,9 @@ public struct CommandPaletteView: View {
                 }
             }
             Divider()
-            HStack(spacing: DesignTokens.Spacing.lg) {
-                hint("↑↓", "move")
-                hint("↩", "run")
-                Spacer()
+            SheetHintBar(hints: [("↑↓", "move"), ("↩", "run")]) {
                 Text("\(matches.count) result\(matches.count == 1 ? "" : "s")")
-                    .font(.caption).foregroundStyle(.tertiary).monospacedDigit()
             }
-            .padding(.horizontal, DesignTokens.Spacing.md)
-            .frame(height: DesignTokens.Metrics.statusHeight)
-            .background(.bar)
         }
         .frame(width: 600)
         .onAppear { isFieldFocused = true }
@@ -98,13 +92,6 @@ public struct CommandPaletteView: View {
         }
     }
 
-    private func hint(_ keys: String, _ label: String) -> some View {
-        HStack(spacing: DesignTokens.Spacing.xs) {
-            KeyCap(keys: keys)
-            Text(label).font(.caption).foregroundStyle(.secondary)
-        }
-    }
-
     private func row(_ command: PaletteCommand, isHighlighted: Bool) -> some View {
         HStack(spacing: DesignTokens.Spacing.sm) {
             Image(systemName: command.icon)
@@ -117,7 +104,7 @@ public struct CommandPaletteView: View {
             Spacer()
             if let shortcut = command.shortcut { KeyCap(keys: shortcut) }
         }
-        .padding(.horizontal, DesignTokens.Spacing.md)
+        .padding(.horizontal, DesignTokens.Spacing.lg)
         .frame(height: 28)
         .background(isHighlighted ? Color.accentColor.opacity(0.14) : .clear)
         .contentShape(Rectangle())

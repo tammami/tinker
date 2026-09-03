@@ -185,20 +185,27 @@ struct SidebarRow: View {
         .help(helpText)
     }
 
-    /// A connection row: the engine badge, the name, and the connection's own colour and
-    /// state at the trailing edge where they do not push the name around.
+    /// A connection row: the connection's own colour as a thin stripe, the engine badge,
+    /// the name, and its state at the trailing edge.
+    ///
+    /// State is carried by more than a dot: a disconnected row is dimmed as a whole, so
+    /// the identity colour (which may well be green) is never mistaken for "connected".
     @ViewBuilder
     private func connectionLabel(id: UUID) -> some View {
         if let config {
-            // The connection's colour is a stripe at the leading edge, where the tab strip
-            // shows it too; the trailing dot is only ever the connection's state.
+            let state = sidebar.state(of: id)
+            let isLive = state.isUsable
             RoundedRectangle(cornerRadius: 1.5)
                 .fill(config.color?.swiftUIColor ?? .clear)
                 .frame(width: 3, height: 14)
+                .help(config.color.map { "Connection colour: \($0.displayName)" } ?? "")
             EngineMark(dialect: config.dialect, size: DesignTokens.Metrics.iconWidth)
+                .saturation(isLive ? 1 : 0)
+                .opacity(isLive ? 1 : 0.55)
             Text(config.name)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .foregroundStyle(isLive ? .primary : .secondary)
             if config.isProduction {
                 Badge(text: "PROD", color: Color(nsColor: DesignTokens.Colors.productionBadge), isProminent: true)
             }
@@ -209,10 +216,7 @@ struct SidebarRow: View {
                     .help("Read-only")
             }
             Spacer(minLength: DesignTokens.Spacing.xs)
-            Circle()
-                .fill(sidebar.state(of: id).indicatorColor)
-                .frame(width: 7, height: 7)
-                .help(sidebar.state(of: id).describedForStatusBar)
+            ConnectionStateDot(state: state)
         } else {
             Image(systemName: Icon.connection).frame(width: DesignTokens.Metrics.iconWidth)
             Text(item.title)
@@ -478,5 +482,29 @@ struct SidebarRow: View {
                 action: {}
             )
         }
+    }
+}
+
+/// The state of a connection as a dot: filled and coloured while it is doing something,
+/// hollow when it is disconnected, so "off" never looks like a colour.
+struct ConnectionStateDot: View {
+    let state: ConnectionState
+
+    var body: some View {
+        Group {
+            switch state {
+            case .disconnected:
+                Circle().strokeBorder(Color.secondary.opacity(0.6), lineWidth: 1.5)
+            case .connecting:
+                Circle().fill(Color.yellow)
+            case .connected:
+                Circle().fill(Color.green)
+            case .degraded:
+                Circle().fill(Color.red)
+            }
+        }
+        .frame(width: 8, height: 8)
+        .help(state.describedForStatusBar)
+        .accessibilityLabel(state.describedForStatusBar)
     }
 }

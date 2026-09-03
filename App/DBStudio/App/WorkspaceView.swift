@@ -441,10 +441,7 @@ public struct WorkspaceView: View {
     }
 
     private func shortcutHint(_ keys: String, _ label: String) -> some View {
-        HStack(spacing: DesignTokens.Spacing.xs) {
-            KeyCap(keys: keys)
-            Text(label).font(.caption).foregroundStyle(.secondary)
-        }
+        KeyHint(keys: keys, label: label)
     }
 
     var statusBar: some View {

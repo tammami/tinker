@@ -21,7 +21,8 @@ public struct QuickOpenView: View {
                     .onSubmit(openHighlighted)
                 KeyCap(keys: "esc")
             }
-            .padding(DesignTokens.Spacing.md)
+            .padding(.horizontal, DesignTokens.Spacing.lg)
+            .padding(.vertical, DesignTokens.Spacing.md)
             Divider()
             if matches.isEmpty {
                 EmptyStateView(
@@ -53,7 +54,7 @@ public struct QuickOpenView: View {
                                         .font(.caption)
                                         .foregroundStyle(.tertiary)
                                 }
-                                .padding(.horizontal, DesignTokens.Spacing.md)
+                                .padding(.horizontal, DesignTokens.Spacing.lg)
                                 .frame(height: 28)
                                 .background(index == highlighted ? Color.accentColor.opacity(0.14) : .clear)
                                 .contentShape(Rectangle())
@@ -71,16 +72,9 @@ public struct QuickOpenView: View {
                 }
             }
             Divider()
-            HStack(spacing: DesignTokens.Spacing.lg) {
-                HStack(spacing: DesignTokens.Spacing.xs) { KeyCap(keys: "↑↓"); Text("move").font(.caption).foregroundStyle(.secondary) }
-                HStack(spacing: DesignTokens.Spacing.xs) { KeyCap(keys: "↩"); Text("open").font(.caption).foregroundStyle(.secondary) }
-                Spacer()
+            SheetHintBar(hints: [("↑↓", "move"), ("↩", "open")]) {
                 Text("\(sidebar.knownTables.count) table\(sidebar.knownTables.count == 1 ? "" : "s") known")
-                    .font(.caption).foregroundStyle(.tertiary).monospacedDigit()
             }
-            .padding(.horizontal, DesignTokens.Spacing.md)
-            .frame(height: DesignTokens.Metrics.statusHeight)
-            .background(.bar)
         }
         .frame(width: 560)
         .onAppear { isFieldFocused = true }

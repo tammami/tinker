@@ -30,9 +30,10 @@ enum SmokeTest {
         await environment.load()
         check("store opens", environment.startupError == nil)
         guard let config = environment.connections.first else {
-            FileHandle.standardError.write(Data(
-                "no connection configured; add one in the app first\n".utf8
-            ))
+            FileHandle.standardError.write(
+                Data(
+                    "no connection configured; add one in the app first\n".utf8
+                ))
             exit(2)
         }
         check("a connection is configured", true)
@@ -67,7 +68,8 @@ enum SmokeTest {
             partial.editorDidRequestRun(.current, selection: secondStart ..< partial.sql.utf16.count)
             try await waitUntil(timeout: .seconds(20)) { !partial.isRunning && !partial.results.isEmpty }
             check("run selection runs one statement", partial.results.count == 1)
-            check("run selection runs the highlighted one", partial.results.first?.grid?.columns.first?.name == "second")
+            check(
+                "run selection runs the highlighted one", partial.results.first?.grid?.columns.first?.name == "second")
             await partial.releaseHeldConnection()
 
             // Cancellation: a long statement must stop quickly and leave the tab usable.
@@ -113,7 +115,9 @@ enum SmokeTest {
             // The quick search: one bound pattern per column, applied after a pause.
             let before = tab.model?.rowCount ?? 0
             await tab.applyQuickSearch("zzz-no-such-value-zzz")
-            check("quick search narrows \(before) rows to \(tab.model?.rowCount ?? -1)", tab.model?.rowCount == 0 && tab.errorText == nil)
+            check(
+                "quick search narrows \(before) rows to \(tab.model?.rowCount ?? -1)",
+                tab.model?.rowCount == 0 && tab.errorText == nil)
             await tab.applyQuickSearch("")
             check("clearing the search restores the rows", tab.model?.rowCount == before)
 
@@ -130,8 +134,9 @@ enum SmokeTest {
             let databaseItems = sidebar.find(id: connectionItem.id)?.children ?? []
             check("connection expands to \(databaseItems.count) database(s)", !databaseItems.isEmpty)
 
-            guard let databaseItem = databaseItems.first(where: { $0.title == database })
-                ?? databaseItems.first
+            guard
+                let databaseItem = databaseItems.first(where: { $0.title == database })
+                    ?? databaseItems.first
             else {
                 check("a database row exists", false)
                 exit(1)
@@ -156,9 +161,11 @@ enum SmokeTest {
             // skip: it read the folders' children without ever opening one. Doing so
             // asked the loader for children a folder already had, and the empty result it
             // returned replaced them, so the folder drew open and empty in the real app.
-            guard let tableFolder = folders.first(where: {
-                ($0.children ?? []).contains { $0.tableRef != nil }
-            }) else {
+            guard
+                let tableFolder = folders.first(where: {
+                    ($0.children ?? []).contains { $0.tableRef != nil }
+                })
+            else {
                 check("a folder holds tables", false)
                 exit(1)
             }
@@ -172,7 +179,10 @@ enum SmokeTest {
 
             // Close Database folds the branch and forgets its children; Disconnect folds the lot.
             sidebar.collapseSubtree(databaseItem.id)
-            check("close database folds the branch", !sidebar.isExpanded(databaseItem.id) && !sidebar.isExpanded(schemaItem.id))
+            check(
+                "close database folds the branch",
+                !sidebar.isExpanded(databaseItem.id) && !sidebar.isExpanded(schemaItem.id))
+            check("quick open forgets a closed database's tables", sidebar.knownTables.isEmpty)
             check("close database keeps the connection open", sidebar.isExpanded(connectionItem.id))
             check("a closed branch holds nothing", (sidebar.find(id: databaseItem.id)?.children ?? []).isEmpty)
             sidebar.collapseConnection(config.id)
@@ -186,17 +196,28 @@ enum SmokeTest {
             check("a new folder appears in the tree", sidebar.roots.contains { $0.title == "Smoke Folder" })
             await environment.renameGroup(["Smoke Folder"], to: "Smoke Renamed")
             sidebar.rebuildRoots()
-            check("renaming a folder renames its row", sidebar.roots.contains { $0.title == "Smoke Renamed" } && !sidebar.roots.contains { $0.title == "Smoke Folder" })
+            check(
+                "renaming a folder renames its row",
+                sidebar.roots.contains { $0.title == "Smoke Renamed" }
+                    && !sidebar.roots.contains { $0.title == "Smoke Folder" })
             await environment.createGroup(["Smoke Renamed", "Inner"])
             sidebar.rebuildRoots()
-            check("a nested folder sits inside its parent", sidebar.roots.first { $0.title == "Smoke Renamed" }?.children?.contains { $0.title == "Inner" } ?? false)
+            check(
+                "a nested folder sits inside its parent",
+                sidebar.roots.first { $0.title == "Smoke Renamed" }?.children?.contains { $0.title == "Inner" } ?? false
+            )
             await environment.removeGroup(["Smoke Renamed"])
             sidebar.rebuildRoots()
-            check("removing a folder moves its subfolders up a level", !sidebar.roots.contains { $0.title == "Smoke Renamed" } && sidebar.roots.contains { $0.title == "Inner" })
+            check(
+                "removing a folder moves its subfolders up a level",
+                !sidebar.roots.contains { $0.title == "Smoke Renamed" }
+                    && sidebar.roots.contains { $0.title == "Inner" })
             await environment.removeGroup(["Inner"])
             sidebar.rebuildRoots()
             check("removing the last folder leaves none", !sidebar.roots.contains { $0.title == "Inner" })
-            check("the connections are untouched", environment.connections.allSatisfy { !$0.groupPath.contains("Smoke Renamed") })
+            check(
+                "the connections are untouched",
+                environment.connections.allSatisfy { !$0.groupPath.contains("Smoke Renamed") })
 
             // The action a double-click performs.
             let workspace = WorkspaceModel(environment: environment)

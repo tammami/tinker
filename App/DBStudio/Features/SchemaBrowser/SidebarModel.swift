@@ -14,8 +14,37 @@ public final class SidebarModel {
     public private(set) var roots: [SidebarItem] = []
     public private(set) var expanded: Set<SidebarItem.ID> = []
     public private(set) var states: [UUID: ConnectionState] = [:]
-    /// Every table seen so far, for the quick-open filter (SPEC §11.1).
-    public private(set) var knownTables: [(connection: UUID, table: TableInfo)] = []
+    /// The tables of every open branch, for Quick Open and the command palette.
+    ///
+    /// Derived from the tree rather than remembered: a table is offered while its
+    /// connection, database and schema are all open, and stops being offered the moment
+    /// any of them is closed. Nothing lingers from a database that was shut.
+    public var knownTables: [(connection: UUID, table: TableInfo)] {
+        var result: [(connection: UUID, table: TableInfo)] = []
+        for (key, children) in childCache where isBranchOpen(key) {
+            for folder in children {
+                guard case .tableFolder = folder.kind else { continue }
+                for child in folder.children ?? [] {
+                    if case let .table(id, info) = child.kind { result.append((id, info)) }
+                }
+            }
+        }
+        return result
+    }
+
+    /// True when the node and every ancestor between it and the connection are expanded.
+    private func isBranchOpen(_ id: SidebarItem.ID) -> Bool {
+        guard expanded.contains(id) else { return false }
+        let parts = id.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        var prefix = ""
+        for (index, part) in parts.enumerated() {
+            prefix = index == 0 ? part : prefix + "/" + part
+            // Ancestors are the connection (the bare uuid) and each `…/db/<name>`.
+            let isAncestor = index == 0 || (index >= 2 && parts[index - 1] == "db")
+            if isAncestor, prefix != id, !expanded.contains(prefix) { return false }
+        }
+        return true
+    }
 
     private let environment: AppEnvironment
     private var childCache: [SidebarItem.ID: [SidebarItem]] = [:]
@@ -69,9 +98,10 @@ public final class SidebarModel {
                 children: children
             )
         }
-        items.append(contentsOf: environment.connections
-            .filter { $0.groupPath == path }
-            .map(connectionItem))
+        items.append(
+            contentsOf: environment.connections
+                .filter { $0.groupPath == path }
+                .map(connectionItem))
         return items
     }
 
@@ -142,7 +172,6 @@ public final class SidebarModel {
         let marker = connectionID.uuidString
         expanded = expanded.filter { !$0.contains(marker) }
         childCache = childCache.filter { !$0.key.contains(marker) }
-        knownTables.removeAll { $0.connection == connectionID }
         rebuildRoots()
         applyCachedChildren()
     }
@@ -159,7 +188,6 @@ public final class SidebarModel {
     public func refresh(connectionID: UUID) async {
         await environment.session(for: connectionID)?.invalidateIntrospection()
         childCache = childCache.filter { !$0.key.contains(connectionID.uuidString) }
-        knownTables.removeAll { $0.connection == connectionID }
         rebuildRoots()
         for id in expanded where id.contains(connectionID.uuidString) {
             if let item = find(id: id) { await loadChildren(of: item) }
@@ -190,12 +218,14 @@ public final class SidebarModel {
             childCache[item.id] = children
         } catch {
             let message = (error as? DBError)?.errorDescription ?? String(describing: error)
-            childCache[item.id] = [SidebarItem(
-                id: "\(item.id)/error",
-                kind: .failure(parent: item.id, message: message),
-                title: message,
-                symbolName: "exclamationmark.triangle"
-            )]
+            childCache[item.id] = [
+                SidebarItem(
+                    id: "\(item.id)/error",
+                    kind: .failure(parent: item.id, message: message),
+                    title: message,
+                    symbolName: "exclamationmark.triangle"
+                )
+            ]
         }
         rebuildRoots()
         applyCachedChildren()
@@ -242,13 +272,14 @@ public final class SidebarModel {
             // folders hang off the database row rather than off a schema of the same name.
             if session.config.dialect == .mysql {
                 let ref = SchemaRef.mysql(name)
-                return try await children(of: SidebarItem(
-                    id: "\(item.id)/schema/\(name)",
-                    kind: .schema(connection: id, ref: ref),
-                    title: name,
-                    symbolName: Icon.schema,
-                    children: []
-                ))
+                return try await children(
+                    of: SidebarItem(
+                        id: "\(item.id)/schema/\(name)",
+                        kind: .schema(connection: id, ref: ref),
+                        title: name,
+                        symbolName: Icon.schema,
+                        children: []
+                    ))
             }
             let schemas = try await session.introspection(.schemas(database: name)) {
                 try await $0.schemas(in: name)
@@ -267,37 +298,36 @@ public final class SidebarModel {
         case let .schema(id, ref):
             guard let session = environment.session(for: id) else { return [] }
             let tables = try await session.introspection(.tables(ref)) { try await $0.tables(in: ref) }
-            for table in tables where !knownTables.contains(where: { $0.table.ref == table.ref }) {
-                knownTables.append((connection: id, table: table))
-            }
             var folders: [SidebarItem] = []
             for kind in [TableKind.table, .partitionedTable, .view, .materializedView, .foreignTable] {
                 let matching = tables.filter { $0.kind == kind }
                 guard !matching.isEmpty else { continue }
-                folders.append(SidebarItem(
-                    id: "\(item.id)/kind/\(kind.rawValue)",
-                    kind: .tableFolder(connection: id, schema: ref, kind: kind),
-                    title: Self.folderTitle(for: kind),
-                    subtitle: "\(matching.count)",
-                    symbolName: kind.symbolName,
-                    children: matching.map { table in
-                        SidebarItem(
-                            id: "\(id.uuidString)/table/\(table.ref.id)",
-                            kind: .table(connection: id, info: table),
-                            title: table.name,
-                            subtitle: table.approximateRowCount.map { "~\($0)" },
-                            symbolName: kind.symbolName
-                        )
-                    }
-                ))
+                folders.append(
+                    SidebarItem(
+                        id: "\(item.id)/kind/\(kind.rawValue)",
+                        kind: .tableFolder(connection: id, schema: ref, kind: kind),
+                        title: Self.folderTitle(for: kind),
+                        subtitle: "\(matching.count)",
+                        symbolName: kind.symbolName,
+                        children: matching.map { table in
+                            SidebarItem(
+                                id: "\(id.uuidString)/table/\(table.ref.id)",
+                                kind: .table(connection: id, info: table),
+                                title: table.name,
+                                subtitle: table.approximateRowCount.map { "~\($0)" },
+                                symbolName: kind.symbolName
+                            )
+                        }
+                    ))
             }
-            folders.append(SidebarItem(
-                id: "\(item.id)/routines",
-                kind: .routineFolder(connection: id, schema: ref),
-                title: "Functions",
-                symbolName: "function",
-                children: []
-            ))
+            folders.append(
+                SidebarItem(
+                    id: "\(item.id)/routines",
+                    kind: .routineFolder(connection: id, schema: ref),
+                    title: "Functions",
+                    symbolName: "function",
+                    children: []
+                ))
             return folders
 
         case let .routineFolder(id, ref):
@@ -347,7 +377,8 @@ public final class SidebarModel {
     public func quickOpenMatches(_ query: String, limit: Int = 40) -> [(connection: UUID, table: TableInfo)] {
         let needle = query.lowercased()
         guard !needle.isEmpty else { return Array(knownTables.prefix(limit)) }
-        return knownTables
+        return
+            knownTables
             .compactMap { entry -> (score: Int, connection: UUID, table: TableInfo)? in
                 guard let score = Self.fuzzyScore(needle: needle, haystack: entry.table.name.lowercased()) else {
                     return nil

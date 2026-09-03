@@ -1,7 +1,7 @@
+import AppKit
 import DBCore
 import DBGrid
 import DBSQL
-import AppKit
 import Foundation
 
 /// Opens a scene on launch when `--ui-demo <scene>` is passed, for screenshots and review.
@@ -40,10 +40,12 @@ enum UIDemo {
         guard let config else { return }
 
         // Expand the tree the way a double-click would, so tables become known.
-        guard let root = sidebar.roots.first(where: { $0.connectionID == config.id }) else { return }
+        guard let root = sidebar.find(id: config.id.uuidString) else { return }
         await sidebar.expand(root)
         let databases = sidebar.find(id: root.id)?.children ?? []
-        guard let database = databases.first(where: { $0.title == (config.database ?? "") }) ?? databases.first else { return }
+        guard let database = databases.first(where: { $0.title == (config.database ?? "") }) ?? databases.first else {
+            return
+        }
         await sidebar.expand(database)
         guard let firstChild = sidebar.find(id: database.id)?.children?.first else { return }
         // PostgreSQL shows schemas under a database; MySQL shows the folders directly.
@@ -70,7 +72,9 @@ enum UIDemo {
                     workspace.isInspectorVisible = true
                     if let table = controller.tableController(for: tab) {
                         try? await Task.sleep(for: .milliseconds(900))
-                        if let column = table.model?.columns.firstIndex(where: { $0.kind == .timestamp || $0.kind == .date }) {
+                        if let column = table.model?.columns.firstIndex(where: {
+                            $0.kind == .timestamp || $0.kind == .date
+                        }) {
                             table.selection = GridSelection(row: 0, column: column)
                             table.bumpRevision()
                         }
@@ -81,14 +85,14 @@ enum UIDemo {
                 UserDefaults.standard.set(true, forKey: "uiDemo.structure")
             case "query":
                 let sql = """
-                SELECT c.id, c.name, count(o.id) AS orders, sum(o.total) AS revenue
-                FROM customers c
-                LEFT JOIN orders o ON o.customer_id = c.id
-                GROUP BY c.id, c.name
-                ORDER BY revenue DESC NULLS LAST;
+                    SELECT c.id, c.name, count(o.id) AS orders, sum(o.total) AS revenue
+                    FROM customers c
+                    LEFT JOIN orders o ON o.customer_id = c.id
+                    GROUP BY c.id, c.name
+                    ORDER BY revenue DESC NULLS LAST;
 
-                SELECT * FROM all_types;
-                """
+                    SELECT * FROM all_types;
+                    """
                 let tab = controller.newQueryTab(connectionID: config.id, sql: sql)
                 if let query = controller.queryController(for: tab) {
                     try? await Task.sleep(for: .milliseconds(400))
@@ -165,22 +169,28 @@ enum UIDemo {
                 workspace.isExportPresented = true
             case "import":
                 if let preferred {
-                    workspace.pendingTableOperation = TableOperationRequest(kind: .importCSV, table: preferred.ref, connectionID: config.id)
+                    workspace.pendingTableOperation = TableOperationRequest(
+                        kind: .importCSV, table: preferred.ref, connectionID: config.id)
                 }
             case "rename":
                 if let preferred {
-                    workspace.pendingTableOperation = TableOperationRequest(kind: .rename, table: preferred.ref, connectionID: config.id)
+                    workspace.pendingTableOperation = TableOperationRequest(
+                        kind: .rename, table: preferred.ref, connectionID: config.id)
                 }
             case "maintenance":
                 if let preferred, let action = MaintenanceAction.available(for: config.dialect).first {
-                    workspace.pendingTableOperation = TableOperationRequest(kind: .maintenance(action), table: preferred.ref, connectionID: config.id)
+                    workspace.pendingTableOperation = TableOperationRequest(
+                        kind: .maintenance(action), table: preferred.ref, connectionID: config.id)
                 }
             case "filter":
                 if let preferred {
                     let tab = controller.openTable(preferred.ref, connectionID: config.id)
                     if let table = controller.tableController(for: tab) {
                         try? await Task.sleep(for: .milliseconds(600))
-                        table.filterRules = [FilterRule(column: table.columnsInfo.first?.name ?? "id", op: .greaterThan, values: [.string("2")])]
+                        table.filterRules = [
+                            FilterRule(
+                                column: table.columnsInfo.first?.name ?? "id", op: .greaterThan, values: [.string("2")])
+                        ]
                         await table.applyFilter(table.filterRules)
                     }
                 }

@@ -238,6 +238,9 @@ enum SmokeTest {
             check("close database leaves the other database's tab", workspace.tabs.map(\.tableRef) == [other])
 
             await query.releaseHeldConnection()
+
+            // Every feature, end to end, on a scratch table.
+            await featurePass(environment: environment, config: config, session: session, check: check)
             await environment.disconnectAll()
         } catch {
             check("no error: \(error)", false)

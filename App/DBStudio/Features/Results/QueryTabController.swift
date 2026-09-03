@@ -261,18 +261,21 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     private func connectionForRun(session: ConnectionSession) async throws -> any SQLConnection {
         if let heldConnection {
             try await applySessionDatabase(on: heldConnection)
+            // Auto-commit was turned off after this connection was taken: the next statement
+            // is the first of a transaction, so one is opened here rather than never.
+            if !autoCommit, !isInTransaction {
+                try await heldConnection.beginTransaction()
+                isInTransaction = true
+            }
             return heldConnection
         }
         let (lease, connection) = try await session.lease()
         try await applySessionDatabase(on: connection)
-        if autoCommit {
-            // Returned once the statement's stream is drained; the lease is released by
-            // `releaseHeldConnection` when the tab closes or auto-commit turns back on.
-            heldLease = lease
-            heldConnection = connection
-        } else {
-            heldLease = lease
-            heldConnection = connection
+        // The lease is kept either way — released by `releaseHeldConnection` when the tab
+        // closes — so that COMMIT reaches the same connection the statements ran on.
+        heldLease = lease
+        heldConnection = connection
+        if !autoCommit {
             try await connection.beginTransaction()
             isInTransaction = true
         }

@@ -195,7 +195,14 @@ public final class TableTabController: DataGridDelegate {
 
     public var currentPage: Int { (model?.pageOffset ?? 0) + 1 }
     public var canGoBack: Bool { model?.hasPreviousPage ?? false }
-    public var canGoForward: Bool { model?.hasNextPage ?? false }
+    /// Once the total is known, the last page is the last page even when it is full.
+    public var canGoForward: Bool {
+        guard let model, model.hasNextPage else { return false }
+        if let total = exactTotal {
+            return Int64(currentPage) * Int64(model.pageSize) < total
+        }
+        return true
+    }
 
     public func goToPage(_ page: Int) async {
         guard let model else { return }

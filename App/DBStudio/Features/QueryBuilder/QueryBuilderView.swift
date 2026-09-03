@@ -104,33 +104,54 @@ public struct QueryBuilderView: View {
             if controller.visibleTables.isEmpty {
                 EmptyStateView(icon: Icon.table, title: controller.isLoading ? "Reading…" : "No tables")
             } else {
-                List(controller.visibleTables) { table in
-                    HStack(spacing: DesignTokens.Spacing.sm) {
-                        Image(systemName: table.kind.symbolName)
-                            .foregroundStyle(table.kind.isEditable ? Color.accentColor : .purple)
-                            .frame(width: DesignTokens.Metrics.iconWidth)
-                        Text(table.name).lineLimit(1)
-                        Spacer()
-                        if controller.model.tables.contains(where: { $0.ref == table.ref }) {
-                            Image(systemName: "checkmark").font(.caption2).foregroundStyle(.secondary)
+                // Plain rows rather than a List: a List's own row dragging swallows the
+                // drag that is meant to carry the table onto the canvas.
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(controller.visibleTables.enumerated()), id: \.element.id) { index, table in
+                            tableRow(table, index: index)
                         }
                     }
-                    .contentShape(Rectangle())
-                    .draggable(table.name) {
-                        Label(table.name, systemImage: table.kind.symbolName).padding(DesignTokens.Spacing.sm)
-                    }
-                    .onTapGesture(count: 2) {
-                        Task { await controller.add(table.ref, at: nextFreeSpot()) }
-                    }
-                    .help("Drag onto the canvas, or double-click to add")
                 }
-                .listStyle(.plain)
             }
             Divider()
             StatusBarView {
                 Text("Drag a table onto the canvas")
             }
         }
+    }
+
+    private func tableRow(_ table: TableInfo, index: Int) -> some View {
+        let placed = controller.model.tables.contains { $0.ref == table.ref }
+        return HStack(spacing: DesignTokens.Spacing.sm) {
+            Image(systemName: table.kind.symbolName)
+                .foregroundStyle(table.kind.isEditable ? Color.accentColor : .purple)
+                .frame(width: DesignTokens.Metrics.iconWidth)
+            Text(table.name).lineLimit(1)
+            Spacer()
+            if placed {
+                Image(systemName: "checkmark").font(.caption2).foregroundStyle(.secondary)
+            }
+            IconButton(icon: Icon.add, label: "Add to canvas") {
+                Task { await controller.add(table.ref, at: nextFreeSpot()) }
+            }
+        }
+        .padding(.horizontal, DesignTokens.Spacing.md)
+        .frame(height: 26)
+        .background(index.isMultiple(of: 2) ? Color.clear : Color(nsColor: .alternatingContentBackgroundColors[1]))
+        .contentShape(Rectangle())
+        .onDrag {
+            NSItemProvider(object: table.name as NSString)
+        } preview: {
+            Label(table.name, systemImage: table.kind.symbolName)
+                .padding(DesignTokens.Spacing.sm)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius))
+        }
+        .onTapGesture(count: 2) {
+            Task { await controller.add(table.ref, at: nextFreeSpot()) }
+        }
+        .help("Drag onto the canvas, double-click, or press + to add")
     }
 
     /// Somewhere to the right of what is already placed.
@@ -533,14 +554,7 @@ struct BuilderCanvas: View {
             }
             .frame(width: extent.width, height: extent.height, alignment: .topLeading)
             .coordinateSpace(name: "canvas")
-            .dropDestination(for: String.self) { items, location in
-                guard let name = items.first,
-                      let table = controller.availableTables.first(where: { $0.name == name })
-                else { return false }
-                let point = CGPoint(x: max(0, location.x - BuilderMetrics.cardWidth / 2), y: max(0, location.y - 14))
-                Task { await controller.add(table.ref, at: point) }
-                return true
-            }
+            .onDrop(of: [.plainText, .utf8PlainText, .text], delegate: CanvasDropDelegate(controller: controller))
             .contextMenu {
                 Button("Arrange Cards") { arrange() }
                     .disabled(controller.model.tables.isEmpty)
@@ -621,6 +635,35 @@ struct BuilderCanvas: View {
               let other = controller.model.table(join.leftTable == id ? join.rightTable : join.leftTable)
         else { return nil }
         return CGPoint(x: CGFloat(other.x) + BuilderMetrics.cardWidth / 2, y: CGFloat(other.y))
+    }
+}
+
+/// Accepts a table name dragged from the list and places the table where it was dropped.
+struct CanvasDropDelegate: DropDelegate {
+    let controller: QueryBuilderController
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [.plainText, .utf8PlainText, .text])
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .copy) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let provider = info.itemProviders(for: [.plainText, .utf8PlainText, .text]).first else { return false }
+        let location = info.location
+        let controller = controller
+        _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let name = object as? String else { return }
+            Task { @MainActor in
+                guard let table = controller.availableTables.first(where: { $0.name == name }) else { return }
+                let point = CGPoint(
+                    x: max(0, location.x - BuilderMetrics.cardWidth / 2),
+                    y: max(0, location.y - BuilderMetrics.headerHeight / 2)
+                )
+                await controller.add(table.ref, at: point)
+            }
+        }
+        return true
     }
 }
 

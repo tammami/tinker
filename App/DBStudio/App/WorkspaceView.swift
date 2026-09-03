@@ -71,7 +71,7 @@ public struct WorkspaceView: View {
             }
             .background(Color(nsColor: .controlBackgroundColor))
         }
-        .navigationTitle(workspace.displayedConnection?.name ?? Product.credit)
+        .navigationTitle(workspace.displayedConnection?.name ?? Product.name)
         .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }
         .onAppear { CommandCenter.shared.activate(controller) }
@@ -361,58 +361,74 @@ public struct WorkspaceView: View {
 
     // MARK: - Content
 
+    /// Every open tab's view stays alive and only the front one is shown. Rebuilding a
+    /// tab's grid or editor on each switch flashed the content and threw away the editor's
+    /// undo history and the grid's scroll position.
     @ViewBuilder
     var content: some View {
-        if let tab = workspace.selectedTab {
-            switch tab.kind {
-            case .table:
-                if let controller = tableControllers[tab.id] {
-                    TableTabView(controller: controller, workspace: workspace, tab: tab)
-                        // Each tab gets its own view state; without this the Data/Structure
-                        // choice and the panes follow the user from one table to the next.
-                        .id(tab.id)
+        if workspace.tabs.isEmpty {
+            welcome
+        } else {
+            ZStack {
+                ForEach(workspace.tabs) { tab in
+                    let isFront = workspace.selectedTabID == tab.id
+                    tabContent(tab)
+                        .opacity(isFront ? 1 : 0)
+                        .allowsHitTesting(isFront)
+                        .accessibilityHidden(!isFront)
+                        .zIndex(isFront ? 1 : 0)
                 }
-            case let .objects(schema):
-                ObjectsView(
-                    controller: objectsController(for: tab, schema: schema),
-                    onOpen: { table in openTable(table, tab.connectionID, false) },
-                    onOpenSource: { object in controller.openSource(object, connectionID: tab.connectionID) }
-                )
-                .id(tab.id)
-            case .query:
-                if let controller = queryControllers[tab.id] {
-                    QueryTabView(
-                        controller: controller,
-                        workspace: workspace,
-                        tab: tab,
-                        fontName: settings.editorFontName,
-                        fontSize: settings.editorFontSize
-                    )
-                }
-            case .serverActivity:
-                ServerActivityView(controller: controller.serverController(for: tab))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func tabContent(_ tab: WorkspaceTab) -> some View {
+        switch tab.kind {
+        case .table:
+            if let controller = tableControllers[tab.id] {
+                TableTabView(controller: controller, workspace: workspace, tab: tab)
                     .id(tab.id)
-            case let .source(object):
-                SourceView(
-                    controller: controller.sourceController(for: tab, object: object),
+            }
+        case let .objects(schema):
+            ObjectsView(
+                controller: objectsController(for: tab, schema: schema),
+                onOpen: { table in openTable(table, tab.connectionID, false) },
+                onOpenSource: { object in controller.openSource(object, connectionID: tab.connectionID) }
+            )
+            .id(tab.id)
+        case .query:
+            if let controller = queryControllers[tab.id] {
+                QueryTabView(
+                    controller: controller,
+                    workspace: workspace,
+                    tab: tab,
                     fontName: settings.editorFontName,
-                    fontSize: settings.editorFontSize,
-                    onEditInQuery: { sql in newQuery(tab.connectionID, sql) }
-                )
-                .id(tab.id)
-            case let .queryBuilder(schema):
-                QueryBuilderView(
-                    controller: controller.builderController(for: tab, schema: schema),
-                    fontName: settings.editorFontName,
-                    fontSize: settings.editorFontSize,
-                    onOpenInQuery: { sql in newQuery(tab.connectionID, sql) },
-                    onOpenTable: { table in openTable(table, tab.connectionID, false) },
-                    onSchemaChanged: { Task { await sidebar.refresh(connectionID: tab.connectionID) } }
+                    fontSize: settings.editorFontSize
                 )
                 .id(tab.id)
             }
-        } else {
-            welcome
+        case .serverActivity:
+            ServerActivityView(controller: controller.serverController(for: tab))
+                .id(tab.id)
+        case let .source(object):
+            SourceView(
+                controller: controller.sourceController(for: tab, object: object),
+                fontName: settings.editorFontName,
+                fontSize: settings.editorFontSize,
+                onEditInQuery: { sql in newQuery(tab.connectionID, sql) }
+            )
+            .id(tab.id)
+        case let .queryBuilder(schema):
+            QueryBuilderView(
+                controller: controller.builderController(for: tab, schema: schema),
+                fontName: settings.editorFontName,
+                fontSize: settings.editorFontSize,
+                onOpenInQuery: { sql in newQuery(tab.connectionID, sql) },
+                onOpenTable: { table in openTable(table, tab.connectionID, false) },
+                onSchemaChanged: { Task { await sidebar.refresh(connectionID: tab.connectionID) } }
+            )
+            .id(tab.id)
         }
     }
 

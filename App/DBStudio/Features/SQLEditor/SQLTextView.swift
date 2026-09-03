@@ -61,6 +61,9 @@ public struct SQLEditorView: NSViewRepresentable {
     public let errorPosition: Int?
     /// False shows a definition with highlighting but takes no typing.
     public let isEditable: Bool
+    /// Whether this editor's tab is in front. Tabs stay alive when hidden, so the editor
+    /// takes focus when it comes to the front rather than only when it is created.
+    public let isFront: Bool
     public weak var delegate: (any SQLEditorDelegate)?
 
     public init(
@@ -70,6 +73,7 @@ public struct SQLEditorView: NSViewRepresentable {
         fontSize: Double = 13,
         errorPosition: Int? = nil,
         isEditable: Bool = true,
+        isFront: Bool = true,
         delegate: (any SQLEditorDelegate)? = nil
     ) {
         _text = text
@@ -78,6 +82,7 @@ public struct SQLEditorView: NSViewRepresentable {
         self.fontSize = fontSize
         self.errorPosition = errorPosition
         self.isEditable = isEditable
+        self.isFront = isFront
         self.delegate = delegate
     }
 
@@ -180,10 +185,13 @@ public struct SQLEditorView: NSViewRepresentable {
         textView.font = DesignTokens.Fonts.editor(name: fontName, size: fontSize)
         textView.isEditable = isEditable
         // The editor is the point of a query tab, so it takes focus as soon as it is on
-        // screen rather than making the user click into it first.
-        if isEditable, !coordinator.hasTakenFocus, let window = textView.window {
+        // screen, and again each time its tab comes back to the front.
+        if isEditable, isFront, !coordinator.isFront, let window = textView.window {
+            coordinator.isFront = true
             coordinator.hasTakenFocus = true
             window.makeFirstResponder(textView)
+        } else if !isFront {
+            coordinator.isFront = false
         }
         if textView.string != text {
             let selected = textView.selectedRange()
@@ -219,6 +227,7 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
     private var dismissObserver: (any NSObjectProtocol)?
     weak var gutter: SQLGutterView?
     var hasTakenFocus = false
+    var isFront = false
     private var highlightTask: Task<Void, Never>?
 
     init(text: Binding<String>, dialect: SQLDialect, delegate: (any SQLEditorDelegate)?) {

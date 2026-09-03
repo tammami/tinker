@@ -25,31 +25,45 @@ public struct TableTabView: View {
 
     @State private var mode: Mode = .data
     @State private var isColumnsPopoverShown = false
+    /// The structure pane is built the first time it is asked for, then kept.
+    @State private var hasVisitedStructure = false
 
     public var body: some View {
         VStack(spacing: 0) {
             modeBar
             Divider()
 
-            switch mode {
-            case .structure:
-                StructureView(
-                    controller: controller.structure,
-                    isProduction: controller.isProduction
-                )
-                // The grid's own idea of the table is stale once the structure changed.
-                .onChange(of: controller.structure.statusText) { _, status in
-                    guard status != nil else { return }
-                    Task { await controller.reloadAfterStructureChange() }
-                }
-            case .data:
+            // Both panes stay alive; switching only changes which one is shown, so the grid
+            // neither flashes nor loses its place when Structure is visited and left.
+            ZStack {
                 dataContent
+                    .opacity(mode == .data ? 1 : 0)
+                    .allowsHitTesting(mode == .data)
+                    .accessibilityHidden(mode != .data)
+                if hasVisitedStructure {
+                    StructureView(
+                        controller: controller.structure,
+                        isProduction: controller.isProduction
+                    )
+                    // The grid's own idea of the table is stale once the structure changed.
+                    .onChange(of: controller.structure.statusText) { _, status in
+                        guard status != nil else { return }
+                        Task { await controller.reloadAfterStructureChange() }
+                    }
+                    .opacity(mode == .structure ? 1 : 0)
+                    .allowsHitTesting(mode == .structure)
+                    .accessibilityHidden(mode != .structure)
+                }
             }
+        }
+        .onChange(of: mode) { _, new in
+            if new == .structure { hasVisitedStructure = true }
         }
         .onAppear {
             if UserDefaults.standard.bool(forKey: "uiDemo.structure") {
                 UserDefaults.standard.removeObject(forKey: "uiDemo.structure")
                 mode = .structure
+                hasVisitedStructure = true
             }
             controller.onRequestInspector = { workspace.isInspectorVisible = true }
             controller.onFollowReference = { table, rules in
@@ -212,7 +226,10 @@ public struct TableTabView: View {
             Divider()
             statusBar
         }
-        .task(id: tab.id) { await controller.start() }
+        .task(id: tab.id) {
+            // Once. A pane that comes back into view must not reload the grid it kept.
+            if controller.model == nil { await controller.start() }
+        }
     }
 
     /// First / previous / next / last and the page number.

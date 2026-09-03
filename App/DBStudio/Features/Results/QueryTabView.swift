@@ -24,6 +24,7 @@ public struct QueryTabView: View {
                     fontName: fontName,
                     fontSize: fontSize,
                     errorPosition: controller.errorBanner?.position,
+                    isFront: workspace.selectedTabID == tab.id,
                     delegate: controller
                 )
             }

@@ -1,11 +1,16 @@
 import AppKit
 import DBCore
 import DBSQL
+import os
 
 /// The text view itself: current-line highlight, comment toggling, auto-indent,
 /// duplicate line, and the keys that run statements.
 public final class SQLTextView: NSTextView {
     weak var coordinator: SQLEditorCoordinator?
+
+    /// Key handling is subtle enough that it is worth being able to watch it from
+    /// `log stream --predicate 'subsystem == "com.thinkfree.DBStudio"'`.
+    static let keyLog = Logger(subsystem: "com.thinkfree.DBStudio", category: "editor-keys")
 
     /// Takes focus as soon as the editor is placed in a window, so a new query tab is
     /// ready to type into.
@@ -38,27 +43,47 @@ public final class SQLTextView: NSTextView {
         lineRect.fill()
     }
 
-    /// `⌘/` toggles line comments, `⌘D` duplicates the line, `⌘↩` runs (SPEC §10.2).
+    /// `⌘↩` runs, `⌘⇧↩` runs everything, `⌘/` toggles line comments and `⌘D` duplicates
+    /// the line (SPEC §10.2).
+    ///
+    /// These are answered here rather than left to the Query menu because the window's
+    /// view tree gets key equivalents *before* the main menu does, and `NSTextView`
+    /// swallows `⌘↩` on its way past. Handling it here is what makes the shortcut work at
+    /// all while the editor has focus.
     public override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        Self.keyLog.info("performKeyEquivalent keyCode=\(event.keyCode) flags=\(event.modifierFlags.rawValue)")
         guard event.modifierFlags.contains(.command) else {
             return super.performKeyEquivalent(with: event)
         }
-        let characters = event.charactersIgnoringModifiers ?? ""
-        switch characters {
+        // 36 is Return, 76 the keypad's Enter.
+        if event.keyCode == 36 || event.keyCode == 76 {
+            let all = event.modifierFlags.contains(.shift)
+            MainActor.assumeIsolated {
+                let hasCoordinator = self.coordinator != nil
+                let hasDelegate = self.coordinator?.delegate != nil
+                Self.keyLog.info("run shortcut: coordinator=\(hasCoordinator) delegate=\(hasDelegate)")
+                self.coordinator?.delegate?.editorDidRequestRun(all: all)
+            }
+            return true
+        }
+        guard !event.modifierFlags.contains(.shift), !event.modifierFlags.contains(.option) else {
+            return super.performKeyEquivalent(with: event)
+        }
+        switch event.charactersIgnoringModifiers ?? "" {
         case "/":
             toggleLineComment()
             return true
         case "d":
             duplicateLine()
             return true
-        case "\r":
-            MainActor.assumeIsolated {
-                coordinator?.delegate?.editorDidRequestRun(all: event.modifierFlags.contains(.shift))
-            }
-            return true
         default:
             return super.performKeyEquivalent(with: event)
         }
+    }
+
+    public override func keyDown(with event: NSEvent) {
+        Self.keyLog.info("keyDown keyCode=\(event.keyCode) flags=\(event.modifierFlags.rawValue)")
+        super.keyDown(with: event)
     }
 
     public override func insertNewline(_ sender: Any?) {

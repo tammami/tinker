@@ -68,9 +68,32 @@ public struct SQLEditorView: NSViewRepresentable {
     }
 
     public func makeNSView(context: Context) -> NSScrollView {
-        let textView = SQLTextView()
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = true
+
+        // A text view inside a scroll view needs all four of these. Without `maxSize` and
+        // a container size it keeps the height of its initial frame — zero — and then it
+        // lays out no text and accepts no typing.
+        let contentSize = scrollView.contentSize
+        let textView = SQLTextView(frame: NSRect(origin: .zero, size: contentSize))
+        textView.minSize = NSSize(width: 0, height: contentSize.height)
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.containerSize = NSSize(
+            width: contentSize.width, height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.textContainer?.widthTracksTextView = true
+
         textView.coordinator = context.coordinator
         textView.delegate = context.coordinator
+        textView.isEditable = true
+        textView.isSelectable = true
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -79,13 +102,9 @@ public struct SQLEditorView: NSViewRepresentable {
         textView.allowsUndo = true
         textView.font = DesignTokens.Fonts.editor(name: fontName, size: fontSize)
         textView.textContainerInset = NSSize(width: 6, height: 8)
-        textView.autoresizingMask = [.width]
-        textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = false
-        textView.textContainer?.widthTracksTextView = true
+        textView.setAccessibilityIdentifier("sql-editor")
         textView.string = text
 
-        let scrollView = NSScrollView()
         scrollView.documentView = textView
         scrollView.hasVerticalScroller = true
         scrollView.borderType = .noBorder

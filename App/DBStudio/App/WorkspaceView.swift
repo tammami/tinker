@@ -6,23 +6,27 @@ import UniformTypeIdentifiers
 
 /// One workspace window: sidebar, tab bar, tab content, status bar (SPEC §10.1).
 public struct WorkspaceView: View {
-    @State private var workspace: WorkspaceModel
-    @State private var sidebar: SidebarModel
-    @State private var tableControllers: [UUID: TableTabController] = [:]
-    @State private var queryControllers: [UUID: QueryTabController] = [:]
+    @State private var controller: WorkspaceController
     @State private var columnVisibility = NavigationSplitViewVisibility.all
+    @State private var isFirstRunPresented = false
 
     let environment: AppEnvironment
     @Bindable var settings: AppSettings
-    @State private var isFirstRunPresented = false
 
     public init(environment: AppEnvironment, settings: AppSettings) {
         self.environment = environment
         self.settings = settings
-        let workspace = WorkspaceModel(environment: environment)
-        _workspace = State(initialValue: workspace)
-        _sidebar = State(initialValue: SidebarModel(environment: environment))
+        _controller = State(initialValue: WorkspaceController(
+            environment: environment, settings: settings
+        ))
     }
+
+    /// `@Bindable` on the model, so the sheets that need a binding still have one.
+    var workspace: WorkspaceModel { controller.workspace }
+    var boundWorkspace: Bindable<WorkspaceModel> { Bindable(controller.workspace) }
+    var sidebar: SidebarModel { controller.sidebar }
+    var tableControllers: [UUID: TableTabController] { controller.tableControllers }
+    var queryControllers: [UUID: QueryTabController] { controller.queryControllers }
 
     public var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -48,7 +52,11 @@ public struct WorkspaceView: View {
         }
         .navigationTitle(workspace.activeConnection?.name ?? "DBStudio")
         .toolbar { toolbarContent }
-        .focusedSceneValue(\.workspaceCommands, commands)
+        .onAppear { CommandCenter.shared.activate(controller) }
+        .onChange(of: controller.isSidebarVisible) { _, visible in
+            columnVisibility = visible ? .all : .detailOnly
+        }
+        .onDisappear { CommandCenter.shared.deactivate(controller) }
         .task {
             await environment.load()
             sidebar.rebuildRoots()
@@ -58,7 +66,7 @@ public struct WorkspaceView: View {
             if !seen, environment.connections.isEmpty { isFirstRunPresented = true }
         }
         .onChange(of: environment.connections.count) { _, _ in sidebar.rebuildRoots() }
-        .sheet(item: $workspace.editingConnection) { config in
+        .sheet(item: boundWorkspace.editingConnection) { config in
             ConnectionEditorView(
                 config: config,
                 isNew: workspace.isEditingNewConnection,
@@ -79,7 +87,7 @@ public struct WorkspaceView: View {
                 }
             )
         }
-        .sheet(item: $workspace.commitPreview) { preview in
+        .sheet(item: boundWorkspace.commitPreview) { preview in
             CommitPreviewView(
                 preview: preview,
                 onExecute: {
@@ -90,17 +98,17 @@ public struct WorkspaceView: View {
                 onCancel: { workspace.commitPreview = nil }
             )
         }
-        .sheet(item: $workspace.confirmation) { confirmation in
+        .sheet(item: boundWorkspace.confirmation) { confirmation in
             DestructiveConfirmationView(confirmation: confirmation) {
                 workspace.confirmation = nil
             }
         }
-        .sheet(isPresented: $workspace.isQuickOpenPresented) {
+        .sheet(isPresented: boundWorkspace.isQuickOpenPresented) {
             QuickOpenView(workspace: workspace, sidebar: sidebar) { table, connectionID in
                 openTable(table, connectionID, false)
             }
         }
-        .sheet(isPresented: $workspace.isHistoryPresented) {
+        .sheet(isPresented: boundWorkspace.isHistoryPresented) {
             HistoryView(
                 environment: environment,
                 connectionID: workspace.activeConnectionID,
@@ -116,7 +124,7 @@ public struct WorkspaceView: View {
                 onDismiss: { workspace.isHistoryPresented = false }
             )
         }
-        .sheet(isPresented: $workspace.isExportPresented) { exportSheet }
+        .sheet(isPresented: boundWorkspace.isExportPresented) { exportSheet }
         .sheet(isPresented: $isFirstRunPresented) {
             FirstRunView(
                 onAddConnection: {
@@ -168,7 +176,7 @@ public struct WorkspaceView: View {
             .disabled(queryController?.isRunning != true)
 
             Button {
-                commands.commit()
+                controller.commit()
             } label: {
                 Label("Commit", systemImage: "checkmark.circle")
             }
@@ -176,7 +184,7 @@ public struct WorkspaceView: View {
             .disabled(!hasPendingWork)
 
             Button {
-                commands.rollback()
+                controller.rollback()
             } label: {
                 Label("Rollback", systemImage: "arrow.uturn.backward.circle")
             }
@@ -184,7 +192,7 @@ public struct WorkspaceView: View {
             .disabled(!hasPendingWork)
 
             Button {
-                commands.refresh()
+                controller.refresh()
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
@@ -366,156 +374,14 @@ public struct WorkspaceView: View {
     // MARK: - Opening tabs
 
     func openTable(_ table: TableRef, _ connectionID: UUID, _ forceNew: Bool) {
-        let tab = workspace.openTable(table, connectionID: connectionID, forceNew: forceNew)
-        guard tableControllers[tab.id] == nil else { return }
-        let dialect = environment.connections.first { $0.id == connectionID }?.dialect ?? .postgresql
-        tableControllers[tab.id] = TableTabController(
-            table: table, connectionID: connectionID, dialect: dialect, environment: environment
-        )
+        controller.openTable(table, connectionID: connectionID, forceNew: forceNew)
     }
 
     func newQuery(_ connectionID: UUID, _ sql: String) {
-        let tab = workspace.newQueryTab(connectionID: connectionID, sql: sql)
-        let dialect = environment.connections.first { $0.id == connectionID }?.dialect ?? .postgresql
-        let controller = QueryTabController(
-            connectionID: connectionID, dialect: dialect, environment: environment
-        )
-        controller.sql = sql
-        queryControllers[tab.id] = controller
+        controller.newQueryTab(connectionID: connectionID, sql: sql)
     }
 
     // MARK: - Commands
 
-    var commands: WorkspaceCommands {
-        WorkspaceCommands(
-            newQueryTab: {
-                if let id = workspace.activeConnectionID { newQuery(id, "") }
-            },
-            run: { all in
-                guard let tab = workspace.selectedTab, let controller = queryControllers[tab.id] else { return }
-                controller.run(all: all)
-            },
-            cancel: {
-                guard let tab = workspace.selectedTab, let controller = queryControllers[tab.id] else { return }
-                controller.cancel()
-            },
-            commit: {
-                guard let tab = workspace.selectedTab else { return }
-                if let controller = queryControllers[tab.id] {
-                    Task { await controller.commitTransaction() }
-                } else if let controller = tableControllers[tab.id],
-                          let config = workspace.activeConnection {
-                    let statements = controller.pendingStatements()
-                    guard !statements.isEmpty, let model = controller.model else { return }
-                    workspace.commitPreview = CommitPreview(
-                        statements: statements, dialect: model.dialect,
-                        connectionName: config.name, isProduction: config.isProduction, tab: tab
-                    )
-                }
-            },
-            rollback: {
-                guard let tab = workspace.selectedTab else { return }
-                if let controller = queryControllers[tab.id] {
-                    Task { await controller.rollbackTransaction() }
-                } else {
-                    tableControllers[tab.id]?.discardEdits()
-                }
-            },
-            refresh: {
-                guard let tab = workspace.selectedTab else {
-                    if let id = workspace.activeConnectionID {
-                        Task { await sidebar.refresh(connectionID: id) }
-                    }
-                    return
-                }
-                if let controller = tableControllers[tab.id] {
-                    Task { await controller.refresh() }
-                } else {
-                    Task { await sidebar.refresh(connectionID: tab.connectionID) }
-                }
-            },
-            quickOpen: { workspace.isQuickOpenPresented = true },
-            toggleFilter: { workspace.isFilterBarVisible.toggle() },
-            toggleSidebar: {
-                columnVisibility = columnVisibility == .all ? .detailOnly : .all
-            },
-            toggleInspector: { workspace.isInspectorVisible.toggle() },
-            closeTab: {
-                if let id = workspace.selectedTabID { workspace.closeTab(id) }
-            },
-            selectTab: { workspace.selectTab(at: $0) },
-            cycleTab: { workspace.cycleTab(forward: $0) },
-            formatSQL: {
-                guard let tab = workspace.selectedTab else { return }
-                queryControllers[tab.id]?.formatSQL()
-            },
-            toggleReadOnly: {
-                guard let id = workspace.activeConnectionID,
-                      let session = environment.session(for: id) else { return }
-                Task {
-                    let current = await session.isReadOnly
-                    await session.setReadOnlyOverride(current)
-                }
-            },
-            export: { workspace.isExportPresented = true },
-            copy: { format in
-                guard let tab = workspace.selectedTab else { return }
-                if let controller = tableControllers[tab.id] {
-                    controller.copySelection(format: format, nullText: settings.nullDisplayText)
-                } else {
-                    queryControllers[tab.id]?.copySelection(format: format)
-                }
-            },
-            paste: {
-                guard let tab = workspace.selectedTab else { return }
-                tableControllers[tab.id]?.paste()
-            },
-            setNull: {
-                guard let tab = workspace.selectedTab else { return }
-                tableControllers[tab.id]?.setSelectionNull()
-            },
-            addRow: {
-                guard let tab = workspace.selectedTab else { return }
-                tableControllers[tab.id]?.addRow()
-            },
-            deleteRows: {
-                guard let tab = workspace.selectedTab else { return }
-                tableControllers[tab.id]?.deleteSelectedRows()
-            },
-            showHistory: { workspace.isHistoryPresented = true },
-            openSQLFile: { openSQLFile() },
-            saveSQLFile: { saveSQLFile() },
-            cycleResultTab: { forward in
-                guard let tab = workspace.selectedTab,
-                      let controller = queryControllers[tab.id],
-                      !controller.results.isEmpty
-                else { return }
-                let index = controller.results.firstIndex { $0.id == controller.selectedResultID } ?? 0
-                let next = forward
-                    ? (index + 1) % controller.results.count
-                    : (index - 1 + controller.results.count) % controller.results.count
-                controller.selectedResultID = controller.results[next].id
-            }
-        )
-    }
-
-    func openSQLFile() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.init(filenameExtension: "sql") ?? .plainText]
-        panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url,
-              let text = try? String(contentsOf: url, encoding: .utf8),
-              let id = workspace.activeConnectionID
-        else { return }
-        newQuery(id, text)
-        workspace.selectedTab?.title = url.lastPathComponent
-    }
-
-    func saveSQLFile() {
-        guard let tab = workspace.selectedTab, let controller = queryControllers[tab.id] else { return }
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "\(tab.title).sql"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? controller.sql.write(to: url, atomically: true, encoding: .utf8)
-    }
+    // Menu commands live on `WorkspaceController` so the menus reach live objects.
 }

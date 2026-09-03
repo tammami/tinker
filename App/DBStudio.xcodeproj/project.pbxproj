@@ -18,12 +18,18 @@
 
 /* Begin PBXFileReference section */
 		DB0000000000000000000002 /* DBStudio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DBStudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DB0000000000000000000502 /* DBStudioUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DBStudioUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		DB0000000000000000000003 /* DBStudio */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = DBStudio;
+			sourceTree = "<group>";
+		};
+		DB0000000000000000000503 /* DBStudioUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = DBStudioUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -44,6 +50,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DB0000000000000000000504 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -51,6 +64,7 @@
 			isa = PBXGroup;
 			children = (
 				DB0000000000000000000003 /* DBStudio */,
+				DB0000000000000000000503 /* DBStudioUITests */,
 				DB0000000000000000000006 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -59,6 +73,7 @@
 			isa = PBXGroup;
 			children = (
 				DB0000000000000000000002 /* DBStudio.app */,
+				DB0000000000000000000502 /* DBStudioUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -96,7 +111,46 @@
 			productReference = DB0000000000000000000002 /* DBStudio.app */;
 			productType = "com.apple.product-type.application";
 		};
+		DB0000000000000000000507 /* DBStudioUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DB0000000000000000000508 /* Build configuration list for PBXNativeTarget "DBStudioUITests" */;
+			buildPhases = (
+				DB0000000000000000000505 /* Sources */,
+				DB0000000000000000000504 /* Frameworks */,
+				DB0000000000000000000506 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DB0000000000000000000509 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				DB0000000000000000000503 /* DBStudioUITests */,
+			);
+			name = DBStudioUITests;
+			productName = DBStudioUITests;
+			productReference = DB0000000000000000000502 /* DBStudioUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXTargetDependency section */
+		DB0000000000000000000509 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DB0000000000000000000007 /* DBStudio */;
+			targetProxy = DB0000000000000000000510 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXContainerItemProxy section */
+		DB0000000000000000000510 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DB0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DB0000000000000000000007;
+			remoteInfo = DBStudio;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXProject section */
 		DB0000000000000000000001 /* Project object */ = {
@@ -130,6 +184,7 @@
 			projectRoot = "";
 			targets = (
 				DB0000000000000000000007 /* DBStudio */,
+				DB0000000000000000000507 /* DBStudioUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -142,10 +197,24 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DB0000000000000000000506 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		DB0000000000000000000008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DB0000000000000000000505 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -345,6 +414,34 @@
 			};
 			name = Release;
 		};
+		DB0000000000000000000511 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.thinkfree.DBStudioUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_TARGET_NAME = DBStudio;
+			};
+			name = Debug;
+		};
+		DB0000000000000000000512 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.thinkfree.DBStudioUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_TARGET_NAME = DBStudio;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -362,6 +459,15 @@
 			buildConfigurations = (
 				DB0000000000000000000013 /* Debug */,
 				DB0000000000000000000014 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DB0000000000000000000508 /* Build configuration list for PBXNativeTarget "DBStudioUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DB0000000000000000000511 /* Debug */,
+				DB0000000000000000000512 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

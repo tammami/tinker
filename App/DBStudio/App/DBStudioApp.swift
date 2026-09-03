@@ -2,50 +2,6 @@ import DBCore
 import DBGrid
 import SwiftUI
 
-/// Commands the menus dispatch to whichever workspace window is focused.
-///
-/// SwiftUI menu items live outside the window's view tree, so the focused window
-/// publishes this bundle of closures and the commands call through it (SPEC §10.2).
-@MainActor
-public struct WorkspaceCommands {
-    public var newQueryTab: () -> Void
-    public var run: (Bool) -> Void
-    public var cancel: () -> Void
-    public var commit: () -> Void
-    public var rollback: () -> Void
-    public var refresh: () -> Void
-    public var quickOpen: () -> Void
-    public var toggleFilter: () -> Void
-    public var toggleSidebar: () -> Void
-    public var toggleInspector: () -> Void
-    public var closeTab: () -> Void
-    public var selectTab: (Int) -> Void
-    public var cycleTab: (Bool) -> Void
-    public var formatSQL: () -> Void
-    public var toggleReadOnly: () -> Void
-    public var export: () -> Void
-    public var copy: (ClipboardFormat) -> Void
-    public var paste: () -> Void
-    public var setNull: () -> Void
-    public var addRow: () -> Void
-    public var deleteRows: () -> Void
-    public var showHistory: () -> Void
-    public var openSQLFile: () -> Void
-    public var saveSQLFile: () -> Void
-    public var cycleResultTab: (Bool) -> Void
-}
-
-struct WorkspaceCommandsKey: FocusedValueKey {
-    typealias Value = WorkspaceCommands
-}
-
-extension FocusedValues {
-    var workspaceCommands: WorkspaceCommands? {
-        get { self[WorkspaceCommandsKey.self] }
-        set { self[WorkspaceCommandsKey.self] = newValue }
-    }
-}
-
 struct DBStudioApp: App {
     @State private var environment = AppEnvironment()
     @State private var settings: AppSettings
@@ -79,8 +35,11 @@ struct DBStudioApp: App {
 
 /// Every keyboard shortcut in SPEC §10.2, registered so it appears in the menus.
 struct DBStudioCommands: Commands {
-    @FocusedValue(\.workspaceCommands) private var commands
     let updater: Updater
+
+    /// The frontmost workspace. Read at the moment the menu item fires, so it is never a
+    /// stale capture and never depends on where first responder happens to be.
+    private var workspace: WorkspaceController? { CommandCenter.shared.current }
 
     var body: some Commands {
         CommandGroup(after: .appInfo) {
@@ -89,93 +48,93 @@ struct DBStudioCommands: Commands {
         }
 
         CommandGroup(replacing: .newItem) {
-            Button("New Query Tab") { commands?.newQueryTab() }
+            Button("New Query Tab") { workspace?.newQueryTab() }
                 .keyboardShortcut("t", modifiers: .command)
             Button("New Window") {
                 NSApp.sendAction(#selector(NSDocumentController.newDocument(_:)), to: nil, from: nil)
             }
             .keyboardShortcut("n", modifiers: .command)
             Divider()
-            Button("Open SQL File…") { commands?.openSQLFile() }
+            Button("Open SQL File…") { workspace?.openSQLFile() }
                 .keyboardShortcut("o", modifiers: .command)
-            Button("Save Query…") { commands?.saveSQLFile() }
+            Button("Save Query…") { workspace?.saveSQLFile() }
                 .keyboardShortcut("s", modifiers: .command)
             Divider()
-            Button("Export Result…") { commands?.export() }
+            Button("Export Result…") { workspace?.workspace.isExportPresented = true }
                 .keyboardShortcut("e", modifiers: .command)
         }
 
         CommandGroup(replacing: .saveItem) {
-            Button("Commit") { commands?.commit() }
+            Button("Commit") { workspace?.commit() }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
-            Button("Rollback") { commands?.rollback() }
+            Button("Rollback") { workspace?.rollback() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
         }
 
         CommandGroup(after: .pasteboard) {
             Divider()
-            Button("Copy as INSERT") { commands?.copy(.sqlInsert) }
+            Button("Copy as INSERT") { workspace?.copySelection(.sqlInsert) }
                 .keyboardShortcut("c", modifiers: [.command, .option])
             Menu("Copy As") {
-                Button("CSV") { commands?.copy(.csv) }
-                Button("JSON") { commands?.copy(.json) }
-                Button("Markdown Table") { commands?.copy(.markdown) }
-                Button("WHERE-IN List") { commands?.copy(.whereIn) }
+                Button("CSV") { workspace?.copySelection(.csv) }
+                Button("JSON") { workspace?.copySelection(.json) }
+                Button("Markdown Table") { workspace?.copySelection(.markdown) }
+                Button("WHERE-IN List") { workspace?.copySelection(.whereIn) }
             }
-            Button("Paste into Grid") { commands?.paste() }
+            Button("Paste into Grid") { workspace?.paste() }
             Divider()
-            Button("Set NULL") { commands?.setNull() }
+            Button("Set NULL") { workspace?.setNull() }
                 .keyboardShortcut(.delete, modifiers: .command)
-            Button("Add Row") { commands?.addRow() }
+            Button("Add Row") { workspace?.addRow() }
                 .keyboardShortcut("+", modifiers: .command)
-            Button("Delete Selected Rows") { commands?.deleteRows() }
+            Button("Delete Selected Rows") { workspace?.deleteRows() }
                 .keyboardShortcut("-", modifiers: .command)
         }
 
         CommandMenu("Query") {
-            Button("Run") { commands?.run(false) }
+            Button("Run") { workspace?.run(all: false) }
                 .keyboardShortcut(.return, modifiers: .command)
-            Button("Run All") { commands?.run(true) }
+            Button("Run All") { workspace?.run(all: true) }
                 .keyboardShortcut(.return, modifiers: [.command, .shift])
-            Button("Cancel") { commands?.cancel() }
+            Button("Cancel") { workspace?.cancel() }
                 .keyboardShortcut(".", modifiers: .command)
             Divider()
-            Button("Format SQL") { commands?.formatSQL() }
+            Button("Format SQL") { workspace?.formatSQL() }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
             Divider()
-            Button("History…") { commands?.showHistory() }
+            Button("History…") { workspace?.workspace.isHistoryPresented = true }
                 .keyboardShortcut("y", modifiers: .command)
-            Button("Toggle Read-Only") { commands?.toggleReadOnly() }
+            Button("Toggle Read-Only") { workspace?.toggleReadOnly() }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
             Divider()
-            Button("Previous Result") { commands?.cycleResultTab(false) }
+            Button("Previous Result") { workspace?.cycleResultTab(forward: false) }
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
-            Button("Next Result") { commands?.cycleResultTab(true) }
+            Button("Next Result") { workspace?.cycleResultTab(forward: true) }
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
         }
 
         CommandGroup(after: .sidebar) {
-            Button("Toggle Sidebar") { commands?.toggleSidebar() }
+            Button("Toggle Sidebar") { workspace?.isSidebarVisible.toggle() }
                 .keyboardShortcut("s", modifiers: [.command, .option])
-            Button("Toggle Cell Inspector") { commands?.toggleInspector() }
+            Button("Toggle Cell Inspector") { workspace?.workspace.isInspectorVisible.toggle() }
                 .keyboardShortcut("i", modifiers: [.command, .option])
-            Button("Filter Grid") { commands?.toggleFilter() }
+            Button("Filter Grid") { workspace?.workspace.isFilterBarVisible.toggle() }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
             Divider()
-            Button("Refresh") { commands?.refresh() }
+            Button("Refresh") { workspace?.refresh() }
                 .keyboardShortcut("r", modifiers: .command)
-            Button("Quick Open Table…") { commands?.quickOpen() }
+            Button("Quick Open Table…") { workspace?.workspace.isQuickOpenPresented = true }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             Divider()
-            Button("Close Tab") { commands?.closeTab() }
+            Button("Close Tab") { workspace?.closeSelectedTab() }
                 .keyboardShortcut("w", modifiers: .command)
-            Button("Next Tab") { commands?.cycleTab(true) }
+            Button("Next Tab") { workspace?.workspace.cycleTab(forward: true) }
                 .keyboardShortcut("]", modifiers: [.command, .shift])
-            Button("Previous Tab") { commands?.cycleTab(false) }
+            Button("Previous Tab") { workspace?.workspace.cycleTab(forward: false) }
                 .keyboardShortcut("[", modifiers: [.command, .shift])
             // ⌘1–⌘9 select tabs directly.
             ForEach(1 ... 9, id: \.self) { number in
-                Button("Tab \(number)") { commands?.selectTab(number - 1) }
+                Button("Tab \(number)") { workspace?.workspace.selectTab(at: number - 1) }
                     .keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: .command)
             }
         }

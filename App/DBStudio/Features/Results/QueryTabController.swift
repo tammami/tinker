@@ -317,6 +317,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     }
 
     public func editorDidRequestRun(all: Bool) {
+        statusText = all ? "Running every statement…" : "Running…"
         run(all: all)
     }
 

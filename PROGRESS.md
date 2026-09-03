@@ -248,10 +248,11 @@ test could not see, because it exercised the same objects in a different order.
 
 ### Gaps
 
-- **The app icon is not adaptive.** macOS 26's light/dark/tinted/clear appearances need an
-  Icon Composer `.icon` document; `actool` rejects `appearances` under the `mac` idiom, and
-  both single-size layouts warned, which fails `Scripts/ci.sh`. The generator already draws
-  the three appearances; exporting them as an `.icon` is a GUI step (ADR-0027).
+- ~~The app icon is not adaptive.~~ **Done.** `DBStudio.icon` is a hand-authored Icon
+  Composer document — `icon.json` plus one SVG layer — so the system composites the shape,
+  gradient, specular highlight and shadow and derives the dark and tinted appearances. The
+  schema came out of `IconComposerFoundation` (ADR-0027). `Scripts/make-icon.swift` and the
+  fixed-size PNGs are gone; `xcrun actool --compile` on the `.icon` validates it.
 - **Three UI tests fail on `postKey`, and they are the harness, not the app.** Every test
   driven by XCUITest's own synthesis passes, including the Query menu's Run item, the
   toolbar Run button, ⌘⇧I, ⌘Y and ⌘/. The three that fail are exactly the three that post

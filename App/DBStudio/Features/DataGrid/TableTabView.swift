@@ -9,7 +9,49 @@ public struct TableTabView: View {
     @Bindable var workspace: WorkspaceModel
     let tab: WorkspaceTab
 
+    /// Which half of the tab is showing (SPEC §15b.1).
+    enum Mode: String, CaseIterable, Identifiable {
+        case data = "Data"
+        case structure = "Structure"
+        var id: String { rawValue }
+    }
+
+    @State private var mode: Mode = .data
+
     public var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Picker("", selection: $mode) {
+                    ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 180)
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            Divider()
+
+            switch mode {
+            case .structure:
+                StructureView(
+                    controller: controller.structure,
+                    isProduction: controller.isProduction
+                )
+                // The grid's own idea of the table is stale once the structure changed.
+                .onChange(of: controller.structure.statusText) { _, status in
+                    guard status != nil else { return }
+                    Task { await controller.reloadAfterStructureChange() }
+                }
+            case .data:
+                dataContent
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var dataContent: some View {
         VStack(spacing: 0) {
             if workspace.isFilterBarVisible, let model = controller.model {
                 FilterBarView(

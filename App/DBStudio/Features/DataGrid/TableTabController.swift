@@ -43,6 +43,31 @@ public final class TableTabController: DataGridDelegate {
 
     var session: ConnectionSession? { environment.session(for: connectionID) }
 
+    @ObservationIgnored private var structureController: StructureController?
+
+    /// The Structure tab's controller, built the first time the user asks for it so
+    /// opening a table still costs one round of introspection rather than two.
+    public var structure: StructureController {
+        if let structureController { return structureController }
+        let controller = StructureController(
+            table: table, connectionID: connectionID, dialect: dialect, environment: environment
+        )
+        structureController = controller
+        return controller
+    }
+
+    /// True when the connection is marked as production, which the preview sheet uses to
+    /// delay its Execute button.
+    public var isProduction: Bool {
+        environment.connections.first { $0.id == connectionID }?.isProduction ?? false
+    }
+
+    /// Re-reads the grid after the designer changed the table underneath it, so a new
+    /// primary key makes the grid editable without the tab being reopened (SPEC §15b.5).
+    public func reloadAfterStructureChange() async {
+        await start()
+    }
+
     /// Reads the table's shape, restores remembered preferences, and loads the first page.
     public func start() async {
         guard let session else {

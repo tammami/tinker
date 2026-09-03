@@ -260,3 +260,71 @@ test could not see, because it exercised the same objects in a different order.
   not separately proven; the two paths that run a statement were.
 - **Column and rectangular selection still have no affordance.** SPEC §12.4 asks for cell,
   row, column and range; row is now clickable, column is not.
+
+---
+
+## Phase 8 — Table designer (2026-09-03, in progress)
+
+SPEC §16 had the table designer deferred to v0.2. The user asked for it, so the spec moved
+first: §8 gained the four reads it needs, §15b describes the feature, and §16 gained
+Phase 8 (ADR-0028).
+
+### Done
+
+- **`TableDefinition`** is the structure as the user edits it, separate from the `…Info`
+  types introspection returns, because an edit needs a stable identity per column and index.
+  Without one a rename cannot be told from a drop and an add, and the designer would rebuild
+  objects the user only renamed.
+- **`DDLGenerator`** diffs two definitions into ordered statements for both dialects.
+  Dependants come off before the columns they sit on and go back on afterwards. PostgreSQL
+  alters one facet of a column at a time; MySQL restates the whole column. 29 unit tests
+  assert exact statement text.
+- **Four catalog reads**, both engines: check constraints, triggers, partitioning,
+  collations. PostgreSQL takes a check's predicate from `conbin` rather than stripping the
+  wrapper off `pg_get_constraintdef`, and reads trigger timing, events and level from the
+  `tgtype` bit mask. MySQL reports no checks below 8.0.16 rather than pretending its parser
+  kept them.
+- **`DDLExecutor`** runs the statements and reports what survived. PostgreSQL rolls back;
+  MySQL cannot, so the result names the statements that had already committed and the
+  preview sheet warns before running rather than explaining afterwards.
+- **The Structure tab**: Columns, Indexes, Foreign Keys, Checks, Triggers, Partitions and
+  Table panes, read-only until Edit, with a preview sheet as the only route to Execute.
+  After a run the table's introspection is dropped and the pane reloads from the server, so
+  what is shown is what the server has.
+
+### Tests
+
+- `DDLGeneratorTests` (29): create table on both dialects, column add/alter/rename/drop,
+  generated columns, primary key add/change/drop, btree/unique/partial/fulltext indexes and
+  prefix lengths, index rename versus rebuild, composite foreign keys with actions, check
+  constraints, comments, table rename, and the statement ordering.
+- `DDLExecutorTests` (6, against both local servers): every case runs the generated DDL and
+  reads it back through introspection. Setting a primary key makes `rowIdentity` non-nil,
+  which is what makes the grid editable. The failure test asserts PostgreSQL rolled back and
+  that MySQL's result names what had already committed.
+- `testDesignerReadsCheckConstraintsTriggersAndPartitioning` on both engines, against new
+  fixtures with a checked table, a trigger and a range-partitioned table.
+- Verified by hand in the running app: `checked_values` opened, `label` marked NOT NULL,
+  previewed as `ALTER TABLE "public"."checked_values" ALTER COLUMN "label" SET NOT NULL`,
+  executed, and confirmed with `pg_attribute.attnotnull` on the server.
+
+### Notes
+
+- **The editable panes are not built on SwiftUI's `Table`.** They were at first, and the
+  controls inside its cells reached neither the accessibility system nor a click: `entire
+  contents of window` reported zero checkboxes and synthetic clicks did nothing. A pane
+  whose toggles cannot be operated is not an editor, so they lay out their own header and
+  rows.
+- Loading the new fixtures exposed that the PostgreSQL fixture was not idempotent, which
+  `prepare.sh` claims to be. Fixed with `CASCADE`.
+
+### Not done
+
+- **Triggers and partitions are read-only.** Both panes show what the server has; neither
+  can add, alter or drop.
+- **Create Table (§15b.3) is not wired to any menu.** `DDLGenerator.create` exists and is
+  tested, but nothing in the app opens an empty designer.
+- **Structure sync (§15b.4) is not started.**
+- **Column reordering** (MySQL `AFTER`) is not offered.
+- **The collation picker is a text field.** `collations(in:)` is implemented, read and
+  tested, but the Columns pane does not yet present it as a list.

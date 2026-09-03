@@ -126,6 +126,7 @@ public struct SQLEditorView: NSViewRepresentable {
 
 
         context.coordinator.textView = textView
+        context.coordinator.observeDismissRequests()
         context.coordinator.applyHighlighting()
         return scrollView
     }
@@ -172,6 +173,8 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
     var lastErrorPosition: Int?
     /// The autocomplete list. One per editor, reused rather than rebuilt per keystroke.
     let completion = CompletionPopover()
+    /// Closed when the tab runs a statement, which is the end of typing.
+    private var dismissObserver: (any NSObjectProtocol)?
     var hasTakenFocus = false
     private var highlightTask: Task<Void, Never>?
 
@@ -179,6 +182,16 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         _text = text
         self.dialect = dialect
         self.delegate = delegate
+    }
+
+    /// Watches for the tab telling every editor to put its list away.
+    func observeDismissRequests() {
+        guard dismissObserver == nil else { return }
+        dismissObserver = NotificationCenter.default.addObserver(
+            forName: .dbstudioDismissCompletion, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.completion.dismiss() }
+        }
     }
 
     public func textDidChange(_ notification: Notification) {
@@ -376,4 +389,10 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
             )
         }
     }
+}
+
+
+public extension Notification.Name {
+    /// Posted when a query tab runs, so any open suggestion list closes.
+    static let dbstudioDismissCompletion = Notification.Name("DBStudioDismissCompletion")
 }

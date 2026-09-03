@@ -65,6 +65,15 @@ public final class QueryResultTab: Identifiable {
     public var error: QueryErrorBanner?
     public var completion: QueryCompletion?
 
+    /// The panes beside the rows (SPEC §13.2a), read when opened rather than after every
+    /// statement: both cost a round trip and a pane nobody looks at should cost nothing.
+    public var profile: [[String]]?
+    public var profileColumns: [String] = []
+    public var profileNote: String?
+    public var status: [[String]]?
+    public var statusColumns: [String] = []
+    public var statusNote: String?
+
     public init(label: String, statement: String) {
         self.label = label
         self.statement = statement

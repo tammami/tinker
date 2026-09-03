@@ -388,9 +388,38 @@ panes), plus Phase 9 in §16 and ADR-0029/0030.
 - Verified in the app: the pickers show Local PostgreSQL / public, and
   `SELECT * FROM customers` runs unqualified against that session.
 
+### Phase 9 completed (same day)
+
+- **Pages (§12.7).** A table tab holds one page of 1,000 rows with first / previous / next
+  / last, the page number and the rows it covers. The model keeps holding exactly one page,
+  so rows stay numbered from zero within it and the grid, the edits and the selection all
+  keep meaning the same thing on every page. A filter or a sort returns to page one. Only
+  Last runs a `COUNT`, and only when pressed; everywhere else the estimate is shown marked
+  as one (ADR-0029, ADR-0030).
+- **Objects list (§11.4).** Double-clicking a schema lists what it holds — kind, estimated
+  rows, size, engine, collation, comment — searchable and sortable, with the estimate
+  labelled under the list. `TableInfo` gained engine and collation, which MySQL reports and
+  PostgreSQL does not.
+- **Result panes (§13.2a).** Message / Result / Profile / Status, with the SQL that produced
+  the rows, its elapsed time and the record count in the status line under them. Profile and
+  Status are read when their pane is opened rather than after every statement. PostgreSQL has
+  no profile that does not re-run the statement, and re-running a write to time it is not
+  something a client may do on its own, so that pane says so rather than doing it.
+- The suggestion list closes on Escape, on a click, on the caret leaving the word, when the
+  editor loses focus, and when a statement runs.
+
+### Tests
+
+- Five paging tests over the fixture loader: one page at a time, the page's row range, the
+  short last page, moving between pages issuing one request each, and filter and sort
+  returning to page one.
+- Verified in the app: 1,000-row pages over the million-row fixture (rows 1001–2000 on page
+  2), the Objects list of `public` with 17 objects, and the four result panes including
+  PostgreSQL's `pg_stat_database` in Status.
+
 ### Not done
 
-- **Pages (§12.7)** — specified, not built. A table tab still scrolls rather than paging.
-- **Objects list (§11.4)** — specified, not built.
-- **Result panes (§13.2a)** — Message / Result / Profile / Status specified, not built.
 - **The editor's line-number gutter** is still missing, as recorded in Phase 8.
+- **Profile on PostgreSQL** is a message rather than a measurement, by choice.
+- Paging and the Objects list have no integration test of their own; they are covered by
+  unit tests over a fixture loader and by hand against the local servers.

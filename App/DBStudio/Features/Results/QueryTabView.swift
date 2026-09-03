@@ -193,10 +193,137 @@ public struct QueryTabView: View {
         .background(.bar)
     }
 
+    @State private var resultPane: ResultPane = .result
+
+    /// Which pane of a result is showing (SPEC §13.2a).
+    enum ResultPane: String, CaseIterable, Identifiable {
+        case message = "Message"
+        case result = "Result"
+        case profile = "Profile"
+        case status = "Status"
+        var id: String { rawValue }
+    }
+
     @ViewBuilder
     var resultContent: some View {
         if let result = controller.selectedResult {
             VStack(spacing: 0) {
+                HStack {
+                    Spacer()
+                    Picker("", selection: $resultPane) {
+                        ForEach(ResultPane.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 340)
+                    Spacer()
+                }
+                .padding(.vertical, 5)
+                Divider()
+
+                switch resultPane {
+                case .message: messagePane(result)
+                case .result: rowsPane(result)
+                case .profile: tablePane(
+                    columns: result.profileColumns, rows: result.profile, note: result.profileNote
+                )
+                .task(id: result.id) { await controller.loadProfile(for: result) }
+                case .status: tablePane(
+                    columns: result.statusColumns, rows: result.status, note: result.statusNote
+                )
+                .task(id: result.id) { await controller.loadStatus(for: result) }
+                }
+            }
+        } else {
+            ContentUnavailableView("Run a statement to see results", systemImage: "play")
+        }
+    }
+
+    /// The statement and what the server said about it.
+    private func messagePane(_ result: QueryResultTab) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("sql").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Text(result.statement)
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("message").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Text(result.error?.message ?? result.message ?? "OK")
+                        .font(.callout)
+                        .foregroundStyle(result.error == nil ? Color.primary : Color.red)
+                        .textSelection(.enabled)
+                }
+                if let completion = result.completion {
+                    Text((completion.serverTag ?? "") + " • " + Self.milliseconds(completion.durationTotal))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+        }
+    }
+
+    /// A pane that is just a table of strings: Profile and Status both are.
+    @ViewBuilder
+    private func tablePane(
+        columns: [String], rows: [[String]]?, note: String?
+    ) -> some View {
+        if let note {
+            ContentUnavailableView {
+                Text("Not available")
+            } description: {
+                Text(note)
+            }
+        } else if let rows, !rows.isEmpty {
+            ScrollView([.vertical, .horizontal]) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 0) {
+                        ForEach(Array(columns.enumerated()), id: \.offset) { _, name in
+                            Text(name)
+                                .font(.caption.weight(.semibold))
+                                .frame(width: 200, alignment: .leading)
+                                .padding(.horizontal, 6)
+                        }
+                    }
+                    .padding(.vertical, 5)
+                    Divider()
+                    ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                        HStack(spacing: 0) {
+                            ForEach(Array(row.enumerated()), id: \.offset) { _, value in
+                                Text(value)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .frame(width: 200, alignment: .leading)
+                                    .padding(.horizontal, 6)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                        .background(
+                            index.isMultiple(of: 2)
+                                ? Color.clear
+                                : Color(nsColor: .alternatingContentBackgroundColors[1])
+                        )
+                    }
+                }
+            }
+        } else {
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    static func milliseconds(_ duration: Duration) -> String {
+        let ms = Double(duration.components.attoseconds) / 1e15
+            + Double(duration.components.seconds) * 1000
+        return String(format: "%.3f s", ms / 1000)
+    }
+
+    @ViewBuilder
+    private func rowsPane(_ result: QueryResultTab) -> some View {
+        VStack(spacing: 0) {
                 if let grid = result.grid {
                     DataGridView(
                         model: grid,
@@ -215,20 +342,27 @@ public struct QueryTabView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 Divider()
-                HStack {
-                    Text(result.message ?? "")
-                        .font(.caption)
+                HStack(spacing: 10) {
+                    // What produced the rows on screen, so it is never in doubt.
+                    Text(result.statement)
+                        .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                     Spacer()
+                    if let completion = result.completion {
+                        Text(Self.milliseconds(completion.durationTotal))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    if let grid = result.grid {
+                        Text("\(grid.displayRowCount) record\(grid.displayRowCount == 1 ? "" : "s")")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .padding(.horizontal, 10)
                 .frame(height: 22)
                 .background(.bar)
-            }
-        } else {
-            Text("Run a statement to see results")
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

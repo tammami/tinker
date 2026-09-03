@@ -88,6 +88,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
 
     /// Runs the statement under the cursor, the selection, or every statement.
     public func run(all: Bool, selectedRange: Range<Int>? = nil) {
+        // Running is the end of typing, so the suggestion list goes with it.
+        NotificationCenter.default.post(name: .dbstudioDismissCompletion, object: nil)
         guard !isRunning else { return }
         let statements: [SQLStatement]
         if let selectedRange, !selectedRange.isEmpty {
@@ -247,6 +249,71 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         case .postgresql: "SET search_path TO \(quoted)"
         }
         _ = try await connection.executeCollecting(sql)
+    }
+
+    // MARK: - Profile and Status panes (SPEC §13.2a)
+
+    /// Reads the per-stage timings for a result, if the engine has any to give.
+    public func loadProfile(for result: QueryResultTab) async {
+        guard result.profile == nil, result.profileNote == nil else { return }
+        guard let session = environment.session(for: connectionID) else { return }
+        switch dialect {
+        case .mysql:
+            do {
+                let (lease, connection) = try await session.lease()
+                defer { Task { await session.release(lease) } }
+                // Profiling is off by default and is per session, so it has to be asked
+                // for; the numbers then describe the statements run after this point.
+                _ = try? await connection.executeCollecting("SET profiling = 1")
+                let profiles = try await connection.executeCollecting(
+                    "SHOW PROFILE CPU, BLOCK IO"
+                )
+                guard !profiles.rows.isEmpty else {
+                    result.profileNote = "No profile yet. MySQL records one for the "
+                        + "statements run after profiling is turned on, so run this again."
+                    return
+                }
+                result.profileColumns = profiles.columns.map(\.name)
+                result.profile = profiles.rows.map { row in row.map { $0.text ?? "" } }
+            } catch {
+                result.profileNote = (error as? DBError)?.errorDescription
+                    ?? String(describing: error)
+            }
+        case .postgresql:
+            // Timing a statement here means running it again, and running a write again to
+            // measure it is not something a client may do on its own.
+            result.profileNote = "PostgreSQL has no profile that does not re-run the "
+                + "statement. Use EXPLAIN (ANALYZE) on a SELECT when you want its timings."
+        }
+    }
+
+    /// Reads the session counters for a result.
+    public func loadStatus(for result: QueryResultTab) async {
+        guard result.status == nil, result.statusNote == nil else { return }
+        guard let session = environment.session(for: connectionID) else { return }
+        let sql = switch dialect {
+        case .mysql: "SHOW SESSION STATUS"
+        case .postgresql: """
+            SELECT * FROM pg_stat_database WHERE datname = current_database()
+            """
+        }
+        do {
+            let (lease, connection) = try await session.lease()
+            defer { Task { await session.release(lease) } }
+            let read = try await connection.executeCollecting(sql)
+            result.statusColumns = read.columns.map(\.name)
+            if dialect == .postgresql {
+                // One wide row reads better turned on its side.
+                result.statusColumns = ["Name", "Value"]
+                result.status = zip(read.columns, read.rows.first ?? []).map { column, value in
+                    [column.name, value.text ?? ""]
+                }
+            } else {
+                result.status = read.rows.map { row in row.map { $0.text ?? "" } }
+            }
+        } catch {
+            result.statusNote = (error as? DBError)?.errorDescription ?? String(describing: error)
+        }
     }
 
     // MARK: - The tab's session (SPEC §13.1a)

@@ -600,11 +600,16 @@ Each executed statement produces a result with four panes, chosen by a segmented
 
 - **Message** — the statement and what the server said, with its elapsed time.
 - **Result N** — the rows. One pane per result set the statement produced.
-- **Profile** — per-stage timings, where the engine offers them: MySQL's `SHOW PROFILE`
-  when profiling is available, PostgreSQL's `EXPLAIN (ANALYZE, FORMAT JSON)` stages.
-  Where the engine offers nothing, the pane says so instead of showing an empty table.
-- **Status** — the session counters the statement moved: MySQL's `SHOW SESSION STATUS`
-  differenced across the run, PostgreSQL's `pg_stat_database` deltas.
+- **Profile** — per-stage timings, where the engine offers them. MySQL's `SHOW PROFILE`,
+  which needs `profiling` on for the session. PostgreSQL has no equivalent that does not
+  re-run the statement, and re-running a write to time it is not something a client may do
+  behind the user's back, so the pane says so and offers `EXPLAIN (ANALYZE)` as an explicit
+  action for a `SELECT`.
+- **Status** — the session counters: MySQL's `SHOW SESSION STATUS`, PostgreSQL's row from
+  `pg_stat_database`.
+
+Profile and Status are read when their pane is opened, not after every statement. Both cost
+a round trip, and a pane nobody looks at should cost nothing.
 
 The status line under the panes carries the SQL that ran, the elapsed time and the row
 count, so what produced the rows on screen is always visible.

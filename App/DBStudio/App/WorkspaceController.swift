@@ -138,14 +138,18 @@ public final class WorkspaceController {
 
     public func closeSelectedTab() {
         guard let id = workspace.selectedTabID else { return }
-        if let controller = queryControllers.removeValue(forKey: id) {
-            Task { await controller.releaseHeldConnection() }
-        }
-        tableControllers.removeValue(forKey: id)
-        objectsControllers.removeValue(forKey: id)
-        serverControllers.removeValue(forKey: id)
-        sourceControllers.removeValue(forKey: id)
+        closeTab(id)
+    }
+
+    /// Closes a tab and releases everything it owned: its grid, its held connection.
+    public func closeTab(_ id: UUID) {
         workspace.closeTab(id)
+        pruneControllers()
+    }
+
+    public func closeOtherTabs(_ id: UUID) {
+        workspace.closeOtherTabs(id)
+        pruneControllers()
     }
 
     /// Drops the controllers of tabs that are no longer open, so a closed tab's grid is
@@ -159,6 +163,7 @@ public final class WorkspaceController {
         }
         tableControllers = tableControllers.filter { open.contains($0.key) }
         objectsControllers = objectsControllers.filter { open.contains($0.key) }
+        serverControllers.filter { !open.contains($0.key) }.values.forEach { $0.stopPolling() }
         serverControllers = serverControllers.filter { open.contains($0.key) }
         sourceControllers = sourceControllers.filter { open.contains($0.key) }
     }

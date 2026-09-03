@@ -7,6 +7,9 @@ public struct TabBarView: View {
     @Bindable var workspace: WorkspaceModel
     /// Whether a tab holds edits or an open transaction, answered by whoever owns them.
     let hasUnsavedWork: (WorkspaceTab) -> Bool
+    /// Closing goes through the owner of the tab's controllers, so a closed grid is freed.
+    let onClose: (UUID) -> Void
+    let onCloseOthers: (UUID) -> Void
     let onNewTab: () -> Void
 
     public var body: some View {
@@ -20,8 +23,8 @@ public struct TabBarView: View {
                             color: color(for: tab),
                             hasUnsavedWork: hasUnsavedWork(tab),
                             onSelect: { workspace.selectedTabID = tab.id },
-                            onClose: { workspace.closeTab(tab.id) },
-                            onCloseOthers: { workspace.closeOtherTabs(tab.id) }
+                            onClose: { onClose(tab.id) },
+                            onCloseOthers: { onCloseOthers(tab.id) }
                         )
                         .draggable(tab.id.uuidString) {
                             Label(tab.title, systemImage: tab.icon).padding(DesignTokens.Spacing.xs)

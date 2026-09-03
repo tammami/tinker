@@ -45,7 +45,12 @@ public struct WorkspaceView: View {
             )
         } detail: {
             VStack(spacing: 0) {
-                TabBarView(workspace: workspace, hasUnsavedWork: hasUnsavedWork) {
+                TabBarView(
+                    workspace: workspace,
+                    hasUnsavedWork: hasUnsavedWork,
+                    onClose: { controller.closeTab($0) },
+                    onCloseOthers: { controller.closeOtherTabs($0) }
+                ) {
                     if let id = workspace.activeConnectionID { newQuery(id, "") }
                 }
                 Divider()

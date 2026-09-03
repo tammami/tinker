@@ -201,6 +201,72 @@ final class GridModelTests: XCTestCase {
         return (model, loader)
     }
 
+    // MARK: - Pages (SPEC §12.7)
+
+    func testAPagedGridShowsOnePageAtATime() async {
+        let (model, _) = makeModel(rows: 2_500)
+        model.isPaged = true
+        model.estimatedTotal = 2_500
+        await model.load(page: 0)
+
+        XCTAssertEqual(model.displayRowCount, 1_000, "one page, not the whole table")
+        XCTAssertEqual(model.pageRange, 1 ... 1_000)
+        XCTAssertTrue(model.hasNextPage)
+        XCTAssertFalse(model.hasPreviousPage)
+        XCTAssertEqual(model.value(row: 0, column: 0), .int(0))
+    }
+
+    /// The rows are numbered from zero within the page, so the grid, the edits and the
+    /// selection all keep meaning the same thing on every page.
+    func testMovingToTheNextPageRereadsFromTheServer() async {
+        let (model, loader) = makeModel(rows: 2_500)
+        model.isPaged = true
+        await model.load(page: 0)
+
+        await model.goToPage(1)
+        XCTAssertEqual(model.pageOffset, 1)
+        XCTAssertEqual(model.displayRowCount, 1_000)
+        XCTAssertEqual(model.pageRange, 1_001 ... 2_000)
+        XCTAssertEqual(model.value(row: 0, column: 0), .int(1_000), "the page's first row")
+
+        let pages = await loader.requestLog().map(\.page)
+        XCTAssertEqual(pages, [0, 1], "one request per page, and only for the page shown")
+    }
+
+    func testTheLastPageIsShortAndHasNoNext() async {
+        let (model, _) = makeModel(rows: 2_500)
+        model.isPaged = true
+        await model.goToPage(2)
+        XCTAssertEqual(model.displayRowCount, 500)
+        XCTAssertEqual(model.pageRange, 2_001 ... 2_500)
+        XCTAssertFalse(model.hasNextPage)
+        XCTAssertTrue(model.hasPreviousPage)
+    }
+
+    /// Both change what page two would mean, so both go back to page one.
+    func testFilterAndSortReturnToTheFirstPage() async {
+        let (model, _) = makeModel(rows: 2_500)
+        model.isPaged = true
+        await model.goToPage(2)
+        XCTAssertEqual(model.pageOffset, 2)
+
+        await model.setFilter([FilterRule(column: "name", op: .contains, values: [.string("row")])])
+        XCTAssertEqual(model.pageOffset, 0)
+
+        await model.goToPage(1)
+        await model.setSort([PagePlanner.SortTerm(column: "name", ascending: true)])
+        XCTAssertEqual(model.pageOffset, 0)
+    }
+
+    /// A paged grid never reports the whole table's estimate as its row count.
+    func testAPagedGridIgnoresTheTableEstimate() async {
+        let (model, _) = makeModel(rows: 2_500)
+        model.isPaged = true
+        model.estimatedTotal = 1_000_000
+        await model.load(page: 0)
+        XCTAssertEqual(model.displayRowCount, 1_000)
+    }
+
     /// The planner estimate describes the whole table. Once a filter is on it is not the
     /// number of matching rows, and a grid that keeps using it draws rows that hold
     /// nothing — which is what a filtered table looked like when its page failed to load.

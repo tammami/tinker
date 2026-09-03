@@ -115,6 +115,44 @@ public struct TableTabView: View {
         .task(id: tab.id) { await controller.start() }
     }
 
+    /// First / previous / next / last and the page number (SPEC §12.7).
+    @ViewBuilder
+    var pager: some View {
+        if controller.model?.isPaged == true {
+            HStack(spacing: 2) {
+                Button { Task { await controller.goToFirstPage() } } label: {
+                    Image(systemName: "chevron.left.to.line")
+                }
+                .disabled(!controller.canGoBack)
+                .help("First page")
+
+                Button { Task { await controller.goToPreviousPage() } } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(!controller.canGoBack)
+                .help("Previous page")
+
+                Text("\(controller.currentPage)")
+                    .font(.caption.monospacedDigit())
+                    .frame(minWidth: 22)
+
+                Button { Task { await controller.goToNextPage() } } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(!controller.canGoForward)
+                .help("Next page")
+
+                Button { Task { await controller.goToLastPage() } } label: {
+                    Image(systemName: "chevron.right.to.line")
+                }
+                .disabled(!controller.canGoForward)
+                .help("Last page — counts the matching rows to find it")
+            }
+            .buttonStyle(.borderless)
+            Divider().frame(height: 12)
+        }
+    }
+
     func focusedColumn(_ model: GridModel) -> ColumnMeta? {
         model.columns.indices.contains(controller.selection.focusColumn)
             ? model.columns[controller.selection.focusColumn]
@@ -123,6 +161,7 @@ public struct TableTabView: View {
 
     var statusBar: some View {
         HStack(spacing: 10) {
+            pager
             Text(controller.statusText)
                 .font(.caption)
                 .foregroundStyle(.secondary)

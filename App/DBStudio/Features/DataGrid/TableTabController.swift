@@ -119,6 +119,8 @@ public final class TableTabController: DataGridDelegate {
                 identityKind: identityKind
             )
             model.estimatedTotal = estimate ?? nil
+            // A table tab pages; a result set streams (SPEC §12.7).
+            model.isPaged = true
             model.sort = preferences.sort.map {
                 PagePlanner.SortTerm(column: $0.column, ascending: $0.ascending)
             }
@@ -139,9 +141,18 @@ public final class TableTabController: DataGridDelegate {
     public func updateStatus() {
         guard let model else { return }
         var parts: [String] = []
-        if let total = model.totalCount {
+        if let range = model.pageRange {
+            // The rows this page covers, and the total only where it is actually known.
+            parts.append("Rows \(range.lowerBound)–\(range.upperBound)")
+            if let total = exactTotal {
+                parts.append("of \(total)")
+            } else if model.filter.isEmpty, let estimate = model.estimatedTotal {
+                // An estimate is labelled as one; it is not a count (ADR-0030).
+                parts.append("of ~\(estimate)")
+            }
+        } else if let total = model.totalCount {
             parts.append("\(total) row\(total == 1 ? "" : "s")")
-        } else if let estimate = model.estimatedTotal {
+        } else if model.filter.isEmpty, let estimate = model.estimatedTotal {
             parts.append("~\(estimate) rows")
         } else {
             parts.append("\(model.rowCount) loaded")
@@ -152,6 +163,46 @@ public final class TableTabController: DataGridDelegate {
         }
         parts.append(model.strategy(forPage: max(0, selection.focusRow / 1_000)).explanation)
         statusText = parts.joined(separator: " • ")
+    }
+
+    // MARK: - Pages (SPEC §12.7)
+
+    /// The matching row count, once something has asked for it. `COUNT` is not run to
+    /// decorate a status bar; only Last needs it.
+    public private(set) var exactTotal: Int64?
+
+    public var currentPage: Int { (model?.pageOffset ?? 0) + 1 }
+    public var canGoBack: Bool { model?.hasPreviousPage ?? false }
+    public var canGoForward: Bool { model?.hasNextPage ?? false }
+
+    public func goToPage(_ page: Int) async {
+        guard let model else { return }
+        await model.goToPage(page)
+        surfaceLoadError()
+        bumpRevision()
+        updateStatus()
+    }
+
+    public func goToFirstPage() async { await goToPage(0) }
+
+    public func goToPreviousPage() async {
+        await goToPage(max(0, (model?.pageOffset ?? 0) - 1))
+    }
+
+    public func goToNextPage() async {
+        await goToPage((model?.pageOffset ?? 0) + 1)
+    }
+
+    /// Jumping to the end needs the total, which is the one place a `COUNT` is worth it.
+    public func goToLastPage() async {
+        guard let model else { return }
+        isLoading = true
+        let total = await model.exactRowCount()
+        isLoading = false
+        exactTotal = total
+        guard let total, total > 0 else { return }
+        let size = Int64(model.pageSize)
+        await goToPage(Int((total - 1) / size))
     }
 
     // MARK: - Commands

@@ -73,6 +73,39 @@ public final class GridModel {
     public var estimatedTotal: Int64?
     public private(set) var lastError: (any Error)?
 
+    // MARK: - Pages (SPEC §12.7)
+
+    /// The server page this grid is showing. A table tab shows one page at a time rather
+    /// than scrolling the whole table, so the model holds exactly that page and its rows
+    /// are numbered from zero within it.
+    public private(set) var pageOffset = 0
+    /// True while the grid pages. Query results stream instead, and set this false.
+    public var isPaged = false
+    /// The page's own size, which is the ceiling on what one page shows.
+    public var pageSize: Int { buffer.pageSize }
+    /// True when the page came back full, so there is at least one more.
+    public var hasNextPage: Bool { isPaged && !isExhausted }
+    public var hasPreviousPage: Bool { isPaged && pageOffset > 0 }
+    /// The one-based row numbers this page covers, for the status bar.
+    public var pageRange: ClosedRange<Int>? {
+        guard isPaged, rowCount > 0 else { return nil }
+        let first = pageOffset * pageSize + 1
+        return first ... (first + rowCount - 1)
+    }
+
+    /// Moves to another page, re-reading from the server (SPEC §12.7).
+    public func goToPage(_ page: Int) async {
+        guard isPaged else { return }
+        pageOffset = max(0, page)
+        await reload()
+    }
+
+    /// The number of rows the filter matches, which is what "last page" needs.
+    /// Runs a `COUNT`, so it is only ever called when the user asks to go there.
+    public func exactRowCount() async -> Int64? {
+        try? await loader.exactCount(filter: filter)
+    }
+
     public let source: GridSource
     public let dialect: SQLDialect
     /// Columns that identify a row. Empty means the grid is read-only.
@@ -116,7 +149,8 @@ public final class GridModel {
     public var displayRowCount: Int {
         let known = if let total = totalCount {
             Int(total)
-        } else if filter.isEmpty, let estimate = estimatedTotal, estimate > Int64(rowCount) {
+        } else if !isPaged, filter.isEmpty, let estimate = estimatedTotal,
+                  estimate > Int64(rowCount) {
             // The estimate counts the whole table. Under a filter it is not the number of
             // matching rows, and using it draws thousands of rows that hold nothing —
             // which is what a filtered grid looked like when its first page failed to load.
@@ -254,7 +288,9 @@ public final class GridModel {
         var anchor: DBValue?
         if case let .keyset(column) = strategy { anchor = keysetAnchor(forPage: page, column: column) }
         let request = PageRequest(
-            page: page, strategy: strategy, keysetAnchor: anchor,
+            // In paged mode the model holds one page, so its own page 0 is whichever
+            // server page the pager is on.
+            page: pageOffset + page, strategy: strategy, keysetAnchor: anchor,
             sort: effectiveSort, filter: filter
         )
         do {
@@ -315,11 +351,13 @@ public final class GridModel {
     /// Applies a new sort and reloads from the first page, as server-side sorting requires.
     public func setSort(_ terms: [PagePlanner.SortTerm]) async {
         sort = terms
+        pageOffset = 0
         await reload()
     }
 
     public func setFilter(_ rules: [FilterRule]) async {
         filter = rules
+        pageOffset = 0
         await reload()
     }
 

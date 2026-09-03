@@ -46,7 +46,7 @@ All seven phases of SPEC §16 are complete. See the per-phase entries below, and
 - **dbcli**: streams TSV, `--introspect` dumps schema JSON, `--cancel-after`, `--ping`, verbose logging, server errors printed with SQLSTATE/detail/hint/position.
 - **Fixtures**: `all_types` (every mapped type, NULL row, extremes row, 1 MB string, JSON nested 50 deep, all 256 byte values, CJK/emoji/RTL), `dst_samples`, `composite_pk`, `uuid_pk`, `no_pk`, `unique_not_null`, `customers`/`orders` with FK actions and indexes, view, materialized view, function, procedure, enum type, and `big_table` with 1,000,000 rows.
 
-### Tests (147 total, 1 skipped)
+### Tests
 - `DBCoreTests` (23): kind/case correspondence for every `DBValueKind`, decimal text preservation, special doubles, coding round-trip, date/time/offset rendering, `ServerVersion` parsing and comparison, config coding carries no secret, `ResolvedConnectionConfig.description` omits the password, error descriptions.
 - `DBSQLTests` (66): splitter against strings, comments, nested comments, dollar quoting, `DELIMITER`, a 2,000-statement dump, unterminated input, UTF-16 ranges, statement-at-cursor; quoting and display rules; literals and `renderForDisplay`; DML generation for simple, composite and UUID keys including the "two rows, three cells → two UPDATEs" criterion; filter compilation with LIKE escaping; paging strategy selection; formatter idempotence; tokenizer ranges.
 - `DBPostgresTests` unit (31): binary decoding of every mapped type from hand-built payloads, `numeric` digit reassembly, epoch and BC date arithmetic, timestamptz in a session zone, arrays with NULLs, domains, enums, unknown types; parameter text and array-literal quoting; OID→kind mapping for every built-in type.
@@ -73,7 +73,7 @@ PostgreSQL 16.15 (Homebrew, localhost:5432), reported in the CI coverage summary
 - **`DBStore` (§15)**: SQLite over the C API in WAL mode with a busy timeout, numbered migrations tracked in `PRAGMA user_version`, and typed access to connections, groups, query history (capped at 10,000 and trimmed on write), grid preferences and settings. `KeychainSecretStore` stores passwords, SSH passwords and passphrases under `com.dbstudio.connection`, and deletes all three when a connection is removed.
 - **`dbcli`**: `--ssh user@host[:port]`, `--ssh-key`, `--ssh-password`.
 
-### Tests (85 added; 232 total, 1 skipped)
+### Tests
 - `ConnectionSessionTests` (19): state transitions and the state stream, degraded state after a failed connect, one connection per lease, reuse after release, the pool stopping at eight and waiting rather than failing, rollback on release, replacement of a dead pooled connection, the dropped-with-open-transaction message, password resolution, the tunnel redirecting the driver to loopback while the certificate keeps naming the real host, one tunnel shared by every connection, the missing-provider error, the session-only read-only unlock, cache hits and invalidation by key and by table, and `testConnection` reporting stages in order.
 - `DBStoreTests` (16) and `SQLiteDatabaseTests` (4): migrations applied once and recorded, every table from §15 present, WAL on, connections round-tripping across a reopen with SSH and jump-host config intact, edit-in-place keeping sidebar order, reordering, cascading delete of preferences and history, groups, history recording/search/cap/clear, grid preferences per table per connection, settings with defaults and forward-compatible decoding, value round-trips for every SQLite column type, bound parameters against an injection attempt, transaction rollback, and errors carrying the statement.
 - **`testNoSecretReachesTheStoreFile`**: writes a connection, a history row and a setting, then greps every file the store touched — database, WAL and shared memory — for the secret. Required by SPEC §11.3.
@@ -116,7 +116,7 @@ plumbing and none of the three is testable in isolation.
 - Query history recorded for every statement, capped at 10,000.
 - Export to CSV, JSON, JSON Lines and SQL INSERT, over the selection, the loaded rows, or the whole table streamed from the server.
 
-### Tests (86 added; 318 total, 1 skipped)
+### Tests
 - `RowBufferTests` (7): absolute indexing, missing-page computation, streamed appends across batch boundaries, in-place replacement, and eviction that respects the cap while keeping the viewport.
 - `EditBufferTests` (8): overlay reads, an edit that returns to its loaded value clearing itself, deletion superseding edits, inserts, discard, and the statement order updates → deletes → inserts.
 - `GridCommitterTests` (6): the happy path in one transaction, rollback when an `UPDATE` affects zero rows or two, a server error keeping the server's words, `INSERT … RETURNING` counting as one row, and an empty commit opening no transaction.
@@ -142,7 +142,7 @@ plumbing and none of the three is testable in isolation.
 - `caching_sha2_password` — MySQL 8 and later's default — works with TLS off through the RSA public-key exchange, so no escalation to `libmysqlclient` was needed.
 - **Zero UI changes.** MySQL was added to the driver registry and nothing else: no view, controller or grid code was touched. `GridIntegrationTests` proves it by running the same ten checks against both engines.
 
-### Tests (30 added; 348 total, 1 skipped)
+### Tests
 - `MySQLIntegrationTests` (24): connect and version, TCP-stage failure, wrong password, TLS `require` and `disable`, every mapped type round-tripping including `BIGINT UNSIGNED` at its maximum and `DECIMAL(65,30)`, `DATETIME` and `TIMESTAMP` both arriving without a zone, NULLs, extremes and Unicode, a 1 MB string, JSON nested 50 deep, zero dates under a permissive `sql_mode`, event ordering and batching, `affectedRows` and `lastInsertID`, parameters bound against an injection attempt, server errors with code and SQLSTATE, reuse after an error, `KILL QUERY` stopping a statement in well under a second, transactions on InnoDB, introspection of databases/tables/views/columns/indexes/foreign keys/routines/DDL/row estimates, and a full 1,000,000-row stream.
 - `MySQLValueDecoderTests` (6): bit rendering, enum and set label parsing including a doubled quote, declared-type to kind for every family, the `tinyint(1)` toggle, IP-address detection for SNI, and command-tag shape.
 - `GridIntegrationTests` now runs on both engines: the first page of MySQL's million-row fixture arrives in **67 ms**.
@@ -192,5 +192,9 @@ plumbing and none of the three is testable in isolation.
 | 6 MySQL | complete | MySQL 9.4.0 |
 | 7 Release hardening | complete except signing | unsigned DMG, run from the mounted image |
 
-348 tests, 1 skipped with a reason. Every gap above is a thing that did not run, not a thing
-that was claimed.
+**309 tests run, 1 skipped with a stated reason, 0 failures.** Largest suites: PostgreSQL
+integration 27, MySQL integration 24, PostgreSQL decoder 24, `ConnectionSession` 19,
+`GridModel` 17, `DBStore` 16, DML generation 12, known hosts 11, grid integration 10 (run
+against both engines).
+
+Every gap listed above is a thing that did not run, not a thing that was claimed.

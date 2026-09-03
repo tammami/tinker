@@ -265,7 +265,7 @@ public struct WorkspaceView: View {
                 } label: {
                     Label("Run", systemImage: Icon.run)
                 }
-                .help("Run the highlighted block, or the statement under the cursor (⌘↩)")
+                .help("Run the highlighted block, or the statement under the cursor (⌘R)")
                 .disabled(queryController == nil || queryController?.isRunning == true)
 
                 Button {
@@ -273,7 +273,7 @@ public struct WorkspaceView: View {
                 } label: {
                     Label("Run All", systemImage: Icon.runAll)
                 }
-                .help("Run every statement on the page (⌘⇧↩)")
+                .help("Run every statement on the page (⌘⌥R)")
                 .disabled(queryController == nil || queryController?.isRunning == true)
 
                 Button {
@@ -307,7 +307,7 @@ public struct WorkspaceView: View {
                 } label: {
                     Label("Rollback", systemImage: Icon.rollback)
                 }
-                .help("Roll back (⌘⇧R)")
+                .help("Roll back (⌘⇧⌫)")
                 .disabled(!hasPendingWork)
             }
         }
@@ -318,7 +318,7 @@ public struct WorkspaceView: View {
             } label: {
                 Label("Refresh", systemImage: Icon.refresh)
             }
-            .help("Refresh (⌘R)")
+            .help("Refresh (F5)")
 
             Button {
                 workspace.isCommandPalettePresented = true
@@ -460,7 +460,7 @@ public struct WorkspaceView: View {
                     shortcutHint("⌘T", "New query")
                     shortcutHint("⌘K", "Commands")
                     shortcutHint("⌘⇧O", "Find table")
-                    shortcutHint("⌘↩", "Run")
+                    shortcutHint("⌘R", "Run")
                 }
             }
             if let error = environment.startupError {

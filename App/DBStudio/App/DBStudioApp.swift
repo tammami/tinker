@@ -44,6 +44,9 @@ struct DBStudioApp: App {
 struct DBStudioCommands: Commands {
     let updater: Updater
 
+    /// F5, the refresh key every database tool shares; the scalar is AppKit's NSF5FunctionKey.
+    static let f5 = KeyEquivalent(Character(UnicodeScalar(0xF708) ?? UnicodeScalar(UInt8(32))))
+
     /// The frontmost workspace. Read at the moment the menu item fires, so it is never a
     /// stale capture and never depends on where first responder happens to be.
     private var workspace: WorkspaceController? { CommandCenter.shared.current }
@@ -78,20 +81,20 @@ struct DBStudioCommands: Commands {
             Divider()
             Button("Import from CSV…") { workspace?.importCSV() }
             Button("Export Result…") { workspace?.workspace.isExportPresented = true }
-                .keyboardShortcut("e", modifiers: .command)
+                .keyboardShortcut("e", modifiers: [.command, .option])
         }
 
         CommandGroup(replacing: .saveItem) {
             Button("Commit") { workspace?.commit() }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
             Button("Rollback") { workspace?.rollback() }
-                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .keyboardShortcut(.delete, modifiers: [.command, .shift])
         }
 
         CommandGroup(after: .pasteboard) {
             Divider()
             Button("Copy as INSERT") { workspace?.copySelection(.sqlInsert) }
-                .keyboardShortcut("c", modifiers: [.command, .option])
+                .keyboardShortcut("c", modifiers: [.command, .control])
             Menu("Copy As") {
                 Button("CSV") { workspace?.copySelection(.csv) }
                 Button("JSON") { workspace?.copySelection(.json) }
@@ -104,7 +107,7 @@ struct DBStudioCommands: Commands {
             Button("Set NULL") { workspace?.setNull() }
                 .keyboardShortcut(.delete, modifiers: [.command, .option])
             Button("Add Row") { workspace?.addRow() }
-                .keyboardShortcut("+", modifiers: .command)
+                .keyboardShortcut("a", modifiers: [.command, .option])
             Button("Delete Selected Rows") { workspace?.deleteRows() }
                 .keyboardShortcut(.delete, modifiers: .command)
         }
@@ -118,12 +121,14 @@ struct DBStudioCommands: Commands {
         }
 
         CommandMenu("Query") {
+            // ⌘R, not ⌘↩: the system claims ⌘↩ for the window, and Return with modifiers
+            // is what every other text view expects to keep.
             Button("Run Current or Selection") { workspace?.run(all: false) }
-                .keyboardShortcut(.return, modifiers: .command)
+                .keyboardShortcut("r", modifiers: .command)
             Button("Run Selected") { workspace?.runSelection() }
-                .keyboardShortcut(.return, modifiers: [.command, .option])
+                .keyboardShortcut("r", modifiers: [.command, .shift])
             Button("Run All") { workspace?.run(all: true) }
-                .keyboardShortcut(.return, modifiers: [.command, .shift])
+                .keyboardShortcut("r", modifiers: [.command, .option])
             Button("Cancel") { workspace?.cancel() }
                 .keyboardShortcut(".", modifiers: .command)
             Divider()
@@ -169,7 +174,7 @@ struct DBStudioCommands: Commands {
             }
             .keyboardShortcut("u", modifiers: [.command, .shift])
             Button("Refresh") { workspace?.refresh() }
-                .keyboardShortcut("r", modifiers: .command)
+                .keyboardShortcut(Self.f5, modifiers: [])
         }
 
         CommandGroup(after: .sidebar) {

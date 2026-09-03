@@ -43,29 +43,26 @@ public final class SQLTextView: NSTextView {
         lineRect.fill()
     }
 
-    /// `⌘↩` runs, `⌘⇧↩` runs everything, `⌘/` toggles line comments and `⌘D` duplicates
+    /// `⌘R` runs, `⌘⌥R` runs everything, `⌘/` toggles line comments and `⌘D` duplicates
     /// the line (SPEC §10.2).
     ///
     /// These are answered here rather than left to the Query menu because the window's
     /// view tree gets key equivalents *before* the main menu does, and `NSTextView`
-    /// swallows `⌘↩` on its way past. Handling it here is what makes the shortcut work at
+    /// may swallow a key on its way past. Handling it here is what makes the shortcut work at
     /// all while the editor has focus.
     public override func performKeyEquivalent(with event: NSEvent) -> Bool {
         Self.keyLog.info("performKeyEquivalent keyCode=\(event.keyCode) flags=\(event.modifierFlags.rawValue)")
         guard event.modifierFlags.contains(.command) else {
             return super.performKeyEquivalent(with: event)
         }
-        // 36 is Return, 76 the keypad's Enter. ⌘↩ runs the selection or the current
-        // statement, ⌘⇧↩ everything, ⌘⌥↩ only the selection.
-        if event.keyCode == 36 || event.keyCode == 76 {
+        // ⌘R runs the selection or the current statement, ⌘⇧R only the selection, ⌘⌥R
+        // everything. Answered here because the editor sees key equivalents before the
+        // menu does; the menu carries the same three for when focus is elsewhere.
+        if event.charactersIgnoringModifiers?.lowercased() == "r" {
             let scope: SQLRunScope =
-                event.modifierFlags.contains(.shift)
-                ? .all
-                : event.modifierFlags.contains(.option) ? .selection : .current
+                event.modifierFlags.contains(.option) ? .all : event.modifierFlags.contains(.shift) ? .selection : .current
             let selected = selectedRange()
-            let selection: Range<Int>? =
-                selected.length > 0
-                ? selected.location ..< NSMaxRange(selected) : nil
+            let selection: Range<Int>? = selected.length > 0 ? selected.location..<NSMaxRange(selected) : nil
             MainActor.assumeIsolated {
                 self.coordinator?.delegate?.editorDidRequestRun(scope, selection: selection)
             }
@@ -121,8 +118,9 @@ public final class SQLTextView: NSTextView {
             default: break
             }
         }
-        // ⌃Space asks for the list without waiting for another character (SPEC §13.1).
-        if event.keyCode == 49, event.modifierFlags.contains(.control) {
+        // ⌥Esc asks for the list without waiting for another character, as Xcode does;
+        // ⌃Space belongs to macOS, which uses it to switch input sources.
+        if event.keyCode == 53, event.modifierFlags.contains(.option) {
             coordinator?.offerCompletions()
             return
         }

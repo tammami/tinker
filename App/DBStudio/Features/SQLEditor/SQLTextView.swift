@@ -10,7 +10,7 @@ public protocol SQLEditorDelegate: AnyObject {
     /// The caret, and how much is selected after it (0 when nothing is).
     func editorDidChangeSelection(offset: Int, length: Int)
     /// `.all` runs the script, `.selection` the highlighted text, `.current` the statement
-    /// under the cursor — or the selection when there is one, which is what ⌘↩ does.
+    /// under the cursor — or the selection when there is one, which is what ⌘R does.
     func editorDidRequestRun(_ scope: SQLRunScope, selection: Range<Int>?)
     func editorCompletionCandidates(prefix: String, statement: String) -> [CompletionCandidate]
 }
@@ -478,7 +478,7 @@ public extension Notification.Name {
     static let dbstudioDismissCompletion = Notification.Name("DBStudioDismissCompletion")
     /// Posted after text was inserted into the editor's model, with the new caret offset.
     static let dbstudioMoveCaret = Notification.Name("DBStudioMoveCaret")
-    /// Asks the front editor to show its suggestion list, as ⌃Space does.
+    /// Asks the front editor to show its suggestion list, as ⌥Esc does.
     static let dbstudioOfferCompletion = Notification.Name("DBStudioOfferCompletion")
     /// ⌘F outside the editor: whichever search field is on screen takes focus.
     static let dbstudioFocusSearch = Notification.Name("DBStudioFocusSearch")

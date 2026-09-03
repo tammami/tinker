@@ -76,7 +76,7 @@ public struct QueryTabView: View {
                 Label("Run", systemImage: Icon.run)
             }
             .disabled(controller.isRunning)
-            .help("Run the highlighted block, or the statement under the cursor (⌘↩)")
+            .help("Run the highlighted block, or the statement under the cursor (⌘R)")
 
             Button {
                 controller.runSelection()
@@ -84,7 +84,7 @@ public struct QueryTabView: View {
                 Label("Run Selected", systemImage: "text.line.first.and.arrowtriangle.forward")
             }
             .disabled(controller.isRunning || !controller.hasSelection)
-            .help("Run only the highlighted text (⌘⌥↩)")
+            .help("Run only the highlighted text (⌘⇧R)")
 
             Button {
                 controller.run(all: true)
@@ -92,7 +92,7 @@ public struct QueryTabView: View {
                 Label("Run All", systemImage: Icon.runAll)
             }
             .disabled(controller.isRunning)
-            .help("Run every statement on the page (⌘⇧↩)")
+            .help("Run every statement on the page (⌘⌥R)")
 
             Button {
                 controller.explain(analyze: false)
@@ -286,7 +286,7 @@ public struct QueryTabView: View {
             EmptyStateView(
                 icon: Icon.run,
                 title: "No results yet",
-                message: "Run the statement under the cursor with ⌘↩, or every statement with ⌘⇧↩."
+                message: "Run the statement under the cursor with ⌘R, or every statement with ⌘⌥R."
             )
         }
     }

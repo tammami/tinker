@@ -7,7 +7,7 @@ import Observation
 /// window, and it does not survive an AppKit view taking first responder: while the SQL
 /// editor has focus the value goes missing, SwiftUI disables the menu item, and the
 /// keyboard shortcut is swallowed with nothing happening. Since the editor is exactly
-/// where ⌘↩ matters, the menus read from here instead — a plain reference to whichever
+/// where ⌘R matters, the menus read from here instead — a plain reference to whichever
 /// workspace is frontmost (DECISIONS.md ADR-0025).
 @MainActor
 @Observable

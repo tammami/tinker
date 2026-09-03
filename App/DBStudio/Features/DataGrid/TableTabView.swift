@@ -112,16 +112,16 @@ public struct TableTabView: View {
 
                 BarDivider()
 
-                IconButton(icon: Icon.add, label: "Add row (⌘+)") { controller.addRow() }
+                IconButton(icon: Icon.add, label: "Add row (⌘⌥A)") { controller.addRow() }
                     .disabled(!(controller.model?.isEditable ?? false))
                 IconButton(icon: Icon.remove, label: "Delete selected rows (⌘−)") {
                     controller.deleteSelectedRows()
                 }
                 .disabled(!(controller.model?.isEditable ?? false))
-                IconButton(icon: Icon.refresh, label: "Reload rows (⌘R)") {
+                IconButton(icon: Icon.refresh, label: "Reload rows (F5)") {
                     Task { await controller.refresh() }
                 }
-                IconButton(icon: Icon.export, label: "Export… (⌘E)") {
+                IconButton(icon: Icon.export, label: "Export… (⌘⌥E)") {
                     workspace.isExportPresented = true
                 }
                 IconButton(icon: Icon.importData, label: "Import from CSV…") {

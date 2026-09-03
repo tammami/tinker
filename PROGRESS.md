@@ -1,6 +1,6 @@
 # PROGRESS.md — per-phase log
 
-Current phase: **Phase 3 — Data grid** (Phases 0–2 complete).
+Current phase: **Phase 6 — MySQL driver** (Phases 0–5 complete).
 
 ---
 
@@ -87,3 +87,46 @@ PostgreSQL 16.15 (Homebrew, localhost:5432), reported in the CI coverage summary
 - **SSH agent authentication is not implemented** (ADR-0013); `.agent` throws with a message naming the alternative.
 - **ECDSA private-key files are unsupported**, because Citadel provides OpenSSH readers for ed25519 and RSA only.
 - **`known_hosts` is never consulted in an integration test**: the tunnel tests use the `ignore` policy, since the in-process server generates a fresh host key each run. Parsing and policy selection are unit-tested against real key material.
+
+---
+
+## Phases 3–5 — Data grid, app shell, SQL editor (2026-09-03)
+
+Built together, because the grid, the shell and the editor share the tab and session
+plumbing and none of the three is testable in isolation.
+
+### Done — Phase 3, the data grid (§12)
+- **`DBGrid` package** (ADR-0017): `RowBuffer` (1,000-row pages, 200,000-row cap, eviction that keeps the viewport's neighbourhood), `EditBuffer` (cell edits, deletions, pending inserts, statement generation), `GridModel` (columns, paging, sort, filter, edit overlay, streamed results, memory cap), `GridCommitter` (one transaction, affected-row check, rollback), `ClipboardFormatter` (TSV, CSV, JSON, NDJSON, Markdown, INSERT, WHERE-IN) and `RowExporter` (streaming CSV/JSON/NDJSON/SQL).
+- **AppKit grid**: `NSTableView` with fixed 22-point rows and automatic heights off, custom cell views drawing NULL italic-grey, binary as `<N bytes>`, long text truncated at 512 characters, yellow edited cells, green new rows, red struck-through deletions; spreadsheet-style cell, row, column and rectangular selection; keyboard navigation including page and document keys; inline editing with type coercion; column widths persisted per table per connection; lazy loading driven by the visible rectangle with a 200-row margin.
+- **Paging**: `LIMIT`/`OFFSET` by default, switching to a keyset cursor past page 50 when a single integer key allows it *and* the previous page is loaded, since a cursor cannot jump into unloaded territory.
+- **Editing**: enabled only with a primary key or a unique NOT NULL index; commit shows every statement in a preview sheet, runs them in one transaction, and rolls back when any statement does not affect exactly one row. Production connections hold the Execute button for 1.5 seconds and label it with the connection name.
+- Cell inspector with hex dump, "Save as File…", pretty-printed JSON and an editable raw value.
+
+### Done — Phase 4, the app shell (§10, §11)
+- `NavigationSplitView` workspace: sidebar, custom tab bar with connection colour stripes and drag reordering, tab content, status bar showing connection, database, state, read-only and transaction status.
+- Sidebar tree — groups → connections → databases → schemas → typed object folders → tables and routines — read one level at a time through the session cache, with status dots following the session's state stream, production badges, and context menus for open, copy name, copy qualified name, copy DDL, truncate and drop. Destructive actions on a production connection require the table name to be typed.
+- Connection editor sheet with General, TLS, SSH (password, key file with a file chooser, agent, jump host, host-key policy) and Advanced sections, validation, a world-readable-key warning, and Test Connection reporting stage by stage.
+- Quick-open (⌘⇧O) fuzzy-matching table names, query history panel (⌘Y), export sheet, settings window.
+- Every shortcut in SPEC §10.2 registered through SwiftUI `Commands`, so each appears in a menu.
+
+### Done — Phase 5, the SQL editor (§13, §14)
+- `NSTextView` with a line-number gutter, current-line highlight, syntax highlighting from `DBSQL.SQLTokenizer` (ADR-0018), bracket matching, auto-indent, `⌘/` comment toggling, `⌘D` duplicate line, and a red underline on the token a server error names.
+- Run the statement under the cursor, the selection, or every statement; one result tab per statement; per-statement messages; auto-commit toggle with explicit Commit and Rollback; elapsed-time indicator; server-side cancel.
+- Alias-aware autocomplete: keywords, schema and table names, and the columns of tables the statement mentions, with `FROM users u` making `u.` offer users' columns.
+- Query history recorded for every statement, capped at 10,000.
+- Export to CSV, JSON, JSON Lines and SQL INSERT, over the selection, the loaded rows, or the whole table streamed from the server.
+
+### Tests (86 added; 318 total, 1 skipped)
+- `RowBufferTests` (7): absolute indexing, missing-page computation, streamed appends across batch boundaries, in-place replacement, and eviction that respects the cap while keeping the viewport.
+- `EditBufferTests` (8): overlay reads, an edit that returns to its loaded value clearing itself, deletion superseding edits, inserts, discard, and the statement order updates → deletes → inserts.
+- `GridCommitterTests` (6): the happy path in one transaction, rollback when an `UPDATE` affects zero rows or two, a server error keeping the server's words, `INSERT … RETURNING` counting as one row, and an empty commit opening no transaction.
+- `GridModelTests` (17): page loading, exhaustion, no duplicate fetches, keyset selection only when a preceding page is loaded, offset fallback on a jump, sort and filter reloading from page 0, sort cycling, editability rules, original-identity WHERE clauses, commit clearing the buffer, a failed commit keeping it, streamed results and load failures.
+- **`GridIntegrationTests` (10) against real PostgreSQL**: the first page of the million-row fixture in **79 ms** (criterion: under 500 ms), deep paging staying correct on a keyset cursor, memory bounded while scrolling 120 pages, server-side sort and filter, a filter value that would drop the table proving parameters are bound, three cells across two rows committing as two `UPDATE`s, **concurrent modification failing the commit and writing nothing**, insert and delete in one commit, composite/UUID/no-key behaviour, and an exact count of 1,000,000.
+- **App smoke test** (`DBStudio --smoke-test`, run by `Scripts/ci.sh`): store opens, session connects, a query returns its rows and columns, `SELECT pg_sleep(30)` cancels in **0.59 s**, and a table tab introspects and pages a real table.
+
+### Gaps that did not run, and why
+- **The view layer itself is untested.** macOS denies synthetic keyboard and mouse input to this build session, so neither XCUITest nor scripted input can drive menus, focus, drawing or the grid's mouse handling (ADR-0019). The app was launched and photographed: it loads its store, lists its connection, opens a query tab with ⌘T, and reports "Connected". Everything below the views is covered by the smoke test and the integration suites. **The full shortcut table in SPEC §10.2 has not been verified by hand.**
+- **Scroll performance is measured by wall-clock page latency, not by `XCTMetric` or os_signpost.** The 500 ms first-page criterion is checked; the "main thread never blocks more than 16 ms" criterion is not, because it needs a signpost-instrumented UI test the environment cannot run.
+- **`GridPlayground`**, the synthetic-data target SPEC §16 lists for performance iteration, was not built. Its purpose — iterating on grid performance without a database — is served by `GridIntegrationTests` against the real million-row table.
+- **Editing a single-table query result** (SPEC §12.3, "Phase 2") is not implemented; query results are read-only. Recorded as a deliberate deferral.
+- **Client-certificate TLS** is wired through `TLSConfig` and the driver but has no fixture to test against.

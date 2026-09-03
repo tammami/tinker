@@ -152,3 +152,30 @@ Date: 2026-09-03 (Phase 2)
 **Decision.** The table is not created. `StoreSchema` is append-only, so v0.2 adds it as migration 2 when the feature is built.
 
 **Consequences.** None for v0.1. The deferral list wins over the table listing, since building the table now would be the stub the spec forbids.
+
+## ADR-0017 — A `DBGrid` package holds the grid's model
+Date: 2026-09-03 (Phase 3)
+
+**Context.** SPEC §3 puts the data grid under `App/DBStudio/Features/DataGrid/`, and SPEC §17 requires unit tests for `EditBuffer` semantics and paging-strategy selection. Code in the Xcode app target cannot be reached by `swift test`, which is what `Scripts/ci.sh` runs.
+
+**Decision.** The grid's model — `RowBuffer`, `EditBuffer`, `GridModel`, `GridCommitter`, `ClipboardFormatter`, `RowExporter`, `SessionGridLoader` — lives in a new `Packages/DBGrid`. Only the AppKit views and the tab controller stay in the app.
+
+**Consequences.** An eighth package the spec's layout does not list, in exchange for the buffer, the edit overlay, the commit rules and the whole paging path being covered by tests that run on every CI pass, including against a real million-row table. The dependency-direction lint covers `DBGrid` like every other package.
+
+## ADR-0018 — Highlighting uses `DBSQL.SQLTokenizer`, not tree-sitter
+Date: 2026-09-03 (Phase 5)
+
+**Context.** SPEC §2.1 lists `ChimeHQ/SwiftTreeSitter` plus a `tree-sitter-sql` grammar for "highlighting and statement boundary detection only".
+
+**Decision.** Neither is added. Statement boundaries already come from `DBSQL.StatementSplitter`, which handles PostgreSQL dollar quoting and the MySQL client's `DELIMITER` directive — the latter is a client convention no SQL grammar models. Highlighting uses `DBSQL.SQLTokenizer`, which classifies keywords, strings, comments, numbers, placeholders and quoted identifiers from the same scanner the splitter uses.
+
+**Consequences.** One shared lexer instead of two parsers that could disagree, and no C grammar to vendor and build. What is lost is structural highlighting — a table name coloured differently from a column name — which the spec does not ask for. If v0.2 wants a real parse tree, the tokenizer's public API is the seam to replace.
+
+## ADR-0019 — The UI smoke test is a launch flag, not XCUITest
+Date: 2026-09-03 (Phase 3–5)
+
+**Context.** SPEC §17 asks for a minimal XCUITest covering launch, create connection, connect, open table, run query and cancel query. XCUITest drives the app through the accessibility system, which requires the machine to grant Accessibility permission to the test runner. This machine denies synthetic input to the build session, and a build machine cannot grant it to itself.
+
+**Decision.** `DBStudio --smoke-test` runs the same sequence headlessly against the objects the views drive: `AppEnvironment` opens the store, `ConnectionSession` connects, `QueryTabController` runs a statement and reads its rows, cancels a `pg_sleep(30)` and checks it returned in under five seconds, and `TableTabController` introspects and pages a real table. `Scripts/ci.sh` runs it after building the app.
+
+**Consequences.** Every layer below the views is covered end to end on each CI run, and the checks are readable and fast. What is *not* covered is the view layer itself: menu items, focus, drawing, mouse and keyboard handling in the grid and editor. Those remain manual, and PROGRESS.md says so.

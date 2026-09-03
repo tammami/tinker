@@ -52,12 +52,13 @@ allowed_imports() {
         DBMySQL)    echo "Foundation Logging DBCore DBSQL MySQLNIO NIO NIOCore NIOPosix NIOSSL NIOConcurrencyHelpers" ;;
         DBTunnel)   echo "Foundation Logging DBCore Citadel Crypto NIO NIOCore NIOPosix NIOSSH" ;;
         DBStore)    echo "Foundation Logging DBCore SQLite3 Security" ;;
+        DBGrid)     echo "Foundation Logging DBCore DBSQL os" ;;
         DBTestKit)  echo "Foundation Logging DBCore XCTest" ;;
         *)          echo "" ;;
     esac
 }
 lint_failed=0
-for module in DBCore DBSQL DBPostgres DBMySQL DBTunnel DBStore DBTestKit; do
+for module in DBCore DBSQL DBPostgres DBMySQL DBTunnel DBStore DBGrid DBTestKit; do
     dir="Packages/$module/Sources/$module"
     [[ -d "$dir" ]] || continue
     allowed="$(allowed_imports "$module")"
@@ -106,6 +107,24 @@ if [[ $SKIP_APP == 0 ]]; then
         fail "app build produced warnings"
     fi
     echo "  ok"
+
+    bold "App smoke test"
+    # Drives the objects the views drive — environment, session, table tab, query tab —
+    # against whichever connection the store holds (SPEC §17, DECISIONS.md ADR-0019).
+    APP_BINARY=".build/DerivedData/Build/Products/Debug/DBStudio.app/Contents/MacOS/DBStudio"
+    if [[ ! -x "$APP_BINARY" ]]; then
+        warn "app binary not found — smoke test SKIPPED"
+    else
+        set +e
+        "$APP_BINARY" --smoke-test
+        SMOKE_STATUS=$?
+        set -e
+        case $SMOKE_STATUS in
+            0) echo "  ok" ;;
+            2) warn "no connection configured in the app store — smoke test SKIPPED" ;;
+            *) fail "app smoke test failed" ;;
+        esac
+    fi
 fi
 
 # ---------------------------------------------------------------------------

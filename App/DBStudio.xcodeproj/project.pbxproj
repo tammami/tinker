@@ -7,7 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		DB0000000000000000000101 /* DBCore in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000201 /* DBCore */; };
+		DB0000000000000000000100 /* DBCore in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000200 /* DBCore */; };
+		DB0000000000000000000101 /* DBSQL in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000201 /* DBSQL */; };
+		DB0000000000000000000102 /* DBGrid in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000202 /* DBGrid */; };
+		DB0000000000000000000103 /* DBStore in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000203 /* DBStore */; };
+		DB0000000000000000000104 /* DBTunnel in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000204 /* DBTunnel */; };
+		DB0000000000000000000105 /* DBPostgres in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000205 /* DBPostgres */; };
+		DB0000000000000000000106 /* DBMySQL in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000206 /* DBMySQL */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -27,7 +33,13 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DB0000000000000000000101 /* DBCore in Frameworks */,
+				DB0000000000000000000100 /* DBCore in Frameworks */,
+				DB0000000000000000000101 /* DBSQL in Frameworks */,
+				DB0000000000000000000102 /* DBGrid in Frameworks */,
+				DB0000000000000000000103 /* DBStore in Frameworks */,
+				DB0000000000000000000104 /* DBTunnel in Frameworks */,
+				DB0000000000000000000105 /* DBPostgres in Frameworks */,
+				DB0000000000000000000106 /* DBMySQL in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -70,7 +82,13 @@
 			);
 			name = DBStudio;
 			packageProductDependencies = (
-				DB0000000000000000000201 /* DBCore */,
+				DB0000000000000000000200 /* DBCore */,
+				DB0000000000000000000201 /* DBSQL */,
+				DB0000000000000000000202 /* DBGrid */,
+				DB0000000000000000000203 /* DBStore */,
+				DB0000000000000000000204 /* DBTunnel */,
+				DB0000000000000000000205 /* DBPostgres */,
+				DB0000000000000000000206 /* DBMySQL */,
 			);
 			productName = DBStudio;
 			productReference = DB0000000000000000000002 /* DBStudio.app */;
@@ -347,9 +365,33 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		DB0000000000000000000201 /* DBCore */ = {
+		DB0000000000000000000200 /* DBCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = DBCore;
+		};
+		DB0000000000000000000201 /* DBSQL */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DBSQL;
+		};
+		DB0000000000000000000202 /* DBGrid */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DBGrid;
+		};
+		DB0000000000000000000203 /* DBStore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DBStore;
+		};
+		DB0000000000000000000204 /* DBTunnel */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DBTunnel;
+		};
+		DB0000000000000000000205 /* DBPostgres */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DBPostgres;
+		};
+		DB0000000000000000000206 /* DBMySQL */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DBMySQL;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

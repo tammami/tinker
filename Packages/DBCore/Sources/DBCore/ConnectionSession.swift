@@ -328,7 +328,7 @@ public actor ConnectionSession {
     /// Nothing here refreshes on a timer (SPEC §8).
     public func introspection<Value: Sendable>(
         _ key: IntrospectionCache.Key,
-        load: (any SchemaIntrospector) async throws -> Value
+        load: @Sendable (any SchemaIntrospector) async throws -> Value
     ) async throws -> Value {
         if let cached: Value = cache.value(for: key) { return cached }
         let (lease, connection) = try await lease()

@@ -109,6 +109,13 @@ public enum SQLTokenizer {
         return tokens
     }
 
+    /// The token covering a UTF-16 offset, for marking the position a server error names.
+    public static func token(at utf16Offset: Int, in sql: String, dialect: SQLDialect) -> SQLToken? {
+        tokenize(sql, dialect: dialect).first { token in
+            token.kind != .whitespace && token.utf16Range.contains(utf16Offset)
+        }
+    }
+
     /// Keywords recognised for highlighting, formatting and autocomplete.
     public static let keywords: Set<String> = [
         "ADD", "ALL", "ALTER", "ANALYZE", "AND", "ANY", "AS", "ASC", "BEGIN", "BETWEEN", "BY", "CASCADE",

@@ -30,6 +30,7 @@ let package = Package(
         .library(name: "DBMySQL", targets: ["DBMySQL"]),
         .library(name: "DBTunnel", targets: ["DBTunnel"]),
         .library(name: "DBStore", targets: ["DBStore"]),
+        .library(name: "DBGrid", targets: ["DBGrid"]),
         .library(name: "DBTestKit", targets: ["DBTestKit"]),
         .executable(name: "dbcli", targets: ["dbcli"]),
     ],
@@ -82,6 +83,12 @@ let package = Package(
             name: "DBStore",
             dependencies: ["DBCore"],
             path: "Packages/DBStore/Sources/DBStore",
+            swiftSettings: strict
+        ),
+        .target(
+            name: "DBGrid",
+            dependencies: ["DBCore", "DBSQL"],
+            path: "Packages/DBGrid/Sources/DBGrid",
             swiftSettings: strict
         ),
         .target(
@@ -140,6 +147,15 @@ let package = Package(
             name: "DBStoreTests",
             dependencies: ["DBStore", "DBTestKit"],
             path: "Packages/DBStore/Tests/DBStoreTests",
+            swiftSettings: strict
+        ),
+        .testTarget(
+            name: "DBGridTests",
+            // DBPostgres is a test-only dependency: the grid's acceptance criteria are
+            // about a real million-row table, which needs a real driver. The DBGrid
+            // library itself never imports one, and Scripts/ci.sh checks that.
+            dependencies: ["DBGrid", "DBTestKit", "DBPostgres"],
+            path: "Packages/DBGrid/Tests/DBGridTests",
             swiftSettings: strict
         ),
         .testTarget(

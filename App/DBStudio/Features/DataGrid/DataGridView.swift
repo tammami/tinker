@@ -1,0 +1,441 @@
+import AppKit
+import DBCore
+import DBGrid
+import DBSQL
+import SwiftUI
+
+/// What the grid asks the surrounding tab to do.
+@MainActor
+public protocol DataGridDelegate: AnyObject {
+    func gridDidChangeSelection(_ selection: GridSelection)
+    func gridDidRequestLoad(range: Range<Int>)
+    func gridDidCommitEdit(row: Int, column: Int, text: String)
+    func gridDidRequestInspector()
+    func gridDidChangeColumnWidths(_ widths: [String: Double])
+}
+
+/// The data grid: an `NSTableView` in an `NSScrollView`, wrapped for SwiftUI.
+///
+/// One implementation serves both table tabs and query results; editing is enabled only
+/// when the model says the rows can be identified (SPEC §12).
+public struct DataGridView: NSViewRepresentable {
+    public let model: GridModel
+    @Binding public var selection: GridSelection
+    public let columnWidths: [String: Double]
+    public weak var delegate: (any DataGridDelegate)?
+    /// Bumped by the owner whenever the model's contents changed, so the view reloads.
+    public let revision: Int
+
+    public init(
+        model: GridModel,
+        selection: Binding<GridSelection>,
+        columnWidths: [String: Double] = [:],
+        revision: Int,
+        delegate: (any DataGridDelegate)? = nil
+    ) {
+        self.model = model
+        _selection = selection
+        self.columnWidths = columnWidths
+        self.revision = revision
+        self.delegate = delegate
+    }
+
+    public func makeNSView(context: Context) -> NSScrollView {
+        let tableView = GridTableView()
+        tableView.controller = context.coordinator
+        // Uniform row heights are what make a million rows scrollable; automatic heights
+        // would measure every row (SPEC §12).
+        tableView.rowHeight = DesignTokens.Metrics.gridRowHeight
+        tableView.usesAutomaticRowHeights = false
+        tableView.usesAlternatingRowBackgroundColors = true
+        tableView.style = .plain
+        tableView.gridStyleMask = []
+        tableView.allowsColumnReordering = true
+        tableView.allowsColumnResizing = true
+        tableView.allowsMultipleSelection = true
+        tableView.selectionHighlightStyle = .none
+        tableView.columnAutoresizingStyle = .noColumnAutoresizing
+        tableView.dataSource = context.coordinator
+        tableView.delegate = context.coordinator
+        tableView.target = context.coordinator
+        tableView.doubleAction = #selector(GridCoordinator.handleDoubleClick)
+
+        let scrollView = NSScrollView()
+        scrollView.documentView = tableView
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = false
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = .controlBackgroundColor
+
+        context.coordinator.tableView = tableView
+        context.coordinator.scrollView = scrollView
+        context.coordinator.observeScrolling()
+        context.coordinator.rebuildColumns()
+        return scrollView
+    }
+
+    public func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.model = model
+        coordinator.delegate = delegate
+        coordinator.selection = selection
+        coordinator.selectionBinding = $selection
+        coordinator.storedColumnWidths = columnWidths
+        if coordinator.revision != revision {
+            coordinator.revision = revision
+            coordinator.rebuildColumnsIfNeeded()
+            coordinator.tableView?.reloadData()
+        } else {
+            coordinator.redrawVisibleCells()
+        }
+    }
+
+    public func makeCoordinator() -> GridCoordinator {
+        GridCoordinator(model: model, selection: selection, delegate: delegate)
+    }
+}
+
+/// Drives the table view: rows, cells, selection, keyboard and lazy loading.
+@MainActor
+public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+    var model: GridModel
+    var selection: GridSelection
+    var selectionBinding: Binding<GridSelection>?
+    weak var delegate: (any DataGridDelegate)?
+    weak var tableView: GridTableView?
+    weak var scrollView: NSScrollView?
+    var revision = -1
+    var storedColumnWidths: [String: Double] = [:]
+
+    private var builtColumnNames: [String] = []
+    /// Kept so the observer's lifetime matches the coordinator's; the notification centre
+    /// holds only a weak reference to `self` through the closure.
+    private var scrollObserver: (any NSObjectProtocol)?
+
+    init(model: GridModel, selection: GridSelection, delegate: (any DataGridDelegate)?) {
+        self.model = model
+        self.selection = selection
+        self.delegate = delegate
+    }
+
+    // MARK: - Columns
+
+    func rebuildColumnsIfNeeded() {
+        guard builtColumnNames != model.columns.map(\.name) else { return }
+        rebuildColumns()
+    }
+
+    func rebuildColumns() {
+        guard let tableView else { return }
+        for column in tableView.tableColumns { tableView.removeTableColumn(column) }
+        for meta in model.columns {
+            let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(meta.name))
+            column.title = meta.name
+            column.headerToolTip = "\(meta.name) — \(meta.nativeTypeName)"
+            column.minWidth = DesignTokens.Metrics.minimumColumnWidth
+            column.maxWidth = DesignTokens.Metrics.maximumColumnWidth
+            column.width = storedColumnWidths[meta.name].map { CGFloat($0) }
+                ?? Self.defaultWidth(for: meta)
+            column.resizingMask = .userResizingMask
+            tableView.addTableColumn(column)
+        }
+        builtColumnNames = model.columns.map(\.name)
+        tableView.reloadData()
+    }
+
+    /// A first guess at column width from the type, so a table of integers is not as wide
+    /// as one of text.
+    static func defaultWidth(for meta: ColumnMeta) -> CGFloat {
+        let byKind: CGFloat = switch meta.kind {
+        case .bool: 70
+        case .int, .uint: 90
+        case .double, .decimal: 110
+        case .date: 100
+        case .time: 110
+        case .timestamp: 190
+        case .uuid: 260
+        case .bytes: 110
+        default: DesignTokens.Metrics.defaultColumnWidth
+        }
+        // A long column name still needs to be readable.
+        return max(byKind, CGFloat(meta.name.count) * 8 + 24)
+    }
+
+    /// Sizes a column to the widest value among the loaded rows (SPEC §12.1).
+    func autosizeColumn(named name: String) {
+        guard let tableView, let column = tableView.tableColumns.first(where: { $0.identifier.rawValue == name }),
+              let columnIndex = model.columns.firstIndex(where: { $0.name == name })
+        else { return }
+        let font = DesignTokens.Fonts.grid
+        var widest = (name as NSString).size(withAttributes: [.font: NSFont.boldSystemFont(ofSize: 11)]).width
+        let sampleRange = visibleRowRange()
+        for row in sampleRange {
+            guard let value = model.value(row: row, column: columnIndex) else { continue }
+            let text = GridCellView.displayText(for: value)
+            widest = max(widest, (text as NSString).size(withAttributes: [.font: font]).width)
+        }
+        column.width = min(max(widest + 20, column.minWidth), column.maxWidth)
+        reportColumnWidths()
+    }
+
+    func reportColumnWidths() {
+        guard let tableView else { return }
+        let widths = Dictionary(uniqueKeysWithValues: tableView.tableColumns.map {
+            ($0.identifier.rawValue, Double($0.width))
+        })
+        delegate?.gridDidChangeColumnWidths(widths)
+    }
+
+    // MARK: - Data source
+
+    public func numberOfRows(in tableView: NSTableView) -> Int {
+        model.displayRowCount
+    }
+
+    public func tableView(
+        _ tableView: NSTableView,
+        viewFor tableColumn: NSTableColumn?,
+        row: Int
+    ) -> NSView? {
+        guard let tableColumn,
+              let columnIndex = model.columns.firstIndex(where: { $0.name == tableColumn.identifier.rawValue })
+        else { return nil }
+
+        let view = tableView.makeView(withIdentifier: GridCellView.reuseIdentifier, owner: self) as? GridCellView
+            ?? {
+                let fresh = GridCellView()
+                fresh.identifier = GridCellView.reuseIdentifier
+                return fresh
+            }()
+
+        let isFocused = selection.focusRow == row && selection.focusColumn == columnIndex
+        view.configure(
+            value: model.value(row: row, column: columnIndex),
+            changeState: model.changeState(row: row, column: columnIndex),
+            isSelected: selection.contains(row: row, column: columnIndex, columnCount: model.columns.count),
+            isFocused: isFocused,
+            alignment: model.columns[columnIndex].kind.cellAlignment
+        )
+        return view
+    }
+
+    public func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        false   // selection is drawn by the cells, from the grid's own model
+    }
+
+    public func tableViewColumnDidResize(_ notification: Notification) {
+        reportColumnWidths()
+    }
+
+    // MARK: - Lazy loading
+
+    func observeScrolling() {
+        guard let clipView = scrollView?.contentView else { return }
+        clipView.postsBoundsChangedNotifications = true
+        scrollObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification, object: clipView, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.requestVisibleRows()
+            }
+        }
+    }
+
+    func visibleRowRange() -> Range<Int> {
+        guard let tableView, let scrollView else { return 0 ..< 0 }
+        let visible = tableView.rows(in: scrollView.contentView.bounds)
+        guard visible.length > 0 else { return 0 ..< 0 }
+        return visible.location ..< (visible.location + visible.length)
+    }
+
+    /// Asks for the rows around the viewport, with a little margin so scrolling does not
+    /// stutter at the edge of what is loaded.
+    func requestVisibleRows() {
+        let visible = visibleRowRange()
+        guard !visible.isEmpty else { return }
+        let margin = 200
+        let lower = max(0, visible.lowerBound - margin)
+        let upper = min(model.displayRowCount, visible.upperBound + margin)
+        guard lower < upper else { return }
+        delegate?.gridDidRequestLoad(range: lower ..< upper)
+    }
+
+    /// Redraws only what is on screen, which is what an edit or a selection change needs.
+    func redrawVisibleCells() {
+        guard let tableView else { return }
+        let rows = visibleRowRange()
+        guard !rows.isEmpty else { return }
+        tableView.reloadData(
+            forRowIndexes: IndexSet(integersIn: rows),
+            columnIndexes: IndexSet(integersIn: 0 ..< max(1, tableView.tableColumns.count))
+        )
+    }
+
+    // MARK: - Selection
+
+    func setSelection(_ new: GridSelection) {
+        selection = new
+        selectionBinding?.wrappedValue = new
+        delegate?.gridDidChangeSelection(new)
+        redrawVisibleCells()
+        scrollToFocus()
+    }
+
+    func scrollToFocus() {
+        guard let tableView, model.displayRowCount > 0 else { return }
+        let row = min(max(0, selection.focusRow), model.displayRowCount - 1)
+        let column = min(max(0, selection.focusColumn), max(0, tableView.tableColumns.count - 1))
+        tableView.scrollRowToVisible(row)
+        if tableView.tableColumns.indices.contains(column) {
+            tableView.scrollColumnToVisible(column)
+        }
+    }
+
+    func handleClick(row: Int, column: Int, extending: Bool) {
+        var new = selection
+        if extending {
+            new.focusRow = row
+            new.focusColumn = column
+        } else {
+            new = GridSelection(row: row, column: column)
+        }
+        setSelection(new)
+    }
+
+    @objc func handleDoubleClick() {
+        guard let tableView, tableView.clickedRow >= 0 else { return }
+        beginEditingFocusedCell()
+    }
+
+    // MARK: - Editing
+
+    func beginEditingFocusedCell() {
+        guard model.isEditable, let tableView else { return }
+        let row = selection.focusRow
+        let column = selection.focusColumn
+        guard model.columns.indices.contains(column), row < model.displayRowCount else { return }
+        guard let cell = tableView.view(atColumn: column, row: row, makeIfNecessary: false) as? GridCellView else {
+            return
+        }
+        let current = model.value(row: row, column: column)
+        let editor = GridInlineEditor(frame: cell.bounds)
+        editor.stringValue = current.map { value in
+            if case .null = value { return "" }
+            return value.text ?? ""
+        } ?? ""
+        editor.onCommit = { [weak self] text in
+            self?.delegate?.gridDidCommitEdit(row: row, column: column, text: text)
+        }
+        cell.addSubview(editor)
+        editor.frame = cell.bounds
+        editor.autoresizingMask = [.width, .height]
+        tableView.window?.makeFirstResponder(editor)
+    }
+
+    // MARK: - Keyboard
+
+    /// Handles the navigation and editing keys the grid owns. Returns false for anything
+    /// the responder chain should keep handling.
+    func handleKeyDown(_ event: NSEvent) -> Bool {
+        let extending = event.modifierFlags.contains(.shift)
+        let rowCount = model.displayRowCount
+        let columnCount = model.columns.count
+        guard rowCount > 0, columnCount > 0 else { return false }
+
+        var new = selection
+        switch event.keyCode {
+        case 126: new.move(rowDelta: -1, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
+        case 125: new.move(rowDelta: 1, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
+        case 123: new.move(rowDelta: 0, columnDelta: -1, rowCount: rowCount, columnCount: columnCount, extending: extending)
+        case 124: new.move(rowDelta: 0, columnDelta: 1, rowCount: rowCount, columnCount: columnCount, extending: extending)
+        case 115: new.move(rowDelta: -rowCount, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
+        case 119: new.move(rowDelta: rowCount, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
+        case 116: new.move(rowDelta: -30, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
+        case 121: new.move(rowDelta: 30, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
+        case 36:  // Return starts editing
+            beginEditingFocusedCell()
+            return true
+        case 48:  // Tab moves right, wrapping to the next row
+            if selection.focusColumn == columnCount - 1, selection.focusRow < rowCount - 1 {
+                new.move(rowDelta: 1, columnDelta: -(columnCount - 1), rowCount: rowCount, columnCount: columnCount, extending: false)
+            } else {
+                new.move(rowDelta: 0, columnDelta: 1, rowCount: rowCount, columnCount: columnCount, extending: false)
+            }
+        default:
+            return false
+        }
+        setSelection(new)
+        return true
+    }
+}
+
+/// The table view, which forwards the keys the grid owns to its coordinator.
+public final class GridTableView: NSTableView {
+    weak var controller: GridCoordinator?
+
+    public override var acceptsFirstResponder: Bool { true }
+
+    public override func keyDown(with event: NSEvent) {
+        if let controller, MainActor.assumeIsolated({ controller.handleKeyDown(event) }) { return }
+        super.keyDown(with: event)
+    }
+
+    public override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let row = row(at: point)
+        let column = column(at: point)
+        guard row >= 0, column >= 0 else {
+            super.mouseDown(with: event)
+            return
+        }
+        window?.makeFirstResponder(self)
+        MainActor.assumeIsolated {
+            controller?.handleClick(
+                row: row, column: column,
+                extending: event.modifierFlags.contains(.shift)
+            )
+        }
+        if event.clickCount == 2 {
+            MainActor.assumeIsolated { controller?.beginEditingFocusedCell() }
+        }
+    }
+}
+
+/// The text field shown while a cell is being edited.
+final class GridInlineEditor: NSTextField {
+    var onCommit: ((String) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        isEditable = true
+        isSelectable = true
+        isBordered = true
+        bezelStyle = .squareBezel
+        drawsBackground = true
+        backgroundColor = .textBackgroundColor
+        font = DesignTokens.Fonts.grid
+        focusRingType = .exterior
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func textDidEndEditing(_ notification: Notification) {
+        super.textDidEndEditing(notification)
+        finish(committing: true)
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        finish(committing: false)
+    }
+
+    private func finish(committing: Bool) {
+        let text = stringValue
+        let window = window
+        removeFromSuperview()
+        if committing { onCommit?(text) }
+        window?.makeFirstResponder(window?.contentView)
+    }
+}

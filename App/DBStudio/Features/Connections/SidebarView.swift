@@ -183,11 +183,16 @@ struct SidebarRow: View {
 
     func handleDoubleClick() {
         workspace.sidebarSelection = item.id
-        if case let .table(id, info) = item.kind {
+        switch item.kind {
+        case let .table(id, info):
             onOpenTable(info.ref, id, NSEvent.modifierFlags.contains(.option))
-            return
+        case let .schema(id, ref):
+            // A schema opens as a list of what it holds, rather than only expanding
+            // one node at a time (SPEC §11.4).
+            _ = workspace.openObjects(ref, connectionID: id)
+        default:
+            toggleExpansion()
         }
-        toggleExpansion()
     }
 
     @ViewBuilder
@@ -197,7 +202,10 @@ struct SidebarRow: View {
             connectionMenu(id)
         case let .table(id, info):
             tableMenu(connectionID: id, info: info)
-        case .database, .schema, .tableFolder, .routineFolder, .group:
+        case let .schema(id, ref):
+            Button("Open Objects") { _ = workspace.openObjects(ref, connectionID: id) }
+            Button(sidebar.isExpanded(item.id) ? "Collapse" : "Expand") { toggleExpansion() }
+        case .database, .tableFolder, .routineFolder, .group:
             Button(sidebar.isExpanded(item.id) ? "Collapse" : "Expand") { toggleExpansion() }
         default:
             EmptyView()

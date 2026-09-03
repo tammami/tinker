@@ -13,6 +13,8 @@ public final class WorkspaceTab: Identifiable {
     public enum Kind: Sendable {
         case table(TableRef)
         case query
+        /// Everything a schema holds, listed (SPEC §11.4).
+        case objects(SchemaRef)
     }
 
     public let id = UUID()
@@ -187,6 +189,23 @@ public final class WorkspaceModel {
     }
 
     @discardableResult
+    /// Opens, or brings forward, the Objects list for a schema (SPEC §11.4).
+    public func openObjects(_ schema: SchemaRef, connectionID: UUID) -> WorkspaceTab {
+        if let existing = tabs.first(where: {
+            if case let .objects(ref) = $0.kind { return ref == schema && $0.connectionID == connectionID }
+            return false
+        }) {
+            selectedTabID = existing.id
+            return existing
+        }
+        let tab = WorkspaceTab(
+            kind: .objects(schema), connectionID: connectionID, title: schema.schema
+        )
+        tabs.append(tab)
+        selectedTabID = tab.id
+        return tab
+    }
+
     public func newQueryTab(connectionID: UUID, sql: String = "") -> WorkspaceTab {
         let number = tabs.filter(\.isQueryTab).count + 1
         let tab = WorkspaceTab(kind: .query, connectionID: connectionID, title: "SQL \(number)")

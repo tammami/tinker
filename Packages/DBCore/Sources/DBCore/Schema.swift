@@ -105,6 +105,10 @@ public struct TableInfo: Sendable, Hashable, Codable, Identifiable {
     public let sizeBytes: Int64?
     /// Planner estimate, not a count. `nil` when unknown.
     public let approximateRowCount: Int64?
+    /// MySQL storage engine. PostgreSQL has no equivalent and leaves this nil.
+    public let engine: String?
+    /// MySQL table collation. PostgreSQL collates per column, so this is nil there.
+    public let collation: String?
 
     public init(
         ref: TableRef,
@@ -112,7 +116,9 @@ public struct TableInfo: Sendable, Hashable, Codable, Identifiable {
         comment: String? = nil,
         owner: String? = nil,
         sizeBytes: Int64? = nil,
-        approximateRowCount: Int64? = nil
+        approximateRowCount: Int64? = nil,
+        engine: String? = nil,
+        collation: String? = nil
     ) {
         self.ref = ref
         self.kind = kind
@@ -120,6 +126,8 @@ public struct TableInfo: Sendable, Hashable, Codable, Identifiable {
         self.owner = owner
         self.sizeBytes = sizeBytes
         self.approximateRowCount = approximateRowCount
+        self.engine = engine
+        self.collation = collation
     }
 
     public var id: String { ref.id }

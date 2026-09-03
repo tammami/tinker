@@ -79,7 +79,8 @@ public struct MySQLIntrospector: SchemaIntrospector {
     public func tables(in schema: SchemaRef) async throws -> [TableInfo] {
         let result = try await query("""
             SELECT t.TABLE_NAME, t.TABLE_TYPE, t.TABLE_COMMENT,
-                   t.DATA_LENGTH + t.INDEX_LENGTH, t.TABLE_ROWS
+                   t.DATA_LENGTH + t.INDEX_LENGTH, t.TABLE_ROWS,
+                   t.ENGINE, t.TABLE_COLLATION
             FROM information_schema.TABLES t
             WHERE t.TABLE_SCHEMA = ?
             ORDER BY t.TABLE_NAME
@@ -100,7 +101,9 @@ public struct MySQLIntrospector: SchemaIntrospector {
                 comment: (comment?.isEmpty ?? true) ? nil : comment,
                 owner: nil,
                 sizeBytes: size,
-                approximateRowCount: rows
+                approximateRowCount: rows,
+                engine: row[5].text,
+                collation: row[6].text
             )
         }
     }

@@ -273,6 +273,12 @@ public struct WorkspaceView: View {
                         // choice and the panes follow the user from one table to the next.
                         .id(tab.id)
                 }
+            case let .objects(schema):
+                ObjectsView(
+                    controller: objectsController(for: tab, schema: schema),
+                    onOpen: { table in openTable(table, tab.connectionID, false) }
+                )
+                .id(tab.id)
             case .query:
                 if let controller = queryControllers[tab.id] {
                     QueryTabView(
@@ -366,6 +372,8 @@ public struct WorkspaceView: View {
         switch tab.kind {
         case .table: tableControllers[tab.id]?.model
         case .query: queryControllers[tab.id]?.selectedResult?.grid
+        // The Objects list is not a grid; copy and export act on grids.
+        case .objects: nil
         }
     }
 
@@ -373,6 +381,7 @@ public struct WorkspaceView: View {
         let selection: GridSelection = switch tab.kind {
         case .table: tableControllers[tab.id]?.selection ?? GridSelection()
         case .query: queryControllers[tab.id]?.selection ?? GridSelection()
+        case .objects: GridSelection()
         }
         let columns = selection.columns(totalColumns: grid.columns.count)
         return selection.rows(totalRows: grid.displayRowCount).map { row in
@@ -416,6 +425,19 @@ public struct WorkspaceView: View {
 
     func openTable(_ table: TableRef, _ connectionID: UUID, _ forceNew: Bool) {
         controller.openTable(table, connectionID: connectionID, forceNew: forceNew)
+    }
+
+    /// One controller per Objects tab, kept for as long as the tab is.
+    func objectsController(for tab: WorkspaceTab, schema: SchemaRef) -> ObjectsController {
+        if let existing = controller.objectsControllers[tab.id] { return existing }
+        let dialect = environment.connections
+            .first { $0.id == tab.connectionID }?.dialect ?? .postgresql
+        let made = ObjectsController(
+            schema: schema, connectionID: tab.connectionID,
+            dialect: dialect, environment: environment
+        )
+        controller.objectsControllers[tab.id] = made
+        return made
     }
 
     func newQuery(_ connectionID: UUID, _ sql: String) {

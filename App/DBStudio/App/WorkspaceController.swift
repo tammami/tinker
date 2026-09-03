@@ -20,6 +20,8 @@ public final class WorkspaceController {
 
     public private(set) var tableControllers: [UUID: TableTabController] = [:]
     public private(set) var queryControllers: [UUID: QueryTabController] = [:]
+    /// One per Objects tab (SPEC §11.4).
+    public var objectsControllers: [UUID: ObjectsController] = [:]
     /// Toggled by the sidebar command; the split view reads it.
     public var isSidebarVisible = true
 

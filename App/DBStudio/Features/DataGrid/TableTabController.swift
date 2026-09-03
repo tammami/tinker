@@ -172,6 +172,10 @@ public final class TableTabController: DataGridDelegate {
         await persistPreferences()
     }
 
+    public func gridDidClickColumnHeader(column: Int, additive: Bool) {
+        Task { await cycleSort(columnIndex: column, additive: additive) }
+    }
+
     public func cycleSort(columnIndex: Int, additive: Bool) async {
         guard let model, model.columns.indices.contains(columnIndex) else { return }
         await model.cycleSort(column: model.columns[columnIndex].name, additive: additive)

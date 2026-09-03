@@ -318,13 +318,38 @@ Phase 8 (ADR-0028).
 - Loading the new fixtures exposed that the PostgreSQL fixture was not idempotent, which
   `prepare.sh` claims to be. Fixed with `CASCADE`.
 
+### Phase 8 completed (same day)
+
+- **Triggers and partitions are editable.** Both panes take add, edit and remove. A
+  PostgreSQL trigger offers several events, a timing including `INSTEAD OF`, row or
+  statement level, a `WHEN` clause and its function; MySQL offers one event and a body.
+  Partitions add and remove; strategy and key stay read-only because changing either means
+  rebuilding the table. PostgreSQL detaches a partition and keeps the rows, MySQL drops it
+  and does not — only one of the two is marked destructive.
+- **Column reordering**, MySQL only. PostgreSQL has no syntax for it, so the control is
+  absent there rather than present and disabled.
+- **The collation picker** is the list the server reports.
+- **Create Table** — View ▸ New Table… (⌘⇧N) opens the same panes with an empty definition
+  and emits `CREATE TABLE`. Verified end to end in the app: the table was created on the
+  server with its identity column and primary key, and opened as a tab.
+- **Structure sync** — View ▸ Structure Sync… compares a table against another on any
+  connection of the same engine and writes the DDL into a SQL editor tab. It generates and
+  never applies. Drops are held back and listed commented unless the user asks for them.
+  Objects are matched by name, because two servers share no identities; a `StructureSync`
+  test caught that a difference made only of drops reported "the target already matches".
+- **Column header sorting** (SPEC §12.4). `cycleSort` existed and nothing had ever called
+  it: the model, the preferences and the persistence were all in place, but no click
+  reached them. Click cycles none → ASC → DESC, shift-click adds a secondary sort, and the
+  heading carries the indicator.
+
 ### Not done
 
-- **Triggers and partitions are read-only.** Both panes show what the server has; neither
-  can add, alter or drop.
-- **Create Table (§15b.3) is not wired to any menu.** `DDLGenerator.create` exists and is
-  tested, but nothing in the app opens an empty designer.
-- **Structure sync (§15b.4) is not started.**
-- **Column reordering** (MySQL `AFTER`) is not offered.
-- **The collation picker is a text field.** `collations(in:)` is implemented, read and
-  tested, but the Columns pane does not yet present it as a list.
+- **The SQL editor has no line-number gutter.** It had one, and the gutter was why the
+  editor never showed any text: an `NSRulerView` inside a SwiftUI `NSViewRepresentable`
+  never took its reserved width and filled the rect it was handed, which reached across the
+  text view. Three attempts to make it take that width failed, and drawing the numbers
+  inside the text view's own margin did not land either. The text now draws; the numbers do
+  not. SPEC §13.1 asks for them.
+- **A database overview ("Objects") list** — every table with its row count, size, engine
+  and collation, the way Navicat shows one when a database is opened — is not built and is
+  not in SPEC.

@@ -12,6 +12,15 @@ public protocol DataGridDelegate: AnyObject {
     func gridDidCommitEdit(row: Int, column: Int, text: String)
     func gridDidRequestInspector()
     func gridDidChangeColumnWidths(_ widths: [String: Double])
+    /// A click on a column heading. `additive` is true when shift was held, which adds a
+    /// secondary sort rather than replacing the first (SPEC §12.4).
+    func gridDidClickColumnHeader(column: Int, additive: Bool)
+}
+
+public extension DataGridDelegate {
+    /// Query results are what the statement returned; re-ordering them would mean running
+    /// a different statement, so a results grid ignores this.
+    func gridDidClickColumnHeader(column: Int, additive: Bool) {}
 }
 
 /// The data grid: an `NSTableView` in an `NSScrollView`, wrapped for SwiftUI.
@@ -93,6 +102,7 @@ public struct DataGridView: NSViewRepresentable {
             coordinator.revision = revision
             coordinator.rebuildColumnsIfNeeded()
             coordinator.updateGutterWidth()
+            coordinator.updateSortIndicators()
             coordinator.tableView?.reloadData()
         } else {
             coordinator.redrawVisibleCells()
@@ -315,6 +325,28 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
 
     public func tableViewColumnDidResize(_ notification: Notification) {
         reportColumnWidths()
+    }
+
+    public func tableView(_ tableView: NSTableView, didClick tableColumn: NSTableColumn) {
+        guard tableColumn.identifier != Self.rowNumberColumnID,
+              let column = model.columns.firstIndex(where: {
+                  $0.name == tableColumn.identifier.rawValue
+              })
+        else { return }
+        let additive = NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false
+        delegate?.gridDidClickColumnHeader(column: column, additive: additive)
+    }
+
+    /// Puts the ascending/descending arrow on the columns the sort is on.
+    func updateSortIndicators() {
+        guard let tableView else { return }
+        for column in tableView.tableColumns {
+            let term = model.sort.first { $0.column == column.identifier.rawValue }
+            tableView.setIndicatorImage(
+                term.map { NSImage(named: $0.ascending ? "NSAscendingSortIndicator" : "NSDescendingSortIndicator") } ?? nil,
+                in: column
+            )
+        }
     }
 
     // MARK: - Lazy loading

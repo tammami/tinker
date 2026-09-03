@@ -126,6 +126,10 @@ struct DBStudioCommands: Commands {
             Button("Quick Open Table…") { workspace?.workspace.isQuickOpenPresented = true }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             Divider()
+            Button("New Table…") { workspace?.workspace.isNewTablePresented = true }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+            Button("Structure Sync…") { workspace?.workspace.isStructureSyncPresented = true }
+            Divider()
             Button("Close Tab") { workspace?.closeSelectedTab() }
                 .keyboardShortcut("w", modifiers: .command)
             Button("Next Tab") { workspace?.workspace.cycleTab(forward: true) }

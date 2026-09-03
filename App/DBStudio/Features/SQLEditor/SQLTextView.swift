@@ -40,7 +40,7 @@ public struct CompletionCandidate: Identifiable, Hashable, Sendable {
     }
 }
 
-/// The SQL editor: an `NSTextView` with a line-number gutter, syntax highlighting,
+/// The SQL editor: an `NSTextView` with syntax highlighting,
 /// current-line highlighting, bracket matching and autocomplete (SPEC §13.1).
 public struct SQLEditorView: NSViewRepresentable {
     @Binding public var text: String
@@ -73,11 +73,24 @@ public struct SQLEditorView: NSViewRepresentable {
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = true
 
-        // A text view inside a scroll view needs all four of these. Without `maxSize` and
-        // a container size it keeps the height of its initial frame — zero — and then it
-        // lays out no text and accepts no typing.
+        // The whole editor is written against TextKit 1: the gutter measures lines with
+        // `layoutManager`, the current-line highlight uses `boundingRect(forGlyphRange:)`,
+        // and the highlighter edits `textStorage` directly. `NSTextView(frame:)` gives a
+        // TextKit 2 view on current macOS, which lays the text out but draws none of it —
+        // the gutter numbered the lines while the editor showed an empty page. Building
+        // the TextKit 1 stack by hand is what keeps the view and the code that drives it
+        // talking about the same thing.
         let contentSize = scrollView.contentSize
-        let textView = SQLTextView(frame: NSRect(origin: .zero, size: contentSize))
+        let storage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        storage.addLayoutManager(layoutManager)
+        let container = NSTextContainer(
+            size: NSSize(width: contentSize.width, height: CGFloat.greatestFiniteMagnitude)
+        )
+        layoutManager.addTextContainer(container)
+        let textView = SQLTextView(
+            frame: NSRect(origin: .zero, size: contentSize), textContainer: container
+        )
         textView.minSize = NSSize(width: 0, height: contentSize.height)
         textView.maxSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude
@@ -110,13 +123,9 @@ public struct SQLEditorView: NSViewRepresentable {
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = true
 
-        let gutter = LineNumberGutter(textView: textView)
-        scrollView.verticalRulerView = gutter
-        scrollView.hasVerticalRuler = true
-        scrollView.rulersVisible = true
+
 
         context.coordinator.textView = textView
-        context.coordinator.gutter = gutter
         context.coordinator.applyHighlighting()
         return scrollView
     }
@@ -159,7 +168,6 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
     var dialect: SQLDialect
     weak var delegate: (any SQLEditorDelegate)?
     weak var textView: SQLTextView?
-    weak var gutter: LineNumberGutter?
     var errorPosition: Int?
     var lastErrorPosition: Int?
     var hasTakenFocus = false
@@ -175,7 +183,7 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         guard let textView else { return }
         text = textView.string
         delegate?.editorDidChangeText(textView.string)
-        gutter?.needsDisplay = true
+        textView.needsDisplay = true
         scheduleHighlighting()
     }
 
@@ -248,7 +256,7 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
             }
         }
         storage.endEditing()
-        gutter?.needsDisplay = true
+        textView.needsDisplay = true
     }
 
     /// Underlines the bracket matching the one next to the cursor.

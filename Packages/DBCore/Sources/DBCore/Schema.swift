@@ -286,20 +286,20 @@ public enum TriggerEvent: String, Sendable, Hashable, Codable, CaseIterable {
 }
 
 public struct TriggerInfo: Sendable, Hashable, Codable, Identifiable {
-    public let name: String
-    public let timing: TriggerTiming
+    public var name: String
+    public var timing: TriggerTiming
     /// A PostgreSQL trigger can fire on several events; MySQL's fires on one.
-    public let events: [TriggerEvent]
+    public var events: [TriggerEvent]
     /// `FOR EACH ROW` when true, `FOR EACH STATEMENT` when false.
-    public let isRowLevel: Bool
+    public var isRowLevel: Bool
     /// PostgreSQL `WHEN (…)`. `nil` when unconditional.
-    public let condition: String?
+    public var condition: String?
     /// MySQL keeps the body here. PostgreSQL calls a function and leaves this nil.
-    public let body: String?
+    public var body: String?
     /// PostgreSQL's `EXECUTE FUNCTION` target, including its argument list.
-    public let functionCall: String?
+    public var functionCall: String?
     /// MySQL orders triggers on the same event with `FOLLOWS`/`PRECEDES`.
-    public let orderingHint: String?
+    public var orderingHint: String?
 
     public init(
         name: String,
@@ -338,11 +338,11 @@ public enum PartitionStrategy: String, Sendable, Hashable, Codable, CaseIterable
 }
 
 public struct PartitionInfo: Sendable, Hashable, Codable, Identifiable {
-    public let name: String
+    public var name: String
     /// The bound as the server spells it: `FROM ('2024-01-01') TO ('2025-01-01')`,
     /// `IN (1, 2)`, `WITH (MODULUS 4, REMAINDER 0)`, or MySQL's `VALUES LESS THAN (…)`.
-    public let bound: String?
-    public let approximateRowCount: Int64?
+    public var bound: String?
+    public var approximateRowCount: Int64?
 
     public init(name: String, bound: String? = nil, approximateRowCount: Int64? = nil) {
         self.name = name
@@ -354,12 +354,12 @@ public struct PartitionInfo: Sendable, Hashable, Codable, Identifiable {
 }
 
 public struct PartitioningInfo: Sendable, Hashable, Codable {
-    public let strategy: PartitionStrategy
+    public var strategy: PartitionStrategy
     /// The partition key expression, as the server renders it.
-    public let key: String
-    public let partitions: [PartitionInfo]
+    public var key: String
+    public var partitions: [PartitionInfo]
     /// MySQL `PARTITIONS n` for hash and key strategies.
-    public let partitionCount: Int?
+    public var partitionCount: Int?
 
     public init(
         strategy: PartitionStrategy,

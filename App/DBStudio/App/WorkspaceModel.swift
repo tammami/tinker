@@ -127,6 +127,9 @@ public final class WorkspaceModel {
     public var isInspectorVisible = false
     public var quickOpenQuery = ""
     public var isQuickOpenPresented = false
+    /// The table designer's two entry points (SPEC §15b.3, §15b.4).
+    public var isNewTablePresented = false
+    public var isStructureSyncPresented = false
     public var isHistoryPresented = false
     public var isExportPresented = false
     public var isSettingsPresented = false

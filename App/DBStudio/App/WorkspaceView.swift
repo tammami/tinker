@@ -108,6 +108,44 @@ public struct WorkspaceView: View {
                 openTable(table, connectionID, false)
             }
         }
+        .sheet(isPresented: boundWorkspace.isNewTablePresented) {
+            if let context = designerContext {
+                NewTableSheet(
+                    connectionID: context.connectionID,
+                    schema: context.schema,
+                    dialect: context.dialect,
+                    environment: environment,
+                    isProduction: context.isProduction,
+                    onCreated: { table in
+                        workspace.isNewTablePresented = false
+                        openTable(table, context.connectionID, false)
+                        controller.refresh()
+                    },
+                    onCancel: { workspace.isNewTablePresented = false }
+                )
+            } else {
+                noConnectionSheet("New table") { workspace.isNewTablePresented = false }
+            }
+        }
+        .sheet(isPresented: boundWorkspace.isStructureSyncPresented) {
+            if let context = designerContext, let table = selectedTableRef {
+                StructureSyncSheet(
+                    source: table,
+                    sourceConnectionID: context.connectionID,
+                    dialect: context.dialect,
+                    environment: environment,
+                    onGenerate: { connectionID, script in
+                        workspace.isStructureSyncPresented = false
+                        newQuery(connectionID, script)
+                    },
+                    onCancel: { workspace.isStructureSyncPresented = false }
+                )
+            } else {
+                noConnectionSheet("Structure sync needs a table tab open") {
+                    workspace.isStructureSyncPresented = false
+                }
+            }
+        }
         .sheet(isPresented: boundWorkspace.isHistoryPresented) {
             HistoryView(
                 environment: environment,
@@ -231,6 +269,9 @@ public struct WorkspaceView: View {
             case .table:
                 if let controller = tableControllers[tab.id] {
                     TableTabView(controller: controller, workspace: workspace, tab: tab)
+                        // Each tab gets its own view state; without this the Data/Structure
+                        // choice and the panes follow the user from one table to the next.
+                        .id(tab.id)
                 }
             case .query:
                 if let controller = queryControllers[tab.id] {
@@ -379,6 +420,41 @@ public struct WorkspaceView: View {
 
     func newQuery(_ connectionID: UUID, _ sql: String) {
         controller.newQueryTab(connectionID: connectionID, sql: sql)
+    }
+
+    // MARK: - Table designer
+
+    /// Where a new table would go: the schema of whatever is open, or the connection's own.
+    var designerContext: (connectionID: UUID, schema: SchemaRef, dialect: SQLDialect, isProduction: Bool)? {
+        guard let connectionID = workspace.selectedTab?.connectionID
+            ?? workspace.tabs.first?.connectionID
+            ?? environment.connections.first?.id,
+            let config = environment.connections.first(where: { $0.id == connectionID })
+        else { return nil }
+
+        let schema = selectedTableRef?.schemaRef
+            ?? SchemaRef(
+                database: config.database ?? "",
+                // MySQL's schema layer is the database itself; PostgreSQL's default is public.
+                schema: config.dialect == .mysql ? (config.database ?? "") : "public"
+            )
+        return (connectionID, schema, config.dialect, config.isProduction)
+    }
+
+    /// The table the front tab shows, when it is a table tab.
+    var selectedTableRef: TableRef? {
+        guard let tab = workspace.selectedTab, case let .table(ref) = tab.kind else { return nil }
+        return ref
+    }
+
+    func noConnectionSheet(_ message: String, dismiss: @escaping () -> Void) -> some View {
+        VStack(spacing: 12) {
+            Text(message).font(.headline)
+            Text("Open a connection first.").font(.callout).foregroundStyle(.secondary)
+            Button("OK", action: dismiss).keyboardShortcut(.defaultAction)
+        }
+        .padding(24)
+        .frame(minWidth: 320)
     }
 
     // MARK: - Commands

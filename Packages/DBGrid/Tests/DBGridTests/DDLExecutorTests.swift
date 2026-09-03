@@ -290,6 +290,164 @@ final class DDLExecutorTests: XCTestCase {
         }
     }
 
+    // MARK: - Column order
+
+    /// Only MySQL can move a column, and the server reports the new order back.
+    func testReorderingColumnsOnMySQL() async throws {
+        try await withSession { session, server in
+            let dialect = self.dialect(for: server)
+            guard dialect == .mysql else { return }
+            let ref = self.table(self.scratchName("order"), server, dialect: dialect)
+            await self.cleanUp(ref, session: session, dialect: dialect)
+
+            let generator = DDLGenerator(dialect: dialect)
+            let executor = DDLExecutor(session: session, dialect: dialect)
+            let id = ColumnDefinition(name: "id", type: "int", isNullable: false)
+            let name = ColumnDefinition(name: "name", type: "varchar(32)")
+            let email = ColumnDefinition(name: "email", type: "varchar(32)")
+            let current = TableDefinition(
+                ref: ref, columns: [id, name, email], primaryKey: ["id"]
+            )
+            _ = try await executor.run(generator.create(current))
+
+            var edited = current
+            edited.columns = [id, email, name]
+            let result = try await executor.run(generator.alter(from: current, to: edited))
+            XCTAssertTrue(result.isSuccess, result.errorText ?? "no error")
+
+            let (lease, connection) = try await session.lease()
+            defer { Task { await session.release(lease) } }
+            let columns = try await connection.introspector.columns(of: ref)
+            XCTAssertEqual(columns.map(\.name), ["id", "email", "name"])
+
+            await self.cleanUp(ref, session: session, dialect: dialect)
+        }
+    }
+
+    // MARK: - Triggers
+
+    func testCreatingAndDroppingATrigger() async throws {
+        try await withSession { session, server in
+            let dialect = self.dialect(for: server)
+            let ref = self.table(self.scratchName("trig"), server, dialect: dialect)
+            await self.cleanUp(ref, session: session, dialect: dialect)
+
+            let intType = dialect == .postgresql ? "integer" : "int"
+            let generator = DDLGenerator(dialect: dialect)
+            let executor = DDLExecutor(session: session, dialect: dialect)
+            let current = TableDefinition(
+                ref: ref,
+                columns: [
+                    ColumnDefinition(name: "id", type: intType, isNullable: false),
+                    ColumnDefinition(
+                        name: "touched", type: intType, isNullable: false, defaultExpression: "0"
+                    ),
+                ],
+                primaryKey: ["id"]
+            )
+            _ = try await executor.run(generator.create(current))
+
+            var edited = current
+            edited.triggers = [
+                dialect == .postgresql
+                    // The fixture's function is already in the schema.
+                    ? TriggerInfo(
+                        name: "designer_trig_bump", timing: .before, events: [.update],
+                        functionCall: "\"public\".\"bump_touched\"()"
+                    )
+                    : TriggerInfo(
+                        name: "designer_trig_bump", timing: .before, events: [.update],
+                        body: "SET NEW.touched = OLD.touched + 1"
+                    ),
+            ]
+            let added = try await executor.run(generator.alter(from: current, to: edited))
+            XCTAssertTrue(added.isSuccess, added.errorText ?? "no error")
+
+            let (lease, connection) = try await session.lease()
+            defer { Task { await session.release(lease) } }
+            var triggers = try await connection.introspector.triggers(of: ref)
+            XCTAssertEqual(triggers.map(\.name), ["designer_trig_bump"])
+            XCTAssertEqual(triggers.first?.timing, .before)
+            XCTAssertEqual(triggers.first?.events, [.update])
+
+            let dropped = try await executor.run(generator.alter(from: edited, to: current))
+            XCTAssertTrue(dropped.isSuccess, dropped.errorText ?? "no error")
+            triggers = try await connection.introspector.triggers(of: ref)
+            XCTAssertTrue(triggers.isEmpty)
+
+            await self.cleanUp(ref, session: session, dialect: dialect)
+        }
+    }
+
+    // MARK: - Partitions
+
+    func testAddingAndRemovingAPartition() async throws {
+        try await withSession { session, server in
+            let dialect = self.dialect(for: server)
+            let ref = self.table(self.scratchName("part"), server, dialect: dialect)
+            await self.cleanUp(ref, session: session, dialect: dialect)
+
+            let intType = dialect == .postgresql ? "integer" : "int"
+            let generator = DDLGenerator(dialect: dialect)
+            let executor = DDLExecutor(session: session, dialect: dialect)
+
+            // MySQL requires every partitioning column in the primary key.
+            var current = TableDefinition(
+                ref: ref,
+                columns: [
+                    ColumnDefinition(name: "id", type: intType, isNullable: false),
+                    ColumnDefinition(name: "bucket", type: intType, isNullable: false),
+                ],
+                primaryKey: ["id", "bucket"]
+            )
+            let firstBound = dialect == .postgresql
+                ? "FOR VALUES FROM (0) TO (10)"
+                : "VALUES LESS THAN (10)"
+            let secondBound = dialect == .postgresql
+                ? "FOR VALUES FROM (10) TO (20)"
+                : "VALUES LESS THAN (20)"
+
+            current.partitioning = PartitioningInfo(
+                strategy: .range,
+                key: "bucket",
+                partitions: [PartitionInfo(name: "designer_part_p0", bound: firstBound)]
+            )
+            let created = try await executor.run(generator.create(current))
+            XCTAssertTrue(created.isSuccess, created.errorText ?? "no error")
+
+            var edited = current
+            edited.partitioning = PartitioningInfo(
+                strategy: .range,
+                key: "bucket",
+                partitions: current.partitioning!.partitions
+                    + [PartitionInfo(name: "designer_part_p1", bound: secondBound)]
+            )
+            let added = try await executor.run(generator.alter(from: current, to: edited))
+            XCTAssertTrue(added.isSuccess, added.errorText ?? "no error")
+
+            let (lease, connection) = try await session.lease()
+            defer { Task { await session.release(lease) } }
+            let partitioning = try await connection.introspector.partitioning(of: ref)
+            XCTAssertEqual(
+                (partitioning?.partitions ?? []).map(\.name).sorted(),
+                ["designer_part_p0", "designer_part_p1"]
+            )
+
+            // Removing one: PostgreSQL detaches it into a table of its own, MySQL drops it.
+            let removed = try await executor.run(generator.alter(from: edited, to: current))
+            XCTAssertTrue(removed.isSuccess, removed.errorText ?? "no error")
+            let after = try await connection.introspector.partitioning(of: ref)
+            XCTAssertEqual((after?.partitions ?? []).map(\.name), ["designer_part_p0"])
+
+            if dialect == .postgresql {
+                // The detached partition is still a table and has to be cleaned up too.
+                let detached = self.table("designer_part_p1", server, dialect: dialect)
+                await self.cleanUp(detached, session: session, dialect: dialect)
+            }
+            await self.cleanUp(ref, session: session, dialect: dialect)
+        }
+    }
+
     // MARK: - Failure
 
     /// SPEC §15b.5: a failing statement leaves PostgreSQL untouched, and on MySQL the

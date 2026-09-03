@@ -90,6 +90,11 @@ public struct DDLGenerator: Sendable {
         }
         statements.append(GeneratedDDL(kind: .createTable, sql: create, table: definition.ref))
 
+        if dialect == .postgresql, let partitioning = definition.partitioning {
+            statements.append(contentsOf: partitioning.partitions.map {
+                addPartition($0, to: definition.ref)
+            })
+        }
         statements.append(contentsOf: definition.indexes.map {
             GeneratedDDL(kind: .createIndex, sql: createIndexSQL($0, on: definition.ref), table: definition.ref)
         })
@@ -124,6 +129,8 @@ public struct DDLGenerator: Sendable {
         // 2. Columns.
         statements.append(contentsOf: columnStatements(current, edited))
 
+        statements.append(contentsOf: columnOrderStatements(current, edited))
+
         // 3. Put the constraints back, now that the columns are what they should be.
         if primaryKeyChanged(current, edited), !edited.primaryKey.isEmpty {
             statements.append(GeneratedDDL(
@@ -136,6 +143,7 @@ public struct DDLGenerator: Sendable {
         statements.append(contentsOf: addedChecks(current, edited))
         statements.append(contentsOf: addedForeignKeys(current, edited))
         statements.append(contentsOf: addedTriggers(current, edited))
+        statements.append(contentsOf: partitionStatements(current, edited))
 
         // 4. Cosmetics last: they never block anything.
         statements.append(contentsOf: comments(for: edited, against: current))
@@ -524,6 +532,100 @@ public struct DDLGenerator: Sendable {
         return sql
     }
 
+    // MARK: - Column order
+
+    /// Moves columns that changed place, which only MySQL can do.
+    ///
+    /// PostgreSQL has no syntax for it: a column's position is its `attnum` and the server
+    /// offers no way to change it. The designer does not offer the control there, so this
+    /// returns nothing rather than emitting something that cannot work.
+    private func columnOrderStatements(
+        _ current: TableDefinition, _ edited: TableDefinition
+    ) -> [GeneratedDDL] {
+        guard dialect == .mysql else { return [] }
+        let before = current.columns.map(\.id)
+        let after = edited.columns.map(\.id)
+        // Only the columns present in both, in each order: an added or dropped column
+        // changes the sequence without anything having moved.
+        let survivingBefore = before.filter { after.contains($0) }
+        let survivingAfter = after.filter { before.contains($0) }
+        guard survivingBefore != survivingAfter else { return [] }
+
+        var statements: [GeneratedDDL] = []
+        for (index, column) in edited.columns.enumerated() {
+            // Every column is restated in its new place, because MySQL positions a column
+            // relative to another and a partial reorder leaves the rest where they were.
+            guard current.columns.contains(where: { $0.id == column.id }) else { continue }
+            let place = index == 0
+                ? "FIRST"
+                : "AFTER \(quote(edited.columns[index - 1].name))"
+            statements.append(GeneratedDDL(
+                kind: .alterColumn,
+                sql: "ALTER TABLE \(qualified(edited.ref)) MODIFY COLUMN \(columnClause(column)) \(place)",
+                table: edited.ref
+            ))
+        }
+        return statements
+    }
+
+    // MARK: - Partitions
+
+    /// Adds and removes partitions. Changing the strategy or the key is not offered:
+    /// both engines require the table to be rebuilt, which is a migration rather than an
+    /// edit (SPEC §15b.1).
+    private func partitionStatements(
+        _ current: TableDefinition, _ edited: TableDefinition
+    ) -> [GeneratedDDL] {
+        guard let editedPartitioning = edited.partitioning else { return [] }
+        let currentPartitions = current.partitioning?.partitions ?? []
+        let currentNames = Set(currentPartitions.map(\.name))
+        let editedNames = Set(editedPartitioning.partitions.map(\.name))
+
+        var statements: [GeneratedDDL] = []
+        for partition in currentPartitions where !editedNames.contains(partition.name) {
+            statements.append(dropPartition(partition, from: edited.ref))
+        }
+        for partition in editedPartitioning.partitions where !currentNames.contains(partition.name) {
+            statements.append(addPartition(partition, to: edited.ref))
+        }
+        return statements
+    }
+
+    private func addPartition(_ partition: PartitionInfo, to table: TableRef) -> GeneratedDDL {
+        let bound = partition.bound ?? "DEFAULT"
+        let sql = switch dialect {
+        case .postgresql:
+            // A PostgreSQL partition is a table of its own, created as part of the parent.
+            "CREATE TABLE \(Identifier.qualify([table.schema, partition.name], dialect: dialect)) "
+                + "PARTITION OF \(qualified(table)) \(bound)"
+        case .mysql:
+            "ALTER TABLE \(qualified(table)) ADD PARTITION "
+                + "(PARTITION \(quote(partition.name)) \(bound))"
+        }
+        return GeneratedDDL(kind: .partition, sql: sql, table: table)
+    }
+
+    /// PostgreSQL detaches, which keeps the rows in a table of their own. MySQL drops,
+    /// which discards them, so only one of the two is destructive.
+    private func dropPartition(_ partition: PartitionInfo, from table: TableRef) -> GeneratedDDL {
+        switch dialect {
+        case .postgresql:
+            GeneratedDDL(
+                kind: .partition,
+                sql: "ALTER TABLE \(qualified(table)) DETACH PARTITION "
+                    + "\(Identifier.qualify([table.schema, partition.name], dialect: dialect))",
+                table: table
+            )
+        case .mysql:
+            GeneratedDDL(
+                kind: .partition,
+                sql: "ALTER TABLE \(qualified(table)) DROP PARTITION \(quote(partition.name))",
+                table: table,
+                isDestructive: true
+            )
+        }
+    }
+
     // MARK: - Comments and options
 
     /// PostgreSQL keeps comments in their own statements; MySQL carries them inline, so
@@ -601,15 +703,22 @@ public struct DDLGenerator: Sendable {
     }
 
     private func partitionClause(_ partitioning: PartitioningInfo) -> String {
+        let head = "PARTITION BY \(partitioning.strategy.rawValue) (\(partitioning.key))"
         switch dialect {
         case .postgresql:
-            " PARTITION BY \(partitioning.strategy.rawValue) (\(partitioning.key))"
+            // A PostgreSQL partition is a table of its own, created separately.
+            return " \(head)"
         case .mysql:
+            // MySQL will not accept a RANGE or LIST table whose partitions are not declared
+            // here: "For RANGE partitions each partition must be defined".
             if let count = partitioning.partitionCount {
-                "\nPARTITION BY \(partitioning.strategy.rawValue) (\(partitioning.key)) PARTITIONS \(count)"
-            } else {
-                "\nPARTITION BY \(partitioning.strategy.rawValue) (\(partitioning.key))"
+                return "\n\(head) PARTITIONS \(count)"
             }
+            guard !partitioning.partitions.isEmpty else { return "\n\(head)" }
+            let list = partitioning.partitions
+                .map { "    PARTITION \(quote($0.name)) \($0.bound ?? "")" }
+                .joined(separator: ",\n")
+            return "\n\(head) (\n\(list)\n)"
         }
     }
 

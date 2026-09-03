@@ -53,7 +53,10 @@ public struct StructureView: View {
                 paneContent
             }
         }
-        .task {
+        // Keyed on the table: SwiftUI reuses this view when the front tab changes, and an
+        // unkeyed task would not run again, leaving the new tab reading "No structure
+        // loaded" forever.
+        .task(id: controller.table.id) {
             await controller.load()
             await controller.loadCollationsIfNeeded()
         }
@@ -208,7 +211,20 @@ private struct Cell<Content: View>: View {
 struct ColumnsPane: View {
     @Bindable var controller: StructureController
 
+    /// Which column the move buttons act on. -1 when none is chosen.
+    @State private var selectedColumn = -1
+
     private let widths: [CGFloat?] = [34, 180, 150, 60, 140, 46, 130, nil]
+
+    private func move(_ index: Int, by offset: Int) {
+        guard var columns = controller.edited?.columns,
+              columns.indices.contains(index),
+              columns.indices.contains(index + offset)
+        else { return }
+        columns.swapAt(index, index + offset)
+        controller.edited?.columns = columns
+        selectedColumn = index + offset
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -255,7 +271,7 @@ struct ColumnsPane: View {
                         .accessibilityLabel("\(column.name) auto increment")
                     }
                     Cell(width: widths[6]) {
-                        optionalField(index, \.collation, placeholder: "default")
+                        collationPicker(index)
                     }
                     Cell(width: widths[7]) {
                         optionalField(index, \.comment, placeholder: "")
@@ -275,13 +291,71 @@ struct ColumnsPane: View {
                         guard controller.edited?.columns.isEmpty == false else { return }
                         controller.edited?.columns.removeLast()
                     }
-                )
+                ) {
+                    // PostgreSQL has no syntax for moving a column, so the control is
+                    // absent there rather than present and disabled.
+                    if controller.dialect == .mysql {
+                        Divider().frame(height: 16)
+                        Button {
+                            move(selectedColumn, by: -1)
+                        } label: {
+                            Label("Move Up", systemImage: "arrow.up")
+                        }
+                        .labelStyle(.iconOnly)
+                        .disabled(selectedColumn <= 0)
+
+                        Button {
+                            move(selectedColumn, by: 1)
+                        } label: {
+                            Label("Move Down", systemImage: "arrow.down")
+                        }
+                        .labelStyle(.iconOnly)
+                        .disabled(
+                            selectedColumn < 0
+                                || selectedColumn >= (controller.edited?.columns.count ?? 0) - 1
+                        )
+
+                        Picker("", selection: $selectedColumn) {
+                            Text("Select a column").tag(-1)
+                            ForEach(
+                                Array((controller.edited?.columns ?? []).enumerated()),
+                                id: \.offset
+                            ) { offset, column in
+                                Text(column.name).tag(offset)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 160)
+                    }
+                }
             }
         }
     }
 
     private var defaultType: String {
         controller.dialect == .postgresql ? "text" : "varchar(255)"
+    }
+
+    /// The collations the server actually offers. A free-text field here is a typo waiting
+    /// to become a failed statement, so the list is the control.
+    @ViewBuilder
+    private func collationPicker(_ index: Int) -> some View {
+        if controller.collations.isEmpty {
+            optionalField(index, \.collation, placeholder: "default")
+        } else {
+            Picker("", selection: Binding(
+                get: { controller.edited?.columns[safe: index]?.collation ?? "" },
+                set: { controller.edited?.columns[safe: index]?.collation = $0.isEmpty ? nil : $0 }
+            )) {
+                Text("default").tag("")
+                ForEach(controller.collations) { collation in
+                    Text(collation.name).tag(collation.name)
+                }
+            }
+            .labelsHidden()
+            .disabled(!controller.isEditing)
+            .accessibilityLabel("collation")
+        }
     }
 
     private func field(
@@ -611,30 +685,157 @@ struct ChecksPane: View {
     }
 }
 
-// MARK: - Triggers and partitions, read-only for now
+// MARK: - Triggers
 
 struct TriggersPane: View {
     @Bindable var controller: StructureController
 
+    private var isPostgres: Bool { controller.dialect == .postgresql }
+
+    private var widths: [CGFloat?] {
+        isPostgres ? [170, 110, 150, 120, 170, nil] : [170, 110, 110, nil]
+    }
+
     var body: some View {
-        let triggers = controller.edited?.triggers ?? []
-        if triggers.isEmpty {
-            ContentUnavailableView("No triggers", systemImage: "bolt")
-        } else {
-            Table(triggers) {
-                TableColumn("Name", value: \.name)
-                TableColumn("Timing") { Text($0.timing.rawValue) }
-                TableColumn("Events") { Text($0.events.map(\.rawValue).joined(separator: ", ")) }
-                TableColumn("Level") { Text($0.isRowLevel ? "ROW" : "STATEMENT") }
-                TableColumn("When") { Text($0.condition ?? "—") }
-                TableColumn("Action") { Text($0.functionCall ?? $0.body ?? "—") }
+        VStack(spacing: 0) {
+            StructureGrid(headers: headers, rows: controller.edited?.triggers ?? []) { trigger, position in
+                HStack(spacing: 0) {
+                    Cell(width: widths[0]) {
+                        TextField("name", text: text(position, \.name))
+                            .textFieldStyle(.plain)
+                            .disabled(!controller.isEditing)
+                    }
+                    Cell(width: widths[1]) {
+                        Picker("", selection: value(position, \.timing, .before)) {
+                            ForEach(timings, id: \.self) { Text($0.rawValue).tag($0) }
+                        }
+                        .labelsHidden()
+                        .disabled(!controller.isEditing)
+                        .accessibilityLabel("\(trigger.name) timing")
+                    }
+                    Cell(width: widths[2]) { eventsField(position) }
+
+                    if isPostgres {
+                        Cell(width: widths[3]) {
+                            Picker("", selection: value(position, \.isRowLevel, true)) {
+                                Text("ROW").tag(true)
+                                Text("STATEMENT").tag(false)
+                            }
+                            .labelsHidden()
+                            .disabled(!controller.isEditing)
+                            .accessibilityLabel("\(trigger.name) level")
+                        }
+                        Cell(width: widths[4]) {
+                            TextField("when", text: optionalText(position, \.condition))
+                                .textFieldStyle(.plain)
+                                .disabled(!controller.isEditing)
+                        }
+                        Cell(width: widths[5]) {
+                            TextField("schema.function()", text: optionalText(position, \.functionCall))
+                                .textFieldStyle(.plain)
+                                .disabled(!controller.isEditing)
+                        }
+                    } else {
+                        Cell(width: widths[3]) {
+                            TextField("body", text: optionalText(position, \.body))
+                                .textFieldStyle(.plain)
+                                .disabled(!controller.isEditing)
+                        }
+                    }
+                }
+            }
+
+            if controller.isEditing {
+                PaneFooter(
+                    addTitle: "Add Trigger",
+                    onAdd: {
+                        let count = (controller.edited?.triggers.count ?? 0) + 1
+                        controller.edited?.triggers.append(TriggerInfo(
+                            name: "\(controller.table.name)_trg_\(count)",
+                            timing: .before,
+                            events: [.update],
+                            body: isPostgres ? nil : "SET NEW.id = NEW.id",
+                            functionCall: isPostgres ? "" : nil
+                        ))
+                    },
+                    onRemove: {
+                        guard controller.edited?.triggers.isEmpty == false else { return }
+                        controller.edited?.triggers.removeLast()
+                    }
+                )
             }
         }
     }
+
+    private var headers: [(title: String, width: CGFloat?)] {
+        isPostgres
+            ? [
+                ("Name", widths[0]), ("Timing", widths[1]), ("Events", widths[2]),
+                ("Level", widths[3]), ("When", widths[4]), ("Function", widths[5]),
+            ]
+            : [
+                ("Name", widths[0]), ("Timing", widths[1]), ("Event", widths[2]),
+                ("Body", widths[3]),
+            ]
+    }
+
+    /// `INSTEAD OF` is PostgreSQL's and applies to views, so MySQL is not offered it.
+    private var timings: [TriggerTiming] {
+        isPostgres ? [.before, .after, .insteadOf] : [.before, .after]
+    }
+
+    /// A PostgreSQL trigger can fire on several events; MySQL's fires on exactly one, so
+    /// anything past the first is dropped rather than written into SQL the server rejects.
+    private func eventsField(_ position: Int) -> some View {
+        TextField(isPostgres ? "INSERT, UPDATE" : "UPDATE", text: Binding(
+            get: {
+                (controller.edited?.triggers[safe: position]?.events ?? [])
+                    .map(\.rawValue).joined(separator: ", ")
+            },
+            set: { text in
+                let events = text.split(separator: ",").compactMap {
+                    TriggerEvent(rawValue: $0.trimmingCharacters(in: .whitespaces).uppercased())
+                }
+                controller.edited?.triggers[safe: position]?.events =
+                    isPostgres ? events : Array(events.prefix(1))
+            }
+        ))
+        .textFieldStyle(.plain)
+        .disabled(!controller.isEditing)
+    }
+
+    private func text(_ position: Int, _ path: WritableKeyPath<TriggerInfo, String>) -> Binding<String> {
+        Binding(
+            get: { controller.edited?.triggers[safe: position]?[keyPath: path] ?? "" },
+            set: { controller.edited?.triggers[safe: position]?[keyPath: path] = $0 }
+        )
+    }
+
+    private func optionalText(
+        _ position: Int, _ path: WritableKeyPath<TriggerInfo, String?>
+    ) -> Binding<String> {
+        Binding(
+            get: { controller.edited?.triggers[safe: position]?[keyPath: path] ?? "" },
+            set: { controller.edited?.triggers[safe: position]?[keyPath: path] = $0.isEmpty ? nil : $0 }
+        )
+    }
+
+    private func value<T>(
+        _ position: Int, _ path: WritableKeyPath<TriggerInfo, T>, _ fallback: T
+    ) -> Binding<T> {
+        Binding(
+            get: { controller.edited?.triggers[safe: position]?[keyPath: path] ?? fallback },
+            set: { controller.edited?.triggers[safe: position]?[keyPath: path] = $0 }
+        )
+    }
 }
+
+// MARK: - Partitions
 
 struct PartitionsPane: View {
     @Bindable var controller: StructureController
+
+    private let widths: [CGFloat?] = [220, nil, 110]
 
     var body: some View {
         if let partitioning = controller.edited?.partitioning {
@@ -644,20 +845,109 @@ struct PartitionsPane: View {
                         .font(.callout.weight(.medium))
                     Text(partitioning.key).font(.system(.callout, design: .monospaced))
                     Spacer()
+                    // Changing either means rebuilding the table, which is a migration
+                    // rather than an edit (SPEC §15b.1).
+                    Text("Strategy and key are fixed")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
                 }
                 .padding(10)
                 Divider()
-                Table(partitioning.partitions) {
-                    TableColumn("Partition", value: \.name)
-                    TableColumn("Bound") { Text($0.bound ?? "—") }
-                    TableColumn("Rows") {
-                        Text($0.approximateRowCount.map { "~\($0)" } ?? "—")
+
+                StructureGrid(
+                    headers: [("Partition", widths[0]), ("Bound", widths[1]), ("Rows", widths[2])],
+                    rows: partitioning.partitions
+                ) { partition, position in
+                    HStack(spacing: 0) {
+                        Cell(width: widths[0]) {
+                            TextField("name", text: Binding(
+                                get: { self.partition(position)?.name ?? "" },
+                                set: { self.setPartition(position, name: $0, bound: nil) }
+                            ))
+                            .textFieldStyle(.plain)
+                            .disabled(!controller.isEditing)
+                        }
+                        Cell(width: widths[1]) {
+                            TextField(boundPlaceholder, text: Binding(
+                                get: { self.partition(position)?.bound ?? "" },
+                                set: { self.setPartition(position, name: nil, bound: $0) }
+                            ))
+                            .textFieldStyle(.plain)
+                            .disabled(!controller.isEditing)
+                        }
+                        Cell(width: widths[2]) {
+                            Text(partition.approximateRowCount.map { "~\($0)" } ?? "—")
+                                .foregroundStyle(.secondary)
+                        }
                     }
+                }
+
+                if controller.isEditing {
+                    PaneFooter(
+                        addTitle: "Add Partition",
+                        onAdd: {
+                            let count = partitioning.partitions.count + 1
+                            appendPartition(PartitionInfo(
+                                name: "\(controller.table.name)_p\(count)",
+                                bound: boundPlaceholder
+                            ))
+                        },
+                        onRemove: { removeLastPartition() }
+                    )
                 }
             }
         } else {
-            ContentUnavailableView("Not partitioned", systemImage: "square.split.2x1")
+            ContentUnavailableView(
+                "Not partitioned",
+                systemImage: "square.split.2x1",
+                description: Text("Partitioning is declared when the table is created.")
+            )
         }
+    }
+
+    /// Each engine spells a bound its own way, so the placeholder shows the right shape.
+    private var boundPlaceholder: String {
+        controller.dialect == .postgresql ? "FOR VALUES FROM (0) TO (10)" : "VALUES LESS THAN (10)"
+    }
+
+    private func partition(_ position: Int) -> PartitionInfo? {
+        controller.edited?.partitioning?.partitions[safe: position]
+    }
+
+    private func setPartition(_ position: Int, name: String?, bound: String?) {
+        guard let partitioning = controller.edited?.partitioning,
+              let existing = partitioning.partitions[safe: position]
+        else { return }
+        var partitions = partitioning.partitions
+        partitions[position] = PartitionInfo(
+            name: name ?? existing.name,
+            bound: bound ?? existing.bound,
+            approximateRowCount: existing.approximateRowCount
+        )
+        controller.edited?.partitioning = PartitioningInfo(
+            strategy: partitioning.strategy, key: partitioning.key,
+            partitions: partitions, partitionCount: partitioning.partitionCount
+        )
+    }
+
+    private func appendPartition(_ partition: PartitionInfo) {
+        guard let partitioning = controller.edited?.partitioning else { return }
+        controller.edited?.partitioning = PartitioningInfo(
+            strategy: partitioning.strategy, key: partitioning.key,
+            partitions: partitioning.partitions + [partition],
+            partitionCount: partitioning.partitionCount
+        )
+    }
+
+    private func removeLastPartition() {
+        guard let partitioning = controller.edited?.partitioning,
+              !partitioning.partitions.isEmpty
+        else { return }
+        controller.edited?.partitioning = PartitioningInfo(
+            strategy: partitioning.strategy, key: partitioning.key,
+            partitions: partitioning.partitions.dropLast(),
+            partitionCount: partitioning.partitionCount
+        )
     }
 }
 
@@ -719,10 +1009,11 @@ struct TablePane: View {
 // MARK: - Shared
 
 /// Add and remove, the two buttons every pane needs.
-struct PaneFooter: View {
+struct PaneFooter<Extra: View>: View {
     let addTitle: String
     let onAdd: () -> Void
     let onRemove: () -> Void
+    @ViewBuilder var extra: Extra
 
     var body: some View {
         VStack(spacing: 0) {
@@ -731,11 +1022,18 @@ struct PaneFooter: View {
                 Button(action: onAdd) { Label(addTitle, systemImage: "plus") }
                 Button(action: onRemove) { Label("Remove", systemImage: "minus") }
                     .labelStyle(.iconOnly)
+                extra
                 Spacer()
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
         }
+    }
+}
+
+extension PaneFooter where Extra == EmptyView {
+    init(addTitle: String, onAdd: @escaping () -> Void, onRemove: @escaping () -> Void) {
+        self.init(addTitle: addTitle, onAdd: onAdd, onRemove: onRemove) { EmptyView() }
     }
 }
 

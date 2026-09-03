@@ -433,6 +433,185 @@ final class DDLGeneratorTests: XCTestCase {
         XCTAssertTrue(my().alter(from: definition, to: definition).isEmpty)
     }
 
+    // MARK: - Column order
+
+    func testMovingAColumnRestatesItAfterItsNewNeighbourOnMySQL() {
+        let id = ColumnDefinition(name: "id", type: "int", isNullable: false)
+        let name = ColumnDefinition(name: "name", type: "text")
+        let email = ColumnDefinition(name: "email", type: "text")
+        var current = base(myTable, idColumn: id, nameColumn: name)
+        current.columns.append(email)
+
+        var edited = current
+        edited.columns = [id, email, name]
+
+        let statements = my().alter(from: current, to: edited)
+        XCTAssertEqual(statements.map(\.sql), [
+            "ALTER TABLE `d`.`customers` MODIFY COLUMN `id` int NOT NULL FIRST",
+            "ALTER TABLE `d`.`customers` MODIFY COLUMN `email` text AFTER `id`",
+            "ALTER TABLE `d`.`customers` MODIFY COLUMN `name` text AFTER `email`",
+        ])
+    }
+
+    /// PostgreSQL cannot move a column at all, so nothing is emitted rather than SQL the
+    /// server would reject.
+    func testPostgresEmitsNothingForAReorder() {
+        let id = ColumnDefinition(name: "id", type: "integer", isNullable: false)
+        let name = ColumnDefinition(name: "name", type: "text")
+        let email = ColumnDefinition(name: "email", type: "text")
+        var current = base(pgTable, idColumn: id, nameColumn: name)
+        current.columns.append(email)
+        var edited = current
+        edited.columns = [id, email, name]
+
+        XCTAssertTrue(pg().alter(from: current, to: edited).isEmpty)
+    }
+
+    /// Adding a column changes the sequence without anything having moved.
+    func testAddingAColumnIsNotAReorder() {
+        let id = ColumnDefinition(name: "id", type: "int", isNullable: false)
+        let name = ColumnDefinition(name: "name", type: "text")
+        let current = base(myTable, idColumn: id, nameColumn: name)
+        var edited = current
+        edited.columns.append(ColumnDefinition(name: "email", type: "text"))
+
+        let kinds = my().alter(from: current, to: edited).map(\.kind)
+        XCTAssertEqual(kinds, [.addColumn], "no MODIFY statements for an append")
+    }
+
+    // MARK: - Partitions
+
+    func testAddingAPartition() {
+        let id = ColumnDefinition(name: "id", type: "integer", isNullable: false)
+        let taken = ColumnDefinition(name: "taken_at", type: "date", isNullable: false)
+        var current = TableDefinition(ref: pgTable, columns: [id, taken])
+        current.partitioning = PartitioningInfo(
+            strategy: .range, key: "taken_at",
+            partitions: [PartitionInfo(name: "m_2024", bound: "FOR VALUES FROM ('2024-01-01') TO ('2025-01-01')")]
+        )
+        var edited = current
+        edited.partitioning = PartitioningInfo(
+            strategy: .range, key: "taken_at",
+            partitions: current.partitioning!.partitions + [
+                PartitionInfo(name: "m_2025", bound: "FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')"),
+            ]
+        )
+
+        let statements = pg().alter(from: current, to: edited)
+        XCTAssertEqual(statements.map(\.kind), [.partition])
+        XCTAssertEqual(
+            statements[0].sql,
+            #"CREATE TABLE "public"."m_2025" PARTITION OF "public"."customers" FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')"#
+        )
+        XCTAssertFalse(statements[0].isDestructive)
+    }
+
+    /// PostgreSQL detaches and keeps the rows; MySQL drops them. Only one is destructive,
+    /// and the preview says which.
+    func testRemovingAPartitionDetachesOnPostgresAndDropsOnMySQL() {
+        func definition(_ table: TableRef) -> TableDefinition {
+            var value = TableDefinition(
+                ref: table,
+                columns: [ColumnDefinition(name: "id", type: "int", isNullable: false)]
+            )
+            value.partitioning = PartitioningInfo(
+                strategy: .range, key: "id",
+                partitions: [PartitionInfo(name: "p_old", bound: "VALUES LESS THAN (10)")]
+            )
+            return value
+        }
+
+        var pgCurrent = definition(pgTable)
+        var pgEdited = pgCurrent
+        pgEdited.partitioning = PartitioningInfo(strategy: .range, key: "id", partitions: [])
+        let pgStatements = pg().alter(from: pgCurrent, to: pgEdited)
+        XCTAssertEqual(
+            pgStatements.map(\.sql),
+            [#"ALTER TABLE "public"."customers" DETACH PARTITION "public"."p_old""#]
+        )
+        XCTAssertFalse(pgStatements[0].isDestructive, "detaching keeps the rows")
+        pgCurrent = pgEdited
+
+        var myCurrent = definition(myTable)
+        var myEdited = myCurrent
+        myEdited.partitioning = PartitioningInfo(strategy: .range, key: "id", partitions: [])
+        let myStatements = my().alter(from: myCurrent, to: myEdited)
+        XCTAssertEqual(
+            myStatements.map(\.sql),
+            ["ALTER TABLE `d`.`customers` DROP PARTITION `p_old`"]
+        )
+        XCTAssertTrue(myStatements[0].isDestructive, "MySQL discards the rows")
+        myCurrent = myEdited
+    }
+
+    func testAnUnpartitionedTableProducesNoPartitionStatements() {
+        let id = ColumnDefinition(name: "id", type: "integer", isNullable: false)
+        let name = ColumnDefinition(name: "name", type: "text")
+        let definition = base(pgTable, idColumn: id, nameColumn: name)
+        XCTAssertTrue(pg().alter(from: definition, to: definition).isEmpty)
+    }
+
+    // MARK: - Triggers
+
+    func testCreatingATriggerOnEachDialect() {
+        let id = ColumnDefinition(name: "id", type: "integer", isNullable: false)
+        let name = ColumnDefinition(name: "name", type: "text")
+        var current = base(pgTable, idColumn: id, nameColumn: name)
+        var edited = current
+        edited.triggers = [TriggerInfo(
+            name: "bump",
+            timing: .before,
+            events: [.update],
+            isRowLevel: true,
+            condition: "OLD.id IS NOT NULL",
+            functionCall: "\"public\".\"bump_touched\"()"
+        )]
+
+        let pgStatements = pg().alter(from: current, to: edited)
+        XCTAssertEqual(pgStatements.map(\.kind), [.createTrigger])
+        XCTAssertEqual(
+            pgStatements[0].sql,
+            #"CREATE TRIGGER "bump" BEFORE UPDATE ON "public"."customers" FOR EACH ROW WHEN (OLD.id IS NOT NULL) EXECUTE FUNCTION "public"."bump_touched"()"#
+        )
+
+        current = base(myTable, idColumn: id, nameColumn: name)
+        edited = current
+        edited.triggers = [TriggerInfo(
+            name: "bump", timing: .before, events: [.update],
+            body: "SET NEW.touched = OLD.touched + 1"
+        )]
+        let myStatements = my().alter(from: current, to: edited)
+        XCTAssertEqual(myStatements[0].sql, """
+            CREATE TRIGGER `bump` BEFORE UPDATE ON `d`.`customers` FOR EACH ROW
+            SET NEW.touched = OLD.touched + 1
+            """)
+    }
+
+    func testDroppingATriggerIsDestructiveAndScopedPerDialect() {
+        let id = ColumnDefinition(name: "id", type: "integer", isNullable: false)
+        let name = ColumnDefinition(name: "name", type: "text")
+        var pgCurrent = base(pgTable, idColumn: id, nameColumn: name)
+        pgCurrent.triggers = [TriggerInfo(name: "bump", timing: .before, events: [.update])]
+        var pgEdited = pgCurrent
+        pgEdited.triggers = []
+
+        let pgStatements = pg().alter(from: pgCurrent, to: pgEdited)
+        XCTAssertEqual(
+            pgStatements.map(\.sql),
+            [#"DROP TRIGGER "bump" ON "public"."customers""#]
+        )
+        XCTAssertTrue(pgStatements[0].isDestructive)
+
+        var myCurrent = base(myTable, idColumn: id, nameColumn: name)
+        myCurrent.triggers = [TriggerInfo(name: "bump", timing: .before, events: [.update])]
+        var myEdited = myCurrent
+        myEdited.triggers = []
+        XCTAssertEqual(
+            my().alter(from: myCurrent, to: myEdited).map(\.sql),
+            ["DROP TRIGGER `d`.`bump`"]
+        )
+    }
+
     // MARK: - Comments, rename, drop
 
     func testPostgresCommentsAreTheirOwnStatements() {

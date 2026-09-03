@@ -18,10 +18,16 @@ public struct TableTabView: View {
 
     @State private var mode: Mode = .data
 
+    /// The picker's own identity has to follow the tab, or switching tabs carries the
+    /// previous tab's choice across with it.
+    private var modeBinding: Binding<Mode> {
+        Binding(get: { mode }, set: { mode = $0 })
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Picker("", selection: $mode) {
+                Picker("", selection: modeBinding) {
                     ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)

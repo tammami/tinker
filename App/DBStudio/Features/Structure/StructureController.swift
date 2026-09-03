@@ -29,19 +29,49 @@ public final class StructureController {
     public var isEditing = false
     /// The collations the column editor offers.
     public private(set) var collations: [CollationInfo] = []
+    /// Set once a `.create` tab has actually built its table, so the caller can close the
+    /// sheet and open the table for real.
+    public private(set) var didCreate = false
 
+    /// Whether the tab is changing a table that exists or building one that does not
+    /// (SPEC §15b.3). A new table has nothing to diff against, so it emits `CREATE`.
+    public enum Mode: Sendable, Hashable {
+        case edit
+        case create
+    }
+
+    public let mode: Mode
     private let environment: AppEnvironment
 
     public init(
         table: TableRef,
         connectionID: UUID,
         dialect: SQLDialect,
-        environment: AppEnvironment
+        environment: AppEnvironment,
+        mode: Mode = .edit
     ) {
         self.table = table
         self.connectionID = connectionID
         self.dialect = dialect
         self.environment = environment
+        self.mode = mode
+        if mode == .create {
+            // A new table starts as one empty column, editable straight away: an editor
+            // that opens locked would have to be unlocked before anything could be typed.
+            let blank = TableDefinition(
+                ref: table,
+                columns: [ColumnDefinition(
+                    name: "id",
+                    type: dialect == .postgresql ? "integer" : "int",
+                    isNullable: false,
+                    isAutoIncrement: true
+                )],
+                primaryKey: ["id"]
+            )
+            loaded = TableDefinition(ref: table)
+            edited = blank
+            isEditing = true
+        }
     }
 
     private var session: ConnectionSession? { environment.session(for: connectionID) }
@@ -49,6 +79,8 @@ public final class StructureController {
     // MARK: - Loading
 
     public func load() async {
+        // Nothing to read: the table does not exist yet.
+        guard mode == .edit else { return }
         guard let session else {
             errorText = "No session for this connection"
             return
@@ -113,8 +145,15 @@ public final class StructureController {
 
     /// The statements that would take the server to what the user has edited.
     public var pendingStatements: [GeneratedDDL] {
-        guard let loaded, let edited else { return [] }
-        return DDLGenerator(dialect: dialect).alter(from: loaded, to: edited)
+        guard let edited else { return [] }
+        let generator = DDLGenerator(dialect: dialect)
+        switch mode {
+        case .create:
+            return edited.columns.isEmpty ? [] : generator.create(edited)
+        case .edit:
+            guard let loaded else { return [] }
+            return generator.alter(from: loaded, to: edited)
+        }
     }
 
     public var hasPendingChanges: Bool { !pendingStatements.isEmpty }
@@ -148,6 +187,11 @@ public final class StructureController {
         do {
             let result = try await executor.run(statements)
             await session.invalidateIntrospection()
+            if mode == .create, result.isSuccess {
+                // The table exists from here on, so the tab stops being a builder and
+                // starts reflecting the server like any other.
+                didCreate = true
+            }
             await load()
 
             if result.isSuccess {

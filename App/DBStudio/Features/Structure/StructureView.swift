@@ -75,6 +75,7 @@ public struct StructureView: View {
             await controller.load()
             await controller.loadCollationsIfNeeded()
         }
+        .refreshable { await controller.load(force: true) }
         .sheet(isPresented: isPreviewPresented) {
             DDLPreviewView(
                 statements: controller.pendingStatements,

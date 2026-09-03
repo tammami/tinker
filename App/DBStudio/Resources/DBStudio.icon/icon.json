@@ -1,31 +1,31 @@
 {
-  "fill" : {
-    "automatic-gradient" : "srgb:0.20,0.44,0.92,1.00"
+  "fill": {
+    "automatic-gradient": "srgb:0.18,0.37,0.78,1.00"
   },
-  "groups" : [
+  "groups": [
     {
-      "layers" : [
+      "layers": [
         {
-          "image-name" : "bulb.svg",
-          "name" : "Bulb"
+          "image-name": "tinker.svg",
+          "name": "Tinker"
         }
       ],
-      "shadow" : {
-        "kind" : "neutral",
-        "opacity" : 0.5
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
       },
-      "specular" : true,
-      "translucency" : {
-        "enabled" : true,
-        "value" : 0.5
+      "specular": true,
+      "translucency": {
+        "enabled": true,
+        "value": 0.5
       }
     }
   ],
-  "supported-platforms" : {
-    "circles" : [
+  "supported-platforms": {
+    "circles": [
       "watchOS"
     ],
-    "squares" : [
+    "squares": [
       "macOS"
     ]
   }

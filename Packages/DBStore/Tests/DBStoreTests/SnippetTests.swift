@@ -13,7 +13,22 @@ final class SnippetTests: XCTestCase {
         let store = try await temporaryStore()
         let version = try await store.database.userVersion
         XCTAssertEqual(version, StoreSchema.latestVersion)
-        XCTAssertGreaterThanOrEqual(version, 2)
+        XCTAssertGreaterThanOrEqual(version, 3)
+        await store.close()
+    }
+
+    func testHiddenColumnsRoundTripAndDefaultToNone() async throws {
+        let store = try await temporaryStore()
+        let id = UUID()
+        let none = try await store.gridPreferences(connectionID: id, table: "db.public.t")
+        XCTAssertTrue(none.hiddenColumns.isEmpty)
+        try await store.saveGridPreferences(
+            GridPreferences(columnWidths: ["id": 80], hiddenColumns: ["secret", "blob"]),
+            connectionID: id, table: "db.public.t"
+        )
+        let read = try await store.gridPreferences(connectionID: id, table: "db.public.t")
+        XCTAssertEqual(read.hiddenColumns, ["secret", "blob"])
+        XCTAssertEqual(read.columnWidths["id"], 80)
         await store.close()
     }
 

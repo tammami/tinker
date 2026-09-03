@@ -78,9 +78,11 @@ public final class StructureController {
 
     // MARK: - Loading
 
-    public func load() async {
+    public func load(force: Bool = false) async {
         // Nothing to read: the table does not exist yet.
         guard mode == .edit else { return }
+        // Already read: switching back to Structure shows it at once rather than re-reading.
+        if loaded != nil, !force, !isLoading { return }
         guard let session else {
             errorText = "No session for this connection"
             return
@@ -89,30 +91,28 @@ public final class StructureController {
         defer { isLoading = false }
         do {
             _ = try await session.connect()
-            let info = try await session.introspection(.tables(table.schemaRef)) {
+            let table = table
+            // Eight catalog reads, in flight together: the tab opens as fast as the slowest
+            // of them rather than the sum of all of them.
+            async let infoRead = session.introspection(.tables(table.schemaRef)) {
                 try await $0.tables(in: table.schemaRef)
-            }.first { $0.ref == table }
-            let columns = try await session.introspection(.columns(table)) {
-                try await $0.columns(of: table)
             }
-            let primaryKey = try await session.introspection(.primaryKey(table)) {
-                try await $0.primaryKey(of: table)
-            } ?? []
-            let indexes = try await session.introspection(.indexes(table)) {
-                try await $0.indexes(of: table)
-            }
-            let foreignKeys = try await session.introspection(.foreignKeys(table)) {
-                try await $0.foreignKeys(of: table)
-            }
-            let checks = try await session.introspection(.checkConstraints(table)) {
-                try await $0.checkConstraints(of: table)
-            }
-            let triggers = try await session.introspection(.triggers(table)) {
-                try await $0.triggers(of: table)
-            }
-            let partitioning = try await session.introspection(.partitioning(table)) {
-                try await $0.partitioning(of: table)
-            }
+            async let columnsRead = session.introspection(.columns(table)) { try await $0.columns(of: table) }
+            async let primaryKeyRead = session.introspection(.primaryKey(table)) { try await $0.primaryKey(of: table) }
+            async let indexesRead = session.introspection(.indexes(table)) { try await $0.indexes(of: table) }
+            async let foreignKeysRead = session.introspection(.foreignKeys(table)) { try await $0.foreignKeys(of: table) }
+            async let checksRead = session.introspection(.checkConstraints(table)) { try await $0.checkConstraints(of: table) }
+            async let triggersRead = session.introspection(.triggers(table)) { try await $0.triggers(of: table) }
+            async let partitioningRead = session.introspection(.partitioning(table)) { try await $0.partitioning(of: table) }
+
+            let info = try await infoRead.first { $0.ref == table }
+            let columns = try await columnsRead
+            let primaryKey = try await primaryKeyRead ?? []
+            let indexes = try await indexesRead
+            let foreignKeys = try await foreignKeysRead
+            let checks = try await checksRead
+            let triggers = try await triggersRead
+            let partitioning = try await partitioningRead
 
             let definition = TableDefinition(
                 table: table,

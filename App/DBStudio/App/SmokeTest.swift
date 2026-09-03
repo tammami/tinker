@@ -121,9 +121,8 @@ enum SmokeTest {
             let sidebar = SidebarModel(environment: environment)
             sidebar.rebuildRoots()
             check("sidebar lists the connection", !sidebar.roots.isEmpty)
-            guard let connectionItem = sidebar.roots.first(where: { $0.connectionID == config.id })
-                ?? sidebar.roots.first
-            else {
+            // The connection may sit inside a folder, so it is looked up, not taken from the top.
+            guard let connectionItem = sidebar.find(id: config.id.uuidString) else {
                 check("sidebar has a connection row", false)
                 exit(1)
             }

@@ -60,12 +60,11 @@ public final class ObjectsController {
         defer { isLoading = false }
         do {
             _ = try await session.connect()
-            objects = try await session.introspection(.tables(schema)) {
-                try await $0.tables(in: schema)
-            }
-            routines = (try? await session.introspection(.routines(schema)) {
-                try await $0.routines(in: schema)
-            }) ?? []
+            let schema = schema
+            async let tablesRead = session.introspection(.tables(schema)) { try await $0.tables(in: schema) }
+            async let routinesRead = session.introspection(.routines(schema)) { try await $0.routines(in: schema) }
+            objects = try await tablesRead
+            routines = (try? await routinesRead) ?? []
             errorText = nil
         } catch {
             errorText = (error as? DBError)?.errorDescription ?? String(describing: error)

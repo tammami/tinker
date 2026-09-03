@@ -19,6 +19,8 @@ public struct GridSelection: Equatable, Sendable {
     /// Where it currently ends. Keyboard navigation moves this.
     public var focusRow = 0
     public var focusColumn = 0
+    /// Rows added with ⌘-click outside the anchor–focus span, in `.rows` mode.
+    public var additionalRows: Set<Int> = []
 
     public init() {}
 
@@ -49,13 +51,36 @@ public struct GridSelection: Equatable, Sendable {
     public func contains(row: Int, column: Int, columnCount: Int) -> Bool {
         switch mode {
         case .cells: rowRange.contains(row) && columnRange.contains(column)
-        case .rows: rowRange.contains(row)
+        case .rows: rowRange.contains(row) || additionalRows.contains(row)
         case .columns: columnRange.contains(column)
         }
     }
 
     public func containsRow(_ row: Int) -> Bool {
-        mode == .columns ? true : rowRange.contains(row)
+        switch mode {
+        case .columns: true
+        case .rows: rowRange.contains(row) || additionalRows.contains(row)
+        case .cells: rowRange.contains(row)
+        }
+    }
+
+    /// ⌘-click on a row: adds it when it is out, drops it when it is in. Dropping the
+    /// anchor row hands the span over to the added rows so the selection survives.
+    public mutating func toggleRow(_ row: Int) {
+        if additionalRows.contains(row) {
+            additionalRows.remove(row)
+        } else if rowRange.contains(row) {
+            // Break the span into the rows that remain, keeping the focus meaningful.
+            let remaining = rowRange.filter { $0 != row }
+            additionalRows.formUnion(remaining)
+            if let first = remaining.first {
+                anchorRow = first
+                focusRow = first
+                additionalRows.remove(first)
+            }
+        } else {
+            additionalRows.insert(row)
+        }
     }
 
     /// The columns the selection covers, clamped to what exists.
@@ -66,14 +91,23 @@ public struct GridSelection: Equatable, Sendable {
         }
     }
 
-    /// The rows the selection covers, clamped to what exists.
+    /// The rows the selection covers, clamped to what exists, in ascending order.
     public func rows(totalRows: Int) -> [Int] {
         guard totalRows > 0 else { return [] }
-        return switch mode {
-        case .columns: Array(0 ..< totalRows)
-        case .cells, .rows: Array(rowRange.clamped(to: 0 ... (totalRows - 1)))
+        switch mode {
+        case .columns:
+            return Array(0 ..< totalRows)
+        case .cells:
+            return Array(rowRange.clamped(to: 0 ... (totalRows - 1)))
+        case .rows:
+            var set = Set(rowRange.clamped(to: 0 ... (totalRows - 1)))
+            set.formUnion(additionalRows.filter { $0 < totalRows })
+            return set.sorted()
         }
     }
+
+    /// How many rows are selected, counting the ⌘-clicked ones.
+    public func selectedRowCount(totalRows: Int) -> Int { rows(totalRows: totalRows).count }
 
     /// Moves the focus, collapsing the selection unless `extending`.
     public mutating func move(
@@ -90,11 +124,13 @@ public struct GridSelection: Equatable, Sendable {
             anchorRow = focusRow
             anchorColumn = focusColumn
             mode = .cells
+            additionalRows.removeAll()
         }
     }
 
     public mutating func selectAll(rowCount: Int, columnCount: Int) {
         mode = .cells
+        additionalRows.removeAll()
         anchorRow = 0
         anchorColumn = 0
         focusRow = max(0, rowCount - 1)

@@ -78,6 +78,9 @@ public enum StoreSchema {
             """,
             "CREATE INDEX snippets_name_idx ON snippets (name)",
         ]),
+        Migration(version: 3, name: "hidden columns", statements: [
+            "ALTER TABLE grid_prefs ADD COLUMN hidden_columns TEXT",
+        ]),
     ]
 
     /// Applies every migration the database has not seen yet.

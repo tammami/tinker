@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Tinker: a database being worked on. A stacked cylinder, and a spanner laid across
+       it at an angle. Coarse on purpose: at 16 points a faithful drawing turns to mush,
+       so the shapes are few and large. Drawn in a 100-unit space, scaled up. -->
+  <g transform="scale(10.24)">
+    <!-- The database: three discs in a stack. -->
+    <g fill="#FFFFFF" fill-opacity="0.96">
+      <ellipse cx="46" cy="30" rx="26" ry="9"/>
+      <path d="M20 30 V50 A26 9 0 0 0 72 50 V30 A26 9 0 0 1 20 30 Z"/>
+      <path d="M20 50 V70 A26 9 0 0 0 72 70 V50 A26 9 0 0 1 20 50 Z" fill-opacity="0.82"/>
+    </g>
+    <!-- Grooves between the discs, so the stack reads as a stack. -->
+    <g fill="none" stroke="#2E5FC7" stroke-opacity="0.55" stroke-width="2.2">
+      <path d="M20 50 A26 9 0 0 0 72 50"/>
+      <path d="M20 70 A26 9 0 0 0 72 70"/>
+    </g>
+    <!-- The spanner: an open jaw at the top right, a shaft down to the lower left. -->
+    <g transform="rotate(40 66 44)">
+      <rect x="61" y="36" width="10" height="46" rx="4" fill="#FFD166"/>
+      <path d="M56 22 h20 v14 l-6 5 h-8 l-6 -5 Z" fill="#FFD166"/>
+      <rect x="62.5" y="17" width="7" height="12" rx="1.5" fill="#FFD166" fill-opacity="0"/>
+      <path d="M60 22 v-6 h4 v6 M68 22 v-6 h4 v6" fill="#FFD166"/>
+      <rect x="63" y="27" width="6" height="8" fill="#2E5FC7" fill-opacity="0.9"/>
+    </g>
+  </g>
+</svg>

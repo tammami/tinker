@@ -86,8 +86,16 @@ struct Badge: View {
 struct KeyCap: View {
     let keys: String
 
+    /// A combination is spaced out — `⌘ ⇧ U` — so each key reads on its own; a single
+    /// key or a word such as `esc` stays as it is.
+    private var spaced: String {
+        let modifiers: Set<Character> = ["⌘", "⇧", "⌥", "⌃"]
+        guard keys.contains(where: { modifiers.contains($0) }), keys.count > 1 else { return keys }
+        return keys.map(String.init).joined(separator: " ")
+    }
+
     var body: some View {
-        Text(keys)
+        Text(spaced)
             .font(.caption2.monospaced())
             .padding(.horizontal, DesignTokens.Spacing.xs + 2)
             .padding(.vertical, DesignTokens.Spacing.xs - 1)

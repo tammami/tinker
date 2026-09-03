@@ -25,6 +25,9 @@ public protocol DataGridDelegate: AnyObject {
     func gridDidRequestDeleteRows()
     func gridDidRequestAddRow()
     func gridDidRequestAutosize(column: Int)
+    /// The header's context menu: hide this column, or bring every hidden one back.
+    func gridDidRequestHideColumn(_ column: Int)
+    func gridDidRequestShowAllColumns()
 }
 
 public extension DataGridDelegate {
@@ -37,6 +40,8 @@ public extension DataGridDelegate {
     func gridDidRequestDeleteRows() {}
     func gridDidRequestAddRow() {}
     func gridDidRequestAutosize(column: Int) {}
+    func gridDidRequestHideColumn(_ column: Int) {}
+    func gridDidRequestShowAllColumns() {}
 }
 
 /// The data grid: an `NSTableView` in an `NSScrollView`, wrapped for SwiftUI.
@@ -47,6 +52,8 @@ public struct DataGridView: NSViewRepresentable {
     public let model: GridModel
     @Binding public var selection: GridSelection
     public let columnWidths: [String: Double]
+    /// Columns left out of the table, by name. The model keeps them; only the view skips them.
+    public let hiddenColumns: Set<String>
     public weak var delegate: (any DataGridDelegate)?
     /// Bumped by the owner whenever the model's contents changed, so the view reloads.
     public let revision: Int
@@ -55,12 +62,14 @@ public struct DataGridView: NSViewRepresentable {
         model: GridModel,
         selection: Binding<GridSelection>,
         columnWidths: [String: Double] = [:],
+        hiddenColumns: Set<String> = [],
         revision: Int,
         delegate: (any DataGridDelegate)? = nil
     ) {
         self.model = model
         _selection = selection
         self.columnWidths = columnWidths
+        self.hiddenColumns = hiddenColumns
         self.revision = revision
         self.delegate = delegate
     }
@@ -90,6 +99,10 @@ public struct DataGridView: NSViewRepresentable {
         tableView.delegate = context.coordinator
         tableView.target = context.coordinator
         tableView.doubleAction = #selector(GridCoordinator.handleDoubleClick)
+        // The header answers right-clicks with Hide Column / Show All Columns.
+        let header = GridHeaderView()
+        header.controller = context.coordinator
+        tableView.headerView = header
 
         let scrollView = NSScrollView()
         scrollView.documentView = tableView
@@ -114,6 +127,7 @@ public struct DataGridView: NSViewRepresentable {
         coordinator.selection = selection
         coordinator.selectionBinding = $selection
         coordinator.storedColumnWidths = columnWidths
+        coordinator.hiddenColumns = hiddenColumns
         if coordinator.revision != revision {
             coordinator.revision = revision
             coordinator.rebuildColumnsIfNeeded()
@@ -141,6 +155,7 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
     weak var scrollView: NSScrollView?
     var revision = -1
     var storedColumnWidths: [String: Double] = [:]
+    var hiddenColumns: Set<String> = []
 
     private var builtColumnNames: [String] = []
     /// Kept so the observer's lifetime matches the coordinator's; the notification centre
@@ -155,8 +170,13 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
 
     // MARK: - Columns
 
+    /// The model columns the table shows, in model order.
+    var visibleColumnNames: [String] {
+        model.columns.map(\.name).filter { !hiddenColumns.contains($0) }
+    }
+
     func rebuildColumnsIfNeeded() {
-        guard builtColumnNames != model.columns.map(\.name) else { return }
+        guard builtColumnNames != visibleColumnNames else { return }
         rebuildColumns()
     }
 
@@ -213,7 +233,7 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         gutter.resizingMask = []
         tableView.addTableColumn(gutter)
 
-        for meta in model.columns {
+        for meta in model.columns where !hiddenColumns.contains(meta.name) {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(meta.name))
             column.headerCell = GridHeaderCell(textCell: meta.name)
             column.title = meta.name
@@ -225,8 +245,43 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
             column.resizingMask = .userResizingMask
             tableView.addTableColumn(column)
         }
-        builtColumnNames = model.columns.map(\.name)
+        builtColumnNames = visibleColumnNames
         tableView.reloadData()
+    }
+
+    /// The header's menu for a column position (nil for the gutter or empty space).
+    func headerMenu(forPosition position: Int?) -> NSMenu {
+        let menu = NSMenu()
+        if let position, let column = modelColumn(atPosition: position) {
+            let hide = NSMenuItem(title: "Hide “\(model.columns[column].name)”", action: #selector(hideColumn(_:)), keyEquivalent: "")
+            hide.target = self
+            hide.representedObject = column
+            hide.image = NSImage(systemSymbolName: "eye.slash", accessibilityDescription: nil)
+            menu.addItem(hide)
+            let fit = NSMenuItem(title: "Size to Fit", action: #selector(autosize(_:)), keyEquivalent: "")
+            fit.target = self
+            fit.representedObject = column
+            menu.addItem(fit)
+        }
+        if !hiddenColumns.isEmpty {
+            if menu.items.isEmpty == false { menu.addItem(.separator()) }
+            let show = NSMenuItem(
+                title: "Show All Columns (\(hiddenColumns.count) hidden)", action: #selector(showAllColumns(_:)), keyEquivalent: ""
+            )
+            show.target = self
+            show.image = NSImage(systemSymbolName: "eye", accessibilityDescription: nil)
+            menu.addItem(show)
+        }
+        return menu
+    }
+
+    @objc private func hideColumn(_ sender: NSMenuItem) {
+        guard let column = sender.representedObject as? Int else { return }
+        delegate?.gridDidRequestHideColumn(column)
+    }
+
+    @objc private func showAllColumns(_ sender: NSMenuItem) {
+        delegate?.gridDidRequestShowAllColumns()
     }
 
     /// A first guess at column width from the type, so a table of integers is not as wide
@@ -428,17 +483,36 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         }
     }
 
-    /// Selects a whole row, or extends the row selection when shift is held, so one click
-    /// takes one row and shift-click takes the span (SPEC §12.4).
-    func handleRowClick(row: Int, extending: Bool) {
+    /// Selects a whole row; shift extends the span, command adds or removes single rows,
+    /// the way a Finder list or a spreadsheet behaves.
+    func handleRowClick(row: Int, extending: Bool, toggling: Bool = false) {
         var new = selection
-        if extending, new.mode == .rows {
+        if toggling, new.mode == .rows {
+            new.toggleRow(row)
+        } else if extending, new.mode == .rows {
             new.focusRow = row
         } else {
             new = GridSelection(row: row, column: 0, mode: .rows)
         }
         new.focusColumn = max(0, model.columns.count - 1)
         new.anchorColumn = 0
+        setSelection(new)
+    }
+
+    /// Extends the selection to the row under a drag that began in the gutter.
+    func handleRowDrag(to row: Int) {
+        guard selection.mode == .rows, selection.focusRow != row else { return }
+        var new = selection
+        new.focusRow = row
+        setSelection(new)
+    }
+
+    /// Extends a cell selection to the cell under a drag.
+    func handleCellDrag(to row: Int, column: Int) {
+        guard selection.mode == .cells, selection.focusRow != row || selection.focusColumn != column else { return }
+        var new = selection
+        new.focusRow = row
+        new.focusColumn = column
         setSelection(new)
     }
 
@@ -481,6 +555,17 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         editor.frame = cell.bounds
         editor.autoresizingMask = [.width, .height]
         tableView.window?.makeFirstResponder(editor)
+    }
+
+    /// How far to move to land on the next column that is shown, skipping hidden ones.
+    func visibleStep(from column: Int, direction: Int) -> Int {
+        var step = 1
+        var probe = column + direction
+        while model.columns.indices.contains(probe), hiddenColumns.contains(model.columns[probe].name) {
+            step += 1
+            probe += direction
+        }
+        return model.columns.indices.contains(probe) ? step : 0
     }
 
     // MARK: - Context menu
@@ -596,12 +681,20 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         let columnCount = model.columns.count
         guard rowCount > 0, columnCount > 0 else { return false }
 
+        // ⌘A selects everything; the menu's Select All never reaches an NSTableView cell grid.
+        if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "a" {
+            var all = selection
+            all.selectAll(rowCount: rowCount, columnCount: columnCount)
+            setSelection(all)
+            return true
+        }
+
         var new = selection
         switch event.keyCode {
         case 126: new.move(rowDelta: -1, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
         case 125: new.move(rowDelta: 1, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
-        case 123: new.move(rowDelta: 0, columnDelta: -1, rowCount: rowCount, columnCount: columnCount, extending: extending)
-        case 124: new.move(rowDelta: 0, columnDelta: 1, rowCount: rowCount, columnCount: columnCount, extending: extending)
+        case 123: new.move(rowDelta: 0, columnDelta: -visibleStep(from: selection.focusColumn, direction: -1), rowCount: rowCount, columnCount: columnCount, extending: extending)
+        case 124: new.move(rowDelta: 0, columnDelta: visibleStep(from: selection.focusColumn, direction: 1), rowCount: rowCount, columnCount: columnCount, extending: extending)
         case 115: new.move(rowDelta: -rowCount, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
         case 119: new.move(rowDelta: rowCount, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
         case 116: new.move(rowDelta: -30, columnDelta: 0, rowCount: rowCount, columnCount: columnCount, extending: extending)
@@ -629,6 +722,10 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
 /// The table view, which forwards the keys the grid owns to its coordinator.
 public final class GridTableView: NSTableView {
     weak var controller: GridCoordinator?
+    /// Where the current mouse drag began: in the row gutter, or on a cell.
+    private var dragOrigin: DragOrigin?
+
+    private enum DragOrigin { case gutter, cell }
 
     public override var acceptsFirstResponder: Bool { true }
 
@@ -667,22 +764,51 @@ public final class GridTableView: NSTableView {
         }
         window?.makeFirstResponder(self)
         let extending = event.modifierFlags.contains(.shift)
+        let toggling = event.modifierFlags.contains(.command)
         let isRowGutter = MainActor.assumeIsolated {
             controller?.modelColumn(atPosition: position) == nil
         }
+        dragOrigin = isRowGutter ? .gutter : .cell
         MainActor.assumeIsolated {
             guard let controller else { return }
             if isRowGutter {
-                controller.handleRowClick(row: row, extending: extending)
+                controller.handleRowClick(row: row, extending: extending, toggling: toggling)
             } else if let column = controller.modelColumn(atPosition: position) {
                 controller.handleClick(row: row, column: column, extending: extending)
             }
         }
-        // Dragging from the gutter extends the row selection, the way a spreadsheet does.
         if isRowGutter { return }
         if event.clickCount == 2 {
             MainActor.assumeIsolated { controller?.beginEditingFocusedCell() }
         }
+    }
+
+    /// Dragging extends the selection: rows when it began in the gutter, cells otherwise.
+    public override func mouseDragged(with event: NSEvent) {
+        guard let dragOrigin else {
+            super.mouseDragged(with: event)
+            return
+        }
+        let point = convert(event.locationInWindow, from: nil)
+        let row = max(0, min(numberOfRows - 1, self.row(at: point) < 0 ? (point.y < 0 ? 0 : numberOfRows - 1) : self.row(at: point)))
+        let position = column(at: point)
+        MainActor.assumeIsolated {
+            guard let controller else { return }
+            switch dragOrigin {
+            case .gutter:
+                controller.handleRowDrag(to: row)
+            case .cell:
+                if position >= 0, let column = controller.modelColumn(atPosition: position) {
+                    controller.handleCellDrag(to: row, column: column)
+                }
+            }
+        }
+        autoscroll(with: event)
+    }
+
+    public override func mouseUp(with event: NSEvent) {
+        dragOrigin = nil
+        super.mouseUp(with: event)
     }
 }
 
@@ -720,5 +846,21 @@ final class GridInlineEditor: NSTextField {
         removeFromSuperview()
         if committing { onCommit?(text) }
         window?.makeFirstResponder(window?.contentView)
+    }
+}
+
+
+/// The header view, which offers Hide Column and Show All Columns on right-click.
+final class GridHeaderView: NSTableHeaderView {
+    weak var controller: GridCoordinator?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        let position = column(at: point)
+        var menu: NSMenu?
+        MainActor.assumeIsolated {
+            menu = controller?.headerMenu(forPosition: position >= 0 ? position : nil)
+        }
+        return menu
     }
 }

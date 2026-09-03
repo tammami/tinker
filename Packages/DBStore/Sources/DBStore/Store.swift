@@ -41,19 +41,23 @@ public struct GridPreferences: Sendable, Hashable, Codable {
     public var columnWidths: [String: Double]
     public var sort: [GridSortTerm]
     public var filter: [StoredFilterRule]
+    /// Columns the person has hidden for this table, by name.
+    public var hiddenColumns: [String]
 
     public init(
         columnWidths: [String: Double] = [:],
         sort: [GridSortTerm] = [],
-        filter: [StoredFilterRule] = []
+        filter: [StoredFilterRule] = [],
+        hiddenColumns: [String] = []
     ) {
         self.columnWidths = columnWidths
         self.sort = sort
         self.filter = filter
+        self.hiddenColumns = hiddenColumns
     }
 
     public static let empty = GridPreferences()
-    public var isEmpty: Bool { columnWidths.isEmpty && sort.isEmpty && filter.isEmpty }
+    public var isEmpty: Bool { columnWidths.isEmpty && sort.isEmpty && filter.isEmpty && hiddenColumns.isEmpty }
 }
 
 /// A persisted sort term. Mirrors `DBSQL.PagePlanner.SortTerm` without `DBStore`
@@ -419,7 +423,7 @@ public actor DBStore {
     public func gridPreferences(connectionID: UUID, table: String) async throws -> GridPreferences {
         let rows = try await database.query(
             """
-            SELECT column_widths, sort, filter FROM grid_prefs
+            SELECT column_widths, sort, filter, hidden_columns FROM grid_prefs
             WHERE connection_id = ? AND table_qualified_name = ?
             """,
             [.text(connectionID.uuidString), .text(table)]
@@ -432,7 +436,8 @@ public actor DBStore {
         return GridPreferences(
             columnWidths: decode("column_widths", as: [String: Double].self, default: [:]),
             sort: decode("sort", as: [GridSortTerm].self, default: []),
-            filter: decode("filter", as: [StoredFilterRule].self, default: [])
+            filter: decode("filter", as: [StoredFilterRule].self, default: []),
+            hiddenColumns: decode("hidden_columns", as: [String].self, default: [])
         )
     }
 
@@ -446,18 +451,20 @@ public actor DBStore {
         }
         try await database.execute(
             """
-            INSERT INTO grid_prefs (connection_id, table_qualified_name, column_widths, sort, filter)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO grid_prefs (connection_id, table_qualified_name, column_widths, sort, filter, hidden_columns)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(connection_id, table_qualified_name) DO UPDATE SET
                 column_widths = excluded.column_widths,
                 sort = excluded.sort,
-                filter = excluded.filter
+                filter = excluded.filter,
+                hidden_columns = excluded.hidden_columns
             """,
             [
                 .text(connectionID.uuidString), .text(table),
                 try encodeText(preferences.columnWidths),
                 try encodeText(preferences.sort),
                 try encodeText(preferences.filter),
+                try encodeText(preferences.hiddenColumns),
             ]
         )
     }

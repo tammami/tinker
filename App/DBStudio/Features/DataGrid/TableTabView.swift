@@ -24,6 +24,7 @@ public struct TableTabView: View {
     }
 
     @State private var mode: Mode = .data
+    @State private var isColumnsPopoverShown = false
 
     public var body: some View {
         VStack(spacing: 0) {
@@ -95,6 +96,17 @@ public struct TableTabView: View {
                 .buttonStyle(.borderless)
                 .help("Show or hide the inspector (⌘⌥I)")
 
+                Button {
+                    isColumnsPopoverShown = true
+                } label: {
+                    Label(controller.hiddenColumns.isEmpty ? "Columns" : "Columns (\(controller.hiddenColumns.count) hidden)", systemImage: Icon.column)
+                }
+                .buttonStyle(.borderless)
+                .help("Choose which columns the grid shows")
+                .popover(isPresented: $isColumnsPopoverShown, arrowEdge: .bottom) {
+                    ColumnsPopover(controller: controller)
+                }
+
                 BarDivider()
 
                 IconButton(icon: Icon.add, label: "Add row (⌘+)") { controller.addRow() }
@@ -146,6 +158,7 @@ public struct TableTabView: View {
                         model: model,
                         selection: $controller.selection,
                         columnWidths: controller.columnWidths,
+                        hiddenColumns: controller.hiddenColumns,
                         revision: controller.revision,
                         delegate: controller
                     )
@@ -234,9 +247,13 @@ public struct TableTabView: View {
             pager
             Text(controller.statusText)
             Spacer()
-            if controller.selection.rowSpan > 1 || controller.selection.columnSpan > 1 {
-                Text("\(controller.selection.rowSpan)×\(controller.selection.columnSpan) selected")
-                    .monospacedDigit()
+            if let model = controller.model {
+                let rows = controller.selection.selectedRowCount(totalRows: model.displayRowCount)
+                if controller.selection.mode == .rows, rows > 0 {
+                    Text("\(rows) row\(rows == 1 ? "" : "s") selected").monospacedDigit()
+                } else if controller.selection.rowSpan > 1 || controller.selection.columnSpan > 1 {
+                    Text("\(controller.selection.rowSpan)×\(controller.selection.columnSpan) selected").monospacedDigit()
+                }
             }
             if let model = controller.model, model.edits.pendingStatementCount > 0 {
                 Button("Discard") { controller.discardEdits() }
@@ -266,5 +283,52 @@ public struct TableTabView: View {
             isProduction: config.isProduction,
             tab: tab
         )
+    }
+}
+
+
+/// The list of a table's columns with a checkbox each: what the grid shows.
+struct ColumnsPopover: View {
+    @Bindable var controller: TableTabController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Columns").font(.headline)
+                Spacer()
+                Button("Show All") { controller.showAllColumns() }
+                    .controlSize(.small)
+                    .disabled(controller.hiddenColumns.isEmpty)
+            }
+            .padding(.horizontal, DesignTokens.Spacing.lg)
+            .padding(.vertical, DesignTokens.Spacing.md)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                    ForEach(controller.columnsInfo) { column in
+                        Toggle(isOn: Binding(
+                            get: { !controller.hiddenColumns.contains(column.name) },
+                            set: { shown in controller.setColumn(column.name, hidden: !shown) }
+                        )) {
+                            HStack(spacing: DesignTokens.Spacing.sm) {
+                                Text(column.name).lineLimit(1)
+                                Text(column.nativeType).font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                                if column.isPrimaryKey { Badge(text: "PK", color: .accentColor) }
+                            }
+                        }
+                        .toggleStyle(.checkbox)
+                    }
+                }
+                .padding(DesignTokens.Spacing.lg)
+            }
+            .frame(maxHeight: 360)
+            Divider()
+            Text("Hidden columns are remembered for this table. Right-click a column heading to hide it.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, DesignTokens.Spacing.lg)
+                .padding(.vertical, DesignTokens.Spacing.sm)
+        }
+        .frame(width: 320)
     }
 }

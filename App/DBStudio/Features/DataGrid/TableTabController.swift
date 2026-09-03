@@ -17,6 +17,8 @@ public final class TableTabController: DataGridDelegate {
     /// Bumped whenever the grid's contents changed, which is what makes the view reload.
     public private(set) var revision = 0
     public var columnWidths: [String: Double] = [:]
+    /// Columns kept off the grid for this table. Remembered with the widths.
+    public var hiddenColumns: Set<String> = []
     public var filterRules: [FilterRule] = []
     /// The quick search across every column. Transient: it is not remembered per table.
     public var quickSearch = ""
@@ -67,9 +69,10 @@ public final class TableTabController: DataGridDelegate {
     }
 
     /// Re-reads the grid after the designer changed the table underneath it, so a new
-    /// primary key makes the grid editable without the tab being reopened (SPEC §15b.5).
+    /// primary key makes the grid editable without the tab being reopened.
     public func reloadAfterStructureChange() async {
         await start()
+        await structure.load(force: true)
     }
 
     /// Reads the table's shape, restores remembered preferences, and loads the first page.
@@ -100,6 +103,7 @@ public final class TableTabController: DataGridDelegate {
                 connectionID: connectionID, table: table.id
             )
             columnWidths = preferences.columnWidths
+            hiddenColumns = Set(preferences.hiddenColumns)
             filterRules = preferences.filter.compactMap { stored in
                 guard let op = FilterOperator(rawValue: stored.op) else { return nil }
                 return FilterRule(column: stored.column, op: op, values: stored.values)
@@ -136,6 +140,12 @@ public final class TableTabController: DataGridDelegate {
             await model.load(page: 0)
             bumpRevision()
             updateStatus()
+            // The rows are on screen; read the structure now so the Structure switch is
+            // instant. It goes through the same cache, so nothing is read twice.
+            Task { [weak self] in
+                await self?.structure.load()
+                await self?.structure.loadCollationsIfNeeded()
+            }
         } catch {
             errorText = (error as? DBError)?.errorDescription ?? String(describing: error)
         }
@@ -450,7 +460,8 @@ public final class TableTabController: DataGridDelegate {
         let preferences = GridPreferences(
             columnWidths: columnWidths,
             sort: model.sort.map { GridSortTerm(column: $0.column, ascending: $0.ascending) },
-            filter: filterRules.map { StoredFilterRule(column: $0.column, op: $0.op.rawValue, values: $0.values) }
+            filter: filterRules.map { StoredFilterRule(column: $0.column, op: $0.op.rawValue, values: $0.values) },
+            hiddenColumns: hiddenColumns.sorted()
         )
         await environment.saveGridPreferences(
             preferences, connectionID: connectionID, table: table.id
@@ -504,6 +515,27 @@ public final class TableTabController: DataGridDelegate {
     public func gridHasReference(row: Int, column: Int) -> Bool {
         referenceTarget(row: row, column: column) != nil
     }
+
+    /// Hides or shows one column; the change is drawn at once and remembered.
+    public func setColumn(_ name: String, hidden: Bool) {
+        if hidden { hiddenColumns.insert(name) } else { hiddenColumns.remove(name) }
+        bumpRevision()
+        Task { await persistPreferences() }
+    }
+
+    public func showAllColumns() {
+        guard !hiddenColumns.isEmpty else { return }
+        hiddenColumns.removeAll()
+        bumpRevision()
+        Task { await persistPreferences() }
+    }
+
+    public func gridDidRequestHideColumn(_ column: Int) {
+        guard let model, model.columns.indices.contains(column) else { return }
+        setColumn(model.columns[column].name, hidden: true)
+    }
+
+    public func gridDidRequestShowAllColumns() { showAllColumns() }
 
     public func gridDidRequestCopy(format: ClipboardFormat) {
         copySelection(format: format, nullText: environment.nullDisplayText)

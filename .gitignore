@@ -1,0 +1,11 @@
+# SwiftPM / Xcode
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad/
+# Local test environment (contains local server URLs; never commit)
+testenv/.env
+# macOS
+.DS_Store

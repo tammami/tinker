@@ -6,41 +6,46 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		DB0000000000000000000101 /* DBCore in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000201 /* DBCore */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
-		9FE8CF183048D89C0091C579 /* ThinkStudio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ThinkStudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DB0000000000000000000002 /* DBStudio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DBStudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		9FE8CF1A3048D89C0091C579 /* ThinkStudio */ = {
+		DB0000000000000000000003 /* DBStudio */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = ThinkStudio;
+			path = DBStudio;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		9FE8CF153048D89C0091C579 /* Frameworks */ = {
+		DB0000000000000000000004 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DB0000000000000000000101 /* DBCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		9FE8CF0F3048D89C0091C579 = {
+		DB0000000000000000000005 = {
 			isa = PBXGroup;
 			children = (
-				9FE8CF1A3048D89C0091C579 /* ThinkStudio */,
-				9FE8CF193048D89C0091C579 /* Products */,
+				DB0000000000000000000003 /* DBStudio */,
+				DB0000000000000000000006 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		9FE8CF193048D89C0091C579 /* Products */ = {
+		DB0000000000000000000006 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				9FE8CF183048D89C0091C579 /* ThinkStudio.app */,
+				DB0000000000000000000002 /* DBStudio.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,64 +53,68 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		9FE8CF173048D89C0091C579 /* ThinkStudio */ = {
+		DB0000000000000000000007 /* DBStudio */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 9FE8CF233048D89D0091C579 /* Build configuration list for PBXNativeTarget "ThinkStudio" */;
+			buildConfigurationList = DB0000000000000000000015 /* Build configuration list for PBXNativeTarget "DBStudio" */;
 			buildPhases = (
-				9FE8CF143048D89C0091C579 /* Sources */,
-				9FE8CF153048D89C0091C579 /* Frameworks */,
-				9FE8CF163048D89C0091C579 /* Resources */,
+				DB0000000000000000000008 /* Sources */,
+				DB0000000000000000000004 /* Frameworks */,
+				DB0000000000000000000009 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				9FE8CF1A3048D89C0091C579 /* ThinkStudio */,
+				DB0000000000000000000003 /* DBStudio */,
 			);
-			name = ThinkStudio;
+			name = DBStudio;
 			packageProductDependencies = (
+				DB0000000000000000000201 /* DBCore */,
 			);
-			productName = ThinkStudio;
-			productReference = 9FE8CF183048D89C0091C579 /* ThinkStudio.app */;
+			productName = DBStudio;
+			productReference = DB0000000000000000000002 /* DBStudio.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		9FE8CF103048D89C0091C579 /* Project object */ = {
+		DB0000000000000000000001 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2660;
 				LastUpgradeCheck = 2660;
 				TargetAttributes = {
-					9FE8CF173048D89C0091C579 = {
+					DB0000000000000000000007 = {
 						CreatedOnToolsVersion = 26.6;
 					};
 				};
 			};
-			buildConfigurationList = 9FE8CF133048D89C0091C579 /* Build configuration list for PBXProject "ThinkStudio" */;
+			buildConfigurationList = DB0000000000000000000010 /* Build configuration list for PBXProject "DBStudio" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
 				Base,
 			);
-			mainGroup = 9FE8CF0F3048D89C0091C579;
+			mainGroup = DB0000000000000000000005;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				DB0000000000000000000301 /* XCLocalSwiftPackageReference ".." */,
+			);
 			preferredProjectObjectVersion = 77;
-			productRefGroup = 9FE8CF193048D89C0091C579 /* Products */;
+			productRefGroup = DB0000000000000000000006 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				9FE8CF173048D89C0091C579 /* ThinkStudio */,
+				DB0000000000000000000007 /* DBStudio */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		9FE8CF163048D89C0091C579 /* Resources */ = {
+		DB0000000000000000000009 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -115,7 +124,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		9FE8CF143048D89C0091C579 /* Sources */ = {
+		DB0000000000000000000008 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -125,10 +134,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		9FE8CF213048D89D0091C579 /* Debug */ = {
+		DB0000000000000000000011 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
@@ -171,6 +181,7 @@
 					"DEBUG=1",
 					"$(inherited)",
 				);
+				GCC_TREAT_WARNINGS_AS_ERRORS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
 				GCC_WARN_UNDECLARED_SELECTOR = YES;
@@ -178,20 +189,24 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
 		};
-		9FE8CF223048D89D0091C579 /* Release */ = {
+		DB0000000000000000000012 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
@@ -228,6 +243,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_TREAT_WARNINGS_AS_ERRORS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
 				GCC_WARN_UNDECLARED_SELECTOR = YES;
@@ -235,15 +251,18 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};
-		9FE8CF243048D89D0091C579 /* Debug */ = {
+		DB0000000000000000000013 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -251,29 +270,26 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.thinkfree.ThinkStudio;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.thinkfree.DBStudio;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
 		};
-		9FE8CF253048D89D0091C579 /* Release */ = {
+		DB0000000000000000000014 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -281,50 +297,61 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.thinkfree.ThinkStudio;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.thinkfree.DBStudio;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		9FE8CF133048D89C0091C579 /* Build configuration list for PBXProject "ThinkStudio" */ = {
+		DB0000000000000000000010 /* Build configuration list for PBXProject "DBStudio" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				9FE8CF213048D89D0091C579 /* Debug */,
-				9FE8CF223048D89D0091C579 /* Release */,
+				DB0000000000000000000011 /* Debug */,
+				DB0000000000000000000012 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		9FE8CF233048D89D0091C579 /* Build configuration list for PBXNativeTarget "ThinkStudio" */ = {
+		DB0000000000000000000015 /* Build configuration list for PBXNativeTarget "DBStudio" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				9FE8CF243048D89D0091C579 /* Debug */,
-				9FE8CF253048D89D0091C579 /* Release */,
+				DB0000000000000000000013 /* Debug */,
+				DB0000000000000000000014 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		DB0000000000000000000301 /* XCLocalSwiftPackageReference ".." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ..;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		DB0000000000000000000201 /* DBCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DBCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
-	rootObject = 9FE8CF103048D89C0091C579 /* Project object */;
+	rootObject = DB0000000000000000000001 /* Project object */;
 }

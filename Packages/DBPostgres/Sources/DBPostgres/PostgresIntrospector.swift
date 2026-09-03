@@ -1,0 +1,459 @@
+import DBCore
+import DBSQL
+import Foundation
+import Logging
+import NIOConcurrencyHelpers
+import PostgresNIO
+
+/// Reads PostgreSQL's system catalogs.
+///
+/// Queries read `pg_catalog` directly rather than `information_schema`, because the
+/// catalogs expose identity columns, generated columns, partitioning and index methods
+/// that the standard views omit. Version-dependent columns are guarded by
+/// ``ServerVersion/isAtLeast(_:_:_:)``.
+public struct PostgresIntrospector: SchemaIntrospector {
+    let connection: PostgresConnection
+    let logger: Logger
+    let decoder: PostgresBinaryDecoder
+    let version: ServerVersion
+    let currentDatabase: String
+
+    init(
+        connection: PostgresConnection,
+        logger: Logger,
+        decoder: PostgresBinaryDecoder,
+        version: ServerVersion,
+        currentDatabase: String
+    ) {
+        self.connection = connection
+        self.logger = logger
+        self.decoder = decoder
+        self.version = version
+        self.currentDatabase = currentDatabase
+    }
+
+    private func query(_ sql: String, _ parameters: [DBValue] = []) async throws -> QueryResult {
+        do {
+            if parameters.isEmpty {
+                return try await PostgresSQLConnection.rawQuery(
+                    sql, on: connection, logger: logger, decoder: decoder
+                )
+            }
+            let bindings = PostgresParameterEncoder.bindings(for: parameters)
+            let collected = NIOLockedValueBox<(columns: [ColumnMeta], rows: [[DBValue]])>(([], []))
+            let decoder = decoder
+            _ = try await connection.query(
+                PostgresQuery(unsafeSQL: sql, binds: bindings), logger: logger
+            ) { row in
+                collected.withLockedValue { state in
+                    if state.columns.isEmpty {
+                        state.columns = PostgresSQLConnection.columns(of: row, decoder: decoder)
+                    }
+                    state.rows.append(PostgresSQLConnection.values(of: row, decoder: decoder))
+                }
+            }.get()
+            let state = collected.withLockedValue { $0 }
+            return QueryResult(
+                columns: state.columns, rows: state.rows,
+                completion: QueryCompletion(durationTotal: .zero)
+            )
+        } catch {
+            throw PostgresErrorMapper.map(error, user: "")
+        }
+    }
+
+    // MARK: - Databases and schemas
+
+    public func databases() async throws -> [DatabaseInfo] {
+        let result = try await query("""
+            SELECT d.datname,
+                   d.datname = current_database(),
+                   shobj_description(d.oid, 'pg_database'),
+                   pg_encoding_to_char(d.encoding),
+                   d.datcollate
+            FROM pg_catalog.pg_database d
+            WHERE d.datallowconn AND NOT d.datistemplate
+            ORDER BY d.datname
+            """)
+        return result.rows.compactMap { row in
+            guard let name = row[0].text else { return nil }
+            return DatabaseInfo(
+                name: name,
+                isCurrent: row[1] == .bool(true),
+                comment: row[2].text,
+                characterSet: row[3].text,
+                collation: row[4].text
+            )
+        }
+    }
+
+    public func schemas(in database: String) async throws -> [SchemaInfo] {
+        let result = try await query("""
+            SELECT n.nspname,
+                   pg_get_userbyid(n.nspowner),
+                   obj_description(n.oid, 'pg_namespace')
+            FROM pg_catalog.pg_namespace n
+            WHERE n.nspname NOT LIKE 'pg\\_temp\\_%' AND n.nspname NOT LIKE 'pg\\_toast%'
+            ORDER BY n.nspname
+            """)
+        return result.rows.compactMap { row in
+            guard let name = row[0].text else { return nil }
+            return SchemaInfo(
+                ref: SchemaRef(database: database, schema: name),
+                owner: row[1].text,
+                comment: row[2].text,
+                isSystem: name == "pg_catalog" || name == "information_schema"
+            )
+        }
+    }
+
+    // MARK: - Tables
+
+    public func tables(in schema: SchemaRef) async throws -> [TableInfo] {
+        let result = try await query("""
+            SELECT c.relname,
+                   c.relkind::text,
+                   obj_description(c.oid, 'pg_class'),
+                   pg_get_userbyid(c.relowner),
+                   CASE WHEN c.relkind IN ('r', 'm', 'p') THEN pg_total_relation_size(c.oid) ELSE NULL END::int8,
+                   c.reltuples::int8
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 AND c.relkind IN ('r', 'v', 'm', 'f', 'p')
+            ORDER BY c.relname
+            """, [.string(schema.schema)])
+        return result.rows.compactMap { row in
+            guard let name = row[0].text else { return nil }
+            let estimate: Int64? = if case let .int(value) = row[5], value >= 0 { value } else { nil }
+            let size: Int64? = if case let .int(value) = row[4] { value } else { nil }
+            return TableInfo(
+                ref: TableRef(schema: schema, name: name),
+                kind: Self.kind(fromRelKind: row[1].text ?? "r"),
+                comment: row[2].text,
+                owner: row[3].text,
+                sizeBytes: size,
+                approximateRowCount: estimate
+            )
+        }
+    }
+
+    static func kind(fromRelKind relKind: String) -> TableKind {
+        switch relKind {
+        case "v": .view
+        case "m": .materializedView
+        case "f": .foreignTable
+        case "p": .partitionedTable
+        default: .table
+        }
+    }
+
+    // MARK: - Columns
+
+    public func columns(of table: TableRef) async throws -> [ColumnInfo] {
+        // `attgenerated` arrived in PostgreSQL 12; older servers report generated columns
+        // only through the default expression.
+        let generatedExpression = version.isAtLeast(12) ? "a.attgenerated::text" : "''::text"
+        let result = try await query("""
+            SELECT a.attnum,
+                   a.attname,
+                   pg_catalog.format_type(a.atttypid, a.atttypmod),
+                   a.atttypid::int8,
+                   NOT a.attnotnull,
+                   pg_get_expr(ad.adbin, ad.adrelid),
+                   COALESCE(pk.is_pk, false),
+                   a.attidentity::text,
+                   \(generatedExpression),
+                   col_description(a.attrelid, a.attnum),
+                   co.collname,
+                   (SELECT array_agg(e.enumlabel ORDER BY e.enumsortorder)
+                      FROM pg_catalog.pg_enum e WHERE e.enumtypid = a.atttypid)
+            FROM pg_catalog.pg_attribute a
+            JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            LEFT JOIN pg_catalog.pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+            LEFT JOIN pg_catalog.pg_collation co ON co.oid = a.attcollation
+            LEFT JOIN LATERAL (
+                SELECT true AS is_pk
+                FROM pg_catalog.pg_index i
+                WHERE i.indrelid = a.attrelid AND i.indisprimary AND a.attnum = ANY (i.indkey)
+            ) pk ON true
+            WHERE n.nspname = $1 AND c.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped
+            ORDER BY a.attnum
+            """, [.string(table.schema), .string(table.name)])
+
+        return result.rows.compactMap { row in
+            guard case let .int(ordinal) = row[0], let name = row[1].text else { return nil }
+            let typeOID = if case let .int(value) = row[3], value >= 0 { UInt32(value) } else { UInt32(0) }
+            let defaultExpression = row[5].text
+            let identity = row[7].text ?? ""
+            let generated = row[8].text ?? ""
+            let labels: [String]? = if case let .array(items) = row[11] {
+                items.compactMap(\.text)
+            } else {
+                nil
+            }
+            return ColumnInfo(
+                ordinal: Int(ordinal),
+                name: name,
+                nativeType: row[2].text ?? "unknown",
+                kind: PGOID.kind(for: typeOID, catalog: decoder.catalog),
+                isNullable: row[4] == .bool(true),
+                defaultExpression: defaultExpression,
+                isPrimaryKey: row[6] == .bool(true),
+                // A serial column has a `nextval(...)` default; an identity column says so directly.
+                isAutoIncrement: !identity.isEmpty || defaultExpression?.hasPrefix("nextval(") == true,
+                isGenerated: !generated.isEmpty,
+                comment: row[9].text,
+                characterSet: nil,
+                collation: row[10].text,
+                enumLabels: (labels?.isEmpty ?? true) ? nil : labels
+            )
+        }
+    }
+
+    // MARK: - Indexes, keys
+
+    public func indexes(of table: TableRef) async throws -> [IndexInfo] {
+        let result = try await query("""
+            SELECT ic.relname,
+                   i.indisunique,
+                   i.indisprimary,
+                   am.amname,
+                   pg_get_expr(i.indpred, i.indrelid),
+                   ARRAY(
+                       -- indkey is a 0-based int2vector, while pg_get_indexdef numbers
+                       -- its columns from 1; passing 0 would return the whole definition.
+                       SELECT pg_get_indexdef(i.indexrelid, (k.i + 1)::int, true)
+                       FROM generate_subscripts(i.indkey, 1) AS k(i)
+                       ORDER BY k.i
+                   ),
+                   (
+                       SELECT bool_and(a.attnotnull)
+                       FROM unnest(i.indkey) AS key(attnum)
+                       JOIN pg_catalog.pg_attribute a
+                         ON a.attrelid = i.indrelid AND a.attnum = key.attnum
+                   )
+            FROM pg_catalog.pg_index i
+            JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
+            JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_catalog.pg_am am ON am.oid = ic.relam
+            WHERE n.nspname = $1 AND c.relname = $2
+            ORDER BY i.indisprimary DESC, ic.relname
+            """, [.string(table.schema), .string(table.name)])
+
+        return result.rows.compactMap { row in
+            guard let name = row[0].text else { return nil }
+            let columns: [String] = if case let .array(items) = row[5] { items.compactMap(\.text) } else { [] }
+            return IndexInfo(
+                name: name,
+                columns: columns,
+                isUnique: row[1] == .bool(true),
+                isPrimary: row[2] == .bool(true),
+                method: row[3].text,
+                predicate: row[4].text,
+                isNullableFree: row[6] == .bool(true)
+            )
+        }
+    }
+
+    public func foreignKeys(of table: TableRef) async throws -> [ForeignKeyInfo] {
+        let result = try await query("""
+            SELECT con.conname,
+                   ARRAY(
+                       SELECT a.attname FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                       JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+                       ORDER BY k.ord
+                   ),
+                   fn.nspname,
+                   fc.relname,
+                   ARRAY(
+                       SELECT a.attname FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord)
+                       JOIN pg_catalog.pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum
+                       ORDER BY k.ord
+                   ),
+                   con.confupdtype::text,
+                   con.confdeltype::text
+            FROM pg_catalog.pg_constraint con
+            JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_catalog.pg_class fc ON fc.oid = con.confrelid
+            JOIN pg_catalog.pg_namespace fn ON fn.oid = fc.relnamespace
+            WHERE n.nspname = $1 AND c.relname = $2 AND con.contype = 'f'
+            ORDER BY con.conname
+            """, [.string(table.schema), .string(table.name)])
+
+        return result.rows.compactMap { row in
+            guard let name = row[0].text, let referencedName = row[3].text else { return nil }
+            let columns: [String] = if case let .array(items) = row[1] { items.compactMap(\.text) } else { [] }
+            let referenced: [String] = if case let .array(items) = row[4] { items.compactMap(\.text) } else { [] }
+            return ForeignKeyInfo(
+                name: name,
+                columns: columns,
+                referencedTable: TableRef(
+                    database: table.database, schema: row[2].text ?? "public", name: referencedName
+                ),
+                referencedColumns: referenced,
+                onUpdate: Self.action(from: row[5].text ?? "a"),
+                onDelete: Self.action(from: row[6].text ?? "a")
+            )
+        }
+    }
+
+    static func action(from code: String) -> ForeignKeyAction {
+        switch code {
+        case "r": .restrict
+        case "c": .cascade
+        case "n": .setNull
+        case "d": .setDefault
+        default: .noAction
+        }
+    }
+
+    public func primaryKey(of table: TableRef) async throws -> [String]? {
+        let result = try await query("""
+            SELECT ARRAY(
+                SELECT a.attname
+                FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
+                JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+                ORDER BY k.ord
+            )
+            FROM pg_catalog.pg_index i
+            JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 AND c.relname = $2 AND i.indisprimary
+            """, [.string(table.schema), .string(table.name)])
+        guard case let .array(items)? = result.rows.first?.first else { return nil }
+        let names = items.compactMap(\.text)
+        return names.isEmpty ? nil : names
+    }
+
+    // MARK: - Routines
+
+    public func routines(in schema: SchemaRef) async throws -> [RoutineInfo] {
+        // `prokind` replaced `proisagg`/`proiswindow` in PostgreSQL 11.
+        let kindExpression = version.isAtLeast(11)
+            ? "p.prokind::text"
+            : "CASE WHEN p.proisagg THEN 'a' WHEN p.proiswindow THEN 'w' ELSE 'f' END"
+        let result = try await query("""
+            SELECT p.proname,
+                   \(kindExpression),
+                   pg_get_function_identity_arguments(p.oid),
+                   pg_catalog.format_type(p.prorettype, NULL),
+                   l.lanname,
+                   obj_description(p.oid, 'pg_proc')
+            FROM pg_catalog.pg_proc p
+            JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+            JOIN pg_catalog.pg_language l ON l.oid = p.prolang
+            WHERE n.nspname = $1
+            ORDER BY p.proname
+            """, [.string(schema.schema)])
+
+        return result.rows.compactMap { row in
+            guard let name = row[0].text else { return nil }
+            let kind: RoutineKind = switch row[1].text ?? "f" {
+            case "p": .procedure
+            case "a": .aggregate
+            case "w": .window
+            default: .function
+            }
+            return RoutineInfo(
+                name: name,
+                kind: kind,
+                signature: row[2].text ?? "",
+                returnType: row[3].text,
+                language: row[4].text,
+                comment: row[5].text
+            )
+        }
+    }
+
+    // MARK: - DDL and size
+
+    /// PostgreSQL has no `SHOW CREATE TABLE`, so the statement is synthesized from the
+    /// catalogs. Columns, defaults, identity, primary key, unique and foreign keys,
+    /// check constraints, indexes and comments are all included.
+    public func tableDDL(_ table: TableRef) async throws -> String {
+        let columns = try await columns(of: table)
+        guard !columns.isEmpty else {
+            throw DBError.server(ServerError(message: "\(table.name) does not exist or is not visible"))
+        }
+        let qualified = Identifier.qualify([table.schema, table.name], dialect: .postgresql)
+        var lines: [String] = []
+
+        for column in columns {
+            var line = "    \(Identifier.quote(column.name, dialect: .postgresql)) \(column.nativeType)"
+            if let collation = column.collation, collation != "default" {
+                line += " COLLATE \(Identifier.quote(collation, dialect: .postgresql))"
+            }
+            if column.isGenerated, let expression = column.defaultExpression {
+                line += " GENERATED ALWAYS AS (\(expression)) STORED"
+            } else if let expression = column.defaultExpression, !column.isAutoIncrement || !expression.hasPrefix("nextval(") {
+                line += " DEFAULT \(expression)"
+            } else if let expression = column.defaultExpression {
+                line += " DEFAULT \(expression)"
+            }
+            if !column.isNullable { line += " NOT NULL" }
+            lines.append(line)
+        }
+
+        let constraints = try await query("""
+            SELECT con.conname, pg_get_constraintdef(con.oid)
+            FROM pg_catalog.pg_constraint con
+            JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 AND c.relname = $2 AND con.contype IN ('p', 'u', 'f', 'c')
+            ORDER BY con.contype, con.conname
+            """, [.string(table.schema), .string(table.name)])
+        for row in constraints.rows {
+            guard let name = row[0].text, let definition = row[1].text else { continue }
+            lines.append("    CONSTRAINT \(Identifier.quote(name, dialect: .postgresql)) \(definition)")
+        }
+
+        var ddl = "CREATE TABLE \(qualified) (\n\(lines.joined(separator: ",\n"))\n);"
+
+        let indexes = try await query("""
+            SELECT pg_get_indexdef(i.indexrelid)
+            FROM pg_catalog.pg_index i
+            JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 AND c.relname = $2 AND NOT i.indisprimary
+              AND NOT EXISTS (
+                  SELECT 1 FROM pg_catalog.pg_constraint con
+                  WHERE con.conindid = i.indexrelid AND con.contype IN ('u', 'p')
+              )
+            ORDER BY 1
+            """, [.string(table.schema), .string(table.name)])
+        for row in indexes.rows {
+            guard let definition = row[0].text else { continue }
+            ddl += "\n\(definition);"
+        }
+
+        let tableComment = try await query("""
+            SELECT obj_description(c.oid, 'pg_class')
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 AND c.relname = $2
+            """, [.string(table.schema), .string(table.name)])
+        if let comment = tableComment.rows.first?.first?.text {
+            ddl += "\nCOMMENT ON TABLE \(qualified) IS \(SQLLiteral.quoteString(comment, dialect: .postgresql));"
+        }
+        for column in columns where column.comment != nil {
+            let comment = column.comment ?? ""
+            let target = "\(qualified).\(Identifier.quote(column.name, dialect: .postgresql))"
+            ddl += "\nCOMMENT ON COLUMN \(target) IS \(SQLLiteral.quoteString(comment, dialect: .postgresql));"
+        }
+        return ddl
+    }
+
+    public func approximateRowCount(_ table: TableRef) async throws -> Int64? {
+        let result = try await query("""
+            SELECT c.reltuples::int8
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 AND c.relname = $2
+            """, [.string(table.schema), .string(table.name)])
+        guard case let .int(value)? = result.rows.first?.first, value >= 0 else { return nil }
+        return value
+    }
+}

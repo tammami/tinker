@@ -1,0 +1,329 @@
+// dbcli — a CLI harness that exercises DBCore and the drivers without any UI.
+//
+//   dbcli <url> "<sql>"              stream the result as TSV
+//   dbcli <url> --introspect         dump the schema as JSON
+//   dbcli <url> "<sql>" --cancel-after 2s
+//   dbcli <url> --ping
+//
+// URLs look like postgresql://user:password@host:port/database or mysql://…
+import DBCore
+import DBPostgres
+import DBSQL
+import Foundation
+import Logging
+
+@main
+struct DBCLI {
+    static func main() async {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        guard !arguments.isEmpty else {
+            printUsage()
+            exit(2)
+        }
+
+        var options = Options()
+        var positional: [String] = []
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--introspect": options.introspect = true
+            case "--ping": options.ping = true
+            case "-v", "--verbose": options.verbose = true
+            case "--no-header": options.header = false
+            case "--cancel-after":
+                index += 1
+                guard index < arguments.count, let seconds = parseDuration(arguments[index]) else {
+                    fail("--cancel-after needs a duration such as 2s or 500ms")
+                }
+                options.cancelAfter = seconds
+            case "-h", "--help":
+                printUsage()
+                exit(0)
+            default:
+                positional.append(argument)
+            }
+            index += 1
+        }
+
+        guard let urlText = positional.first else {
+            fail("A connection URL is required")
+        }
+        options.sql = positional.count > 1 ? positional[1] : nil
+
+        var logger = Logger(label: "dbcli")
+        logger.logLevel = options.verbose ? .debug : .warning
+
+        do {
+            let config = try parseURL(urlText)
+            let connection: any SQLConnection = switch config.dialect {
+            case .postgresql: try await PostgresDriver.connect(config, logger: logger)
+            case .mysql: throw CLIError("The MySQL driver lands in Phase 6")
+            }
+            defer { Task { await connection.close() } }
+
+            let version = await connection.serverVersion
+            standardError("connected to \(version.rawString) [backend \(connection.backendID)]\n")
+
+            if options.ping {
+                try await connection.ping()
+                print("ok")
+            } else if options.introspect {
+                try await dumpSchema(connection, config: config)
+            } else if let sql = options.sql {
+                try await run(sql: sql, on: connection, options: options)
+            } else {
+                fail("Nothing to do: pass a statement, --introspect or --ping")
+            }
+            await connection.close()
+        } catch {
+            standardError("error: \(describe(error))\n")
+            exit(1)
+        }
+    }
+
+    struct Options {
+        var introspect = false
+        var ping = false
+        var verbose = false
+        var header = true
+        var cancelAfter: Duration?
+        var sql: String?
+    }
+
+    // MARK: - Running statements
+
+    static func run(sql: String, on connection: any SQLConnection, options: Options) async throws {
+        let dialect = await connection.serverVersion.flavor == .postgresql ? SQLDialect.postgresql : .mysql
+        let statements = StatementSplitter.split(sql, dialect: dialect)
+        guard !statements.isEmpty else {
+            standardError("no statements to run\n")
+            return
+        }
+
+        for statement in statements {
+            let task = Task { try await stream(statement.text, on: connection, options: options) }
+            if let delay = options.cancelAfter {
+                let canceller = Task {
+                    try? await Task.sleep(for: delay)
+                    standardError("cancelling after \(delay)…\n")
+                    task.cancel()
+                }
+                defer { canceller.cancel() }
+                try await task.value
+            } else {
+                try await task.value
+            }
+        }
+    }
+
+    static func stream(_ sql: String, on connection: any SQLConnection, options: Options) async throws {
+        var columns: [ColumnMeta] = []
+        var rowCount = 0
+        var completed = false
+        for try await event in connection.execute(sql, parameters: []) {
+            switch event {
+            case let .columns(value):
+                columns = value
+                if options.header, !value.isEmpty {
+                    print(value.map(\.name).joined(separator: "\t"))
+                }
+            case let .rows(batch):
+                for row in batch.rows {
+                    print(row.map(tsvField).joined(separator: "\t"))
+                    rowCount += 1
+                }
+            case let .complete(completion):
+                completed = true
+                let tag = completion.serverTag ?? "OK"
+                let milliseconds = Double(completion.durationTotal.components.attoseconds) / 1e15
+                    + Double(completion.durationTotal.components.seconds) * 1_000
+                standardError(String(
+                    format: "%@ • %d column(s) • %d row(s) • %.1f ms\n",
+                    tag, columns.count, rowCount, milliseconds
+                ))
+                for notice in completion.notices { standardError("notice: \(notice)\n") }
+            }
+        }
+        // A cancelled task ends the stream without a completion event; the caller learns
+        // why from its own cancellation state (see `SQLConnection.execute`).
+        if !completed, Task.isCancelled { throw DBError.cancelled }
+    }
+
+    /// TSV cannot carry tabs or newlines, so they are escaped the way `COPY` does.
+    static func tsvField(_ value: DBValue) -> String {
+        switch value {
+        case .null: return "\\N"
+        case let .bytes(data): return "\\x" + data.map { String(format: "%02x", $0) }.joined()
+        case let .array(items): return "{" + items.map { $0.text ?? "NULL" }.joined(separator: ",") + "}"
+        default:
+            let text = value.text ?? ""
+            return text
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\t", with: "\\t")
+                .replacingOccurrences(of: "\n", with: "\\n")
+                .replacingOccurrences(of: "\r", with: "\\r")
+        }
+    }
+
+    // MARK: - Introspection
+
+    static func dumpSchema(_ connection: any SQLConnection, config: ResolvedConnectionConfig) async throws {
+        let introspector = connection.introspector
+        let database = config.database ?? ""
+        var output: [String: Any] = [:]
+        output["server"] = await connection.serverVersion.rawString
+        output["databases"] = try await introspector.databases().map(\.name)
+
+        var schemaDumps: [[String: Any]] = []
+        for schema in try await introspector.schemas(in: database) where !schema.isSystem {
+            var tableDumps: [[String: Any]] = []
+            for table in try await introspector.tables(in: schema.ref) {
+                let columns = try await introspector.columns(of: table.ref)
+                let indexes = try await introspector.indexes(of: table.ref)
+                let foreignKeys = try await introspector.foreignKeys(of: table.ref)
+                tableDumps.append([
+                    "name": table.name,
+                    "kind": table.kind.rawValue,
+                    "approximateRowCount": table.approximateRowCount ?? -1,
+                    "primaryKey": try await introspector.primaryKey(of: table.ref) ?? [],
+                    "columns": columns.map { column in
+                        [
+                            "ordinal": column.ordinal,
+                            "name": column.name,
+                            "type": column.nativeType,
+                            "kind": column.kind.rawValue,
+                            "nullable": column.isNullable,
+                            "default": column.defaultExpression ?? NSNull(),
+                            "primaryKey": column.isPrimaryKey,
+                            "autoIncrement": column.isAutoIncrement,
+                            "generated": column.isGenerated,
+                            "enumLabels": column.enumLabels ?? [],
+                        ] as [String: Any]
+                    },
+                    "indexes": indexes.map { ["name": $0.name, "columns": $0.columns, "unique": $0.isUnique] },
+                    "foreignKeys": foreignKeys.map {
+                        [
+                            "name": $0.name, "columns": $0.columns,
+                            "references": "\($0.referencedTable.schema).\($0.referencedTable.name)",
+                            "referencedColumns": $0.referencedColumns,
+                        ]
+                    },
+                ])
+            }
+            schemaDumps.append([
+                "name": schema.name,
+                "tables": tableDumps,
+                "routines": try await introspector.routines(in: schema.ref).map {
+                    ["name": $0.name, "kind": $0.kind.rawValue, "signature": $0.signature]
+                },
+            ])
+        }
+        output["schemas"] = schemaDumps
+
+        let data = try JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
+        print(String(decoding: data, as: UTF8.self))
+    }
+
+    // MARK: - Input parsing
+
+    static func parseURL(_ text: String) throws -> ResolvedConnectionConfig {
+        guard let components = URLComponents(string: text), let scheme = components.scheme?.lowercased() else {
+            throw CLIError("Cannot parse \(text) as a URL")
+        }
+        let dialect: SQLDialect = switch scheme {
+        case "postgres", "postgresql", "pg": .postgresql
+        case "mysql", "mariadb": .mysql
+        default: throw CLIError("Unsupported scheme \(scheme)")
+        }
+        var database = components.path
+        if database.hasPrefix("/") { database.removeFirst() }
+
+        var options: [String: String] = [:]
+        var tls = TLSConfig(mode: .prefer)
+        for item in components.queryItems ?? [] {
+            switch item.name {
+            case "sslmode", "tls":
+                if let mode = TLSMode(rawValue: item.value ?? "") { tls.mode = mode }
+            case "sslrootcert":
+                tls.caFile = item.value
+            default:
+                options[item.name] = item.value ?? ""
+            }
+        }
+
+        return ResolvedConnectionConfig(
+            configID: UUID(),
+            dialect: dialect,
+            host: components.host ?? "localhost",
+            port: components.port ?? (dialect == .postgresql ? 5432 : 3306),
+            user: components.user ?? NSUserName(),
+            password: components.password,
+            database: database.isEmpty ? nil : database,
+            tls: tls,
+            options: options
+        )
+    }
+
+    static func parseDuration(_ text: String) -> Duration? {
+        if text.hasSuffix("ms"), let value = Double(text.dropLast(2)) {
+            return .milliseconds(Int(value))
+        }
+        if text.hasSuffix("s"), let value = Double(text.dropLast()) {
+            return .milliseconds(Int(value * 1_000))
+        }
+        return Double(text).map { .milliseconds(Int($0 * 1_000)) }
+    }
+
+    // MARK: - Output
+
+    struct CLIError: Error, CustomStringConvertible {
+        let description: String
+        init(_ description: String) { self.description = description }
+    }
+
+    static func describe(_ error: any Error) -> String {
+        guard let dbError = error as? DBError else { return String(describing: error) }
+        switch dbError {
+        case let .server(serverError):
+            var text = serverError.message
+            if let sqlState = serverError.sqlState { text = "[\(sqlState)] \(text)" }
+            if let detail = serverError.detail { text += "\nDETAIL: \(detail)" }
+            if let hint = serverError.hint { text += "\nHINT: \(hint)" }
+            if let position = serverError.position { text += "\nPOSITION: \(position)" }
+            return text
+        default:
+            return dbError.errorDescription ?? String(describing: dbError)
+        }
+    }
+
+    static func standardError(_ text: String) {
+        FileHandle.standardError.write(Data(text.utf8))
+    }
+
+    static func fail(_ message: String) -> Never {
+        standardError("error: \(message)\n")
+        exit(2)
+    }
+
+    static func printUsage() {
+        print("""
+        dbcli — DBStudio's driver harness
+
+        USAGE
+          dbcli <url> "<sql>"          run statements, printing rows as TSV
+          dbcli <url> --introspect     dump the schema as JSON
+          dbcli <url> --ping           check the connection
+
+        OPTIONS
+          --cancel-after <duration>    cancel the running statement (e.g. 2s, 500ms)
+          --no-header                  omit the column-name row
+          -v, --verbose                debug logging
+          -h, --help                   this text
+
+        URL
+          postgresql://user:password@host:5432/database?sslmode=require
+          mysql://user:password@host:3306/database
+        """)
+    }
+}

@@ -81,6 +81,33 @@ public struct StoredFilterRule: Sendable, Hashable, Codable {
     }
 }
 
+/// A saved piece of SQL the editor can insert, with `${1:name}` placeholders.
+public struct Snippet: Sendable, Hashable, Identifiable {
+    public var id: Int64
+    public var name: String
+    public var body: String
+    /// `postgresql`, `mysql`, or nil when the snippet suits either engine.
+    public var dialect: String?
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: Int64 = 0,
+        name: String,
+        body: String,
+        dialect: String? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.name = name
+        self.body = body
+        self.dialect = dialect
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
 /// A sidebar folder and whether the user left it open.
 public struct StoredGroup: Sendable, Hashable {
     public var path: [String]
@@ -94,7 +121,7 @@ public struct StoredGroup: Sendable, Hashable {
     }
 }
 
-/// Everything DBStudio keeps on disk: connections, groups, query history, grid
+/// Everything the app keeps on disk: connections, groups, query history, grid
 /// preferences and settings, in one SQLite file (SPEC §15).
 ///
 /// Secrets are never stored here. They live in the Keychain and configs carry only a
@@ -107,11 +134,25 @@ public actor DBStore {
     /// Rows kept in `query_history` before the oldest are dropped (SPEC §13.2).
     public static let queryHistoryLimit = 10_000
 
+    /// The folder under Application Support, named for the product.
+    public static let folderName = "Tinker"
+    /// The folder earlier builds used; its contents are adopted the first time this one runs.
+    static let legacyFolderName = "DBStudio"
+
     /// The store's location under Application Support.
+    ///
+    /// A store left by an earlier build under the old name is moved into place rather than
+    /// abandoned, so renaming the product costs nobody their connections.
     public static var defaultPath: String {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("DBStudio/store.sqlite").path
+        let folder = base.appendingPathComponent(folderName, isDirectory: true)
+        let legacy = base.appendingPathComponent(legacyFolderName, isDirectory: true)
+        let manager = FileManager.default
+        if !manager.fileExists(atPath: folder.path), manager.fileExists(atPath: legacy.path) {
+            try? manager.moveItem(at: legacy, to: folder)
+        }
+        return folder.appendingPathComponent("store.sqlite").path
     }
 
     public init(path: String = DBStore.defaultPath) async throws {
@@ -324,6 +365,53 @@ public actor DBStore {
 
     public func historyCount() async throws -> Int {
         Int(try await database.query("SELECT COUNT(*) FROM query_history").first?[0].intValue ?? 0)
+    }
+
+    // MARK: - Snippets
+
+    /// Every snippet, or those for one dialect plus the engine-neutral ones, by name.
+    public func snippets(dialect: String? = nil) async throws -> [Snippet] {
+        var sql = "SELECT id, name, body, dialect, created_at, updated_at FROM snippets"
+        var parameters: [SQLiteValue] = []
+        if let dialect {
+            sql += " WHERE dialect IS NULL OR dialect = ?"
+            parameters.append(.text(dialect))
+        }
+        sql += " ORDER BY name COLLATE NOCASE, id"
+        return try await database.query(sql, parameters).compactMap { row in
+            guard let id = row["id"].intValue, let name = row["name"].textValue,
+                  let body = row["body"].textValue
+            else { return nil }
+            return Snippet(
+                id: id, name: name, body: body, dialect: row["dialect"].textValue,
+                createdAt: Date(timeIntervalSince1970: row["created_at"].doubleValue ?? 0),
+                updatedAt: Date(timeIntervalSince1970: row["updated_at"].doubleValue ?? 0)
+            )
+        }
+    }
+
+    /// Inserts a snippet with id 0, updates one with an id. Returns the id.
+    @discardableResult
+    public func saveSnippet(_ snippet: Snippet) async throws -> Int64 {
+        let now = Date().timeIntervalSince1970
+        if snippet.id == 0 {
+            try await database.execute(
+                "INSERT INTO snippets (name, body, dialect, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                [.text(snippet.name), .text(snippet.body), snippet.dialect.map(SQLiteValue.text) ?? .null,
+                 .real(now), .real(now)]
+            )
+            return await database.lastInsertRowID
+        }
+        try await database.execute(
+            "UPDATE snippets SET name = ?, body = ?, dialect = ?, updated_at = ? WHERE id = ?",
+            [.text(snippet.name), .text(snippet.body), snippet.dialect.map(SQLiteValue.text) ?? .null,
+             .real(now), .integer(snippet.id)]
+        )
+        return snippet.id
+    }
+
+    public func deleteSnippet(id: Int64) async throws {
+        try await database.execute("DELETE FROM snippets WHERE id = ?", [.integer(id)])
     }
 
     // MARK: - Grid preferences

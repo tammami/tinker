@@ -398,3 +398,99 @@ final class GridIntegrationTests: XCTestCase {
         }
     }
 }
+
+// MARK: - Quick search and CSV import
+
+extension GridIntegrationTests {
+    /// The quick search is one bound pattern per column, ORed, on top of the row filter.
+    func testQuickSearchAcrossColumnsFindsRowsOnBothEngines() async throws {
+        try await withSession { session, server in
+            let table = self.table("smoke", in: server)
+            let model = self.makeModel(session: session, table: table, identity: ["id"])
+            await model.setFilter([FilterRule.search("ÖRL", in: ["id", "name"])])
+            XCTAssertNil(model.lastError.map { String(describing: $0) })
+            // PostgreSQL's ILIKE folds case; MySQL's default collation does too.
+            XCTAssertEqual(model.rowCount, 1)
+            XCTAssertEqual(model.value(row: 0, column: 1), .string("wörld"))
+
+            await model.setFilter([
+                FilterRule(column: "id", op: .greaterThan, values: [.int(1)]),
+                FilterRule.search("l", in: ["name"]),
+            ])
+            XCTAssertNil(model.lastError.map { String(describing: $0) })
+            XCTAssertEqual(model.rowCount, 1, "only wörld has an l and an id above 1")
+
+            await model.setFilter([FilterRule.search("50%", in: ["name"])])
+            XCTAssertEqual(model.rowCount, 0, "the percent sign is literal, not a wildcard")
+        }
+    }
+
+    /// A CSV lands in one transaction, bad rows roll it back, and NULLs are honoured.
+    func testCSVImportInsertsEveryRowOrNothing() async throws {
+        try await withSession { session, server in
+            let dialect = session.config.dialect
+            let table = self.table("csv_import_test", in: server)
+            let name = Identifier.qualified(table, dialect: dialect)
+            let (lease, connection) = try await session.lease()
+            defer { Task { await session.release(lease) } }
+            _ = try await connection.executeCollecting("DROP TABLE IF EXISTS \(name)")
+            _ = try await connection.executeCollecting(
+                "CREATE TABLE \(name) (id integer PRIMARY KEY, label varchar(50), price numeric(10,2), active boolean)"
+            )
+            // Dropped on the same connection before it is returned: a statement left to a
+            // detached task after the lease closes trips the driver's own assertion.
+            do {
+                try await self.importAndCheck(table: table, name: name, dialect: dialect, connection: connection)
+            } catch {
+                _ = try? await connection.executeCollecting("DROP TABLE IF EXISTS \(name)")
+                throw error
+            }
+            _ = try await connection.executeCollecting("DROP TABLE IF EXISTS \(name)")
+        }
+    }
+
+    private func importAndCheck(
+        table: TableRef, name: String, dialect: SQLDialect, connection: any SQLConnection
+    ) async throws {
+        do {
+            let columns = try await connection.introspector.columns(of: table)
+            let csv = """
+            id,label,price,active,ignored
+            1,"Pen, blue",1.50,true,x
+            2,Notebook,,false,y
+            3,\\N,12.00,1,z
+            """
+            var reader = CSVReader(data: Data(csv.utf8))
+            var plan = CSVImportPlan.matched(header: reader.next() ?? [], to: columns, table: table)
+            plan.nullText = "\\N"
+            reader = CSVReader(data: Data(csv.utf8))
+            let importer = CSVImporter(plan: plan, columns: columns, dialect: dialect)
+            XCTAssertEqual(plan.mapping, ["id", "label", "price", "active", nil])
+
+            let inserted = try await importer.run(reader: &reader, on: connection)
+            XCTAssertEqual(inserted, 3)
+            let rows = try await connection.executeCollecting("SELECT id, label, price, active FROM \(name) ORDER BY id")
+            XCTAssertEqual(rows.rows.count, 3)
+            XCTAssertEqual(rows.rows[0][1], .string("Pen, blue"))
+            XCTAssertEqual(rows.rows[0][2].text, "1.50")
+            XCTAssertEqual(rows.rows[1][2], .null)
+            XCTAssertEqual(rows.rows[2][1], .null)
+            XCTAssertTrue(["true", "1"].contains(rows.rows[2][3].text ?? ""), "\(rows.rows[2][3])")
+
+            // A bad value in the second record: the first must not survive either.
+            let bad = "id,label,price,active\n10,ok,1,true\neleven,bad,1,true\n"
+            var badReader = CSVReader(data: Data(bad.utf8))
+            do {
+                _ = try await importer.run(reader: &badReader, on: connection)
+                XCTFail("expected the import to be refused")
+            } catch let error as CSVImportError {
+                XCTAssertEqual(error.record, 3)
+                XCTAssertEqual(error.column, "id")
+            }
+            let after = try await connection.executeCollecting("SELECT count(*) FROM \(name)")
+            XCTAssertEqual(after.firstText, "3", "the failed import left no rows behind")
+            let stillOpen = await connection.isInTransaction
+            XCTAssertFalse(stillOpen)
+        }
+    }
+}

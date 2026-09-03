@@ -65,6 +65,19 @@ public enum StoreSchema {
             )
             """,
         ]),
+        Migration(version: 2, name: "snippets", statements: [
+            """
+            CREATE TABLE snippets (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL,
+                body        TEXT NOT NULL,
+                dialect     TEXT,
+                created_at  REAL NOT NULL,
+                updated_at  REAL NOT NULL
+            )
+            """,
+            "CREATE INDEX snippets_name_idx ON snippets (name)",
+        ]),
     ]
 
     /// Applies every migration the database has not seen yet.

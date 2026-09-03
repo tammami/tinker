@@ -10,9 +10,12 @@ public enum ClipboardFormat: String, Sendable, Hashable, CaseIterable {
     case markdown
     case sqlInsert
     case whereIn
+    /// Monospaced columns padded to the same width, the way `psql` prints them.
+    case text
 
     public var displayName: String {
         switch self {
+        case .text: "Aligned text"
         case .tsv: "Tab-separated"
         case .csv: "CSV"
         case .json: "JSON"
@@ -59,7 +62,47 @@ public enum ClipboardFormatter {
         case .markdown: markdown(columns: columns, rows: rows, options: options)
         case .sqlInsert: sqlInserts(columns: columns, rows: rows, options: options)
         case .whereIn: whereInList(columns: columns, rows: rows, options: options)
+        case .text: alignedText(columns: columns, rows: rows, options: options)
         }
+    }
+
+    /// Pads every column to its widest value. Two passes over the rows, one string
+    /// built with its capacity reserved, and no per-cell allocation beyond the cell text.
+    static func alignedText(columns: [ColumnMeta], rows: [[DBValue]], options: Options) -> String {
+        guard !columns.isEmpty else { return "" }
+        let nullText = options.nullText.isEmpty ? "NULL" : options.nullText
+        var widths = columns.map { $0.name.count }
+        var cells: [[String]] = []
+        cells.reserveCapacity(rows.count)
+        for row in rows {
+            var line: [String] = []
+            line.reserveCapacity(columns.count)
+            for (index, value) in row.prefix(columns.count).enumerated() {
+                let text = cellText(value, nullText: nullText)
+                    .replacingOccurrences(of: "\n", with: "⏎")
+                widths[index] = max(widths[index], text.count)
+                line.append(text)
+            }
+            cells.append(line)
+        }
+        let lineWidth = widths.reduce(0, +) + columns.count * 3
+        var output = ""
+        output.reserveCapacity(lineWidth * (rows.count + 2))
+        func append(_ fields: [String]) {
+            for (index, field) in fields.enumerated() {
+                if index > 0 { output += " | " }
+                let numeric = index < columns.count && columns[index].kind.isNumeric
+                let padding = String(repeating: " ", count: max(0, widths[index] - field.count))
+                output += numeric ? padding + field : field + padding
+            }
+            output += "\n"
+        }
+        if options.includeHeader {
+            append(columns.map(\.name))
+            output += widths.map { String(repeating: "-", count: $0) }.joined(separator: "-+-") + "\n"
+        }
+        for line in cells { append(line) }
+        return output
     }
 
     /// The plain text of one cell, for copying a single value.

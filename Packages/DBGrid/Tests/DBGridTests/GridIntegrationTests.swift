@@ -494,3 +494,42 @@ extension GridIntegrationTests {
         }
     }
 }
+
+// MARK: - Query builder
+
+extension GridIntegrationTests {
+    /// What the canvas generates must be a statement both servers accept as-is.
+    func testQueryBuilderSQLRunsOnBothEngines() async throws {
+        try await withSession { session, server in
+            let dialect = session.config.dialect
+            var model = QueryBuilderModel()
+            let customers = model.add(self.table("customers", in: server))
+            let orders = model.add(self.table("orders", in: server))
+            model.joins.append(.init(kind: .left, leftTable: customers, leftColumn: "id", rightTable: orders, rightColumn: "customer_id"))
+            model.fields = [
+                .init(table: customers, column: "name"),
+                .init(table: orders, column: "total", aggregate: .sum, alias: "revenue"),
+                .init(table: orders, column: "id", aggregate: .count, alias: "orders"),
+            ]
+            model.conditions = [.init(table: customers, column: "name", op: .contains, values: [.string("a")])]
+            model.groupBy = [.init(table: customers, column: "name")]
+            model.orderBy = [.init(table: customers, column: "name")]
+            model.limit = 10
+            let sql = try XCTUnwrap(model.sql(dialect: dialect))
+
+            let (lease, connection) = try await session.lease()
+            defer { Task { await session.release(lease) } }
+            let result = try await connection.executeCollecting(sql)
+            XCTAssertEqual(result.columns.map(\.name), ["name", "revenue", "orders"])
+            XCTAssertFalse(result.rows.isEmpty, sql)
+
+            // The same statement as a view, created and dropped on the spot.
+            let viewRef = self.table("qb_test_view", in: server)
+            let create = try XCTUnwrap(model.createViewSQL(name: viewRef, dialect: dialect))
+            _ = try await connection.executeCollecting(create)
+            let fromView = try await connection.executeCollecting("SELECT count(*) FROM \(Identifier.qualified(viewRef, dialect: dialect))")
+            XCTAssertEqual(fromView.firstText, String(result.rows.count))
+            _ = try await connection.executeCollecting("DROP VIEW \(Identifier.qualified(viewRef, dialect: dialect))")
+        }
+    }
+}

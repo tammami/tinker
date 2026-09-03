@@ -13,6 +13,8 @@ import SwiftUI
 public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     public var sql: String = ""
     public var caretOffset = 0
+    /// The editor's selection, when text is highlighted; what Run Selected runs.
+    public var selectedRange: Range<Int>?
     public var results: [QueryResultTab] = []
     public var selectedResultID: UUID?
     public var isRunning = false
@@ -512,14 +514,42 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         errorBanner = nil
     }
 
-    public func editorDidChangeSelection(offset: Int) {
+    public func editorDidChangeSelection(offset: Int, length: Int) {
         caretOffset = offset
+        selectedRange = length > 0 ? offset ..< offset + length : nil
     }
 
-    public func editorDidRequestRun(all: Bool) {
-        statusText = all ? "Running every statement…" : "Running…"
-        run(all: all)
+    public func editorDidRequestRun(_ scope: SQLRunScope, selection: Range<Int>?) {
+        selectedRange = selection
+        switch scope {
+        case .all:
+            statusText = "Running every statement…"
+            run(all: true)
+        case .selection:
+            runSelection()
+        case .current:
+            // A highlighted block is what the person means; otherwise the statement at the caret.
+            if let selection, !selection.isEmpty {
+                statusText = "Running the selection…"
+                run(all: false, selectedRange: selection)
+            } else {
+                statusText = "Running…"
+                run(all: false)
+            }
+        }
     }
+
+    /// Runs only the highlighted text, split into statements.
+    public func runSelection() {
+        guard let selectedRange, !selectedRange.isEmpty else {
+            statusText = "Select the statements to run first"
+            return
+        }
+        statusText = "Running the selection…"
+        run(all: false, selectedRange: selectedRange)
+    }
+
+    public var hasSelection: Bool { !(selectedRange?.isEmpty ?? true) }
 
     /// Keywords, then tables, then the columns of tables the statement mentions.
     ///

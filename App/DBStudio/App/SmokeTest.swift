@@ -58,6 +58,18 @@ enum SmokeTest {
             check("query returns one row", result?.grid?.rowCount == 1)
             check("query returns two columns", result?.grid?.columns.count == 2)
 
+            // Run Selected: only the highlighted statement runs, not the one beside it.
+            let partial = QueryTabController(
+                connectionID: config.id, dialect: config.dialect, environment: environment
+            )
+            partial.sql = "SELECT 1 AS first;\nSELECT 2 AS second;"
+            let secondStart = partial.sql.utf16.count - "SELECT 2 AS second;".utf16.count
+            partial.editorDidRequestRun(.current, selection: secondStart ..< partial.sql.utf16.count)
+            try await waitUntil(timeout: .seconds(20)) { !partial.isRunning && !partial.results.isEmpty }
+            check("run selection runs one statement", partial.results.count == 1)
+            check("run selection runs the highlighted one", partial.results.first?.grid?.columns.first?.name == "second")
+            await partial.releaseHeldConnection()
+
             // Cancellation: a long statement must stop quickly and leave the tab usable.
             let cancelTab = QueryTabController(
                 connectionID: config.id, dialect: config.dialect, environment: environment

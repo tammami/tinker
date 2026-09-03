@@ -255,7 +255,12 @@ public final class WorkspaceController {
     }
 
     public func run(all: Bool) {
-        activeQueryController?.run(all: all)
+        guard let controller = activeQueryController else { return }
+        controller.editorDidRequestRun(all ? .all : .current, selection: controller.selectedRange)
+    }
+
+    public func runSelection() {
+        activeQueryController?.runSelection()
     }
 
     public func cancel() {

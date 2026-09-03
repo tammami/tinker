@@ -7,9 +7,19 @@ import SwiftUI
 @MainActor
 public protocol SQLEditorDelegate: AnyObject {
     func editorDidChangeText(_ text: String)
-    func editorDidChangeSelection(offset: Int)
-    func editorDidRequestRun(all: Bool)
+    /// The caret, and how much is selected after it (0 when nothing is).
+    func editorDidChangeSelection(offset: Int, length: Int)
+    /// `.all` runs the script, `.selection` the highlighted text, `.current` the statement
+    /// under the cursor — or the selection when there is one, which is what ⌘↩ does.
+    func editorDidRequestRun(_ scope: SQLRunScope, selection: Range<Int>?)
     func editorCompletionCandidates(prefix: String, statement: String) -> [CompletionCandidate]
+}
+
+/// What a run command covers.
+public enum SQLRunScope: Sendable {
+    case current
+    case selection
+    case all
 }
 
 /// One autocomplete suggestion.
@@ -332,7 +342,8 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
 
     public func textViewDidChangeSelection(_ notification: Notification) {
         guard let textView else { return }
-        delegate?.editorDidChangeSelection(offset: textView.selectedRange().location)
+        let range = textView.selectedRange()
+        delegate?.editorDidChangeSelection(offset: range.location, length: range.length)
         textView.needsDisplay = true
         // The current line is marked in the gutter too, so it follows the caret.
         gutter?.needsDisplay = true

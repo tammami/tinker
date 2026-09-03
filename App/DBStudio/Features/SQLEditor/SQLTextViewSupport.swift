@@ -55,14 +55,16 @@ public final class SQLTextView: NSTextView {
         guard event.modifierFlags.contains(.command) else {
             return super.performKeyEquivalent(with: event)
         }
-        // 36 is Return, 76 the keypad's Enter.
+        // 36 is Return, 76 the keypad's Enter. ⌘↩ runs the selection or the current
+        // statement, ⌘⇧↩ everything, ⌘⌥↩ only the selection.
         if event.keyCode == 36 || event.keyCode == 76 {
-            let all = event.modifierFlags.contains(.shift)
+            let scope: SQLRunScope = event.modifierFlags.contains(.shift) ? .all
+                : event.modifierFlags.contains(.option) ? .selection : .current
+            let selected = selectedRange()
+            let selection: Range<Int>? = selected.length > 0
+                ? selected.location ..< NSMaxRange(selected) : nil
             MainActor.assumeIsolated {
-                let hasCoordinator = self.coordinator != nil
-                let hasDelegate = self.coordinator?.delegate != nil
-                Self.keyLog.info("run shortcut: coordinator=\(hasCoordinator) delegate=\(hasDelegate)")
-                self.coordinator?.delegate?.editorDidRequestRun(all: all)
+                self.coordinator?.delegate?.editorDidRequestRun(scope, selection: selection)
             }
             return true
         }

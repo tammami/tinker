@@ -71,13 +71,20 @@ public struct QueryTabView: View {
     var editorToolbar: some View {
         PaneBar {
             Button {
-                controller.run(all: false)
+                controller.editorDidRequestRun(.current, selection: controller.selectedRange)
             } label: {
                 Label("Run", systemImage: Icon.run)
             }
-            .keyboardShortcut(.return, modifiers: .command)
             .disabled(controller.isRunning)
-            .help("Run the statement under the cursor (⌘↩)")
+            .help("Run the highlighted block, or the statement under the cursor (⌘↩)")
+
+            Button {
+                controller.runSelection()
+            } label: {
+                Label("Run Selected", systemImage: "text.line.first.and.arrowtriangle.forward")
+            }
+            .disabled(controller.isRunning || !controller.hasSelection)
+            .help("Run only the highlighted text (⌘⌥↩)")
 
             Button {
                 controller.run(all: true)
@@ -85,7 +92,7 @@ public struct QueryTabView: View {
                 Label("Run All", systemImage: Icon.runAll)
             }
             .disabled(controller.isRunning)
-            .help("Run every statement (⌘⇧↩)")
+            .help("Run every statement on the page (⌘⇧↩)")
 
             Button {
                 controller.explain(analyze: false)

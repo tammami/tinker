@@ -251,11 +251,19 @@ public struct WorkspaceView: View {
         ToolbarItemGroup(placement: .principal) {
             ControlGroup {
                 Button {
-                    queryController?.run(all: false)
+                    controller.run(all: false)
                 } label: {
                     Label("Run", systemImage: Icon.run)
                 }
-                .help("Run the statement under the cursor (⌘↩)")
+                .help("Run the highlighted block, or the statement under the cursor (⌘↩)")
+                .disabled(queryController == nil || queryController?.isRunning == true)
+
+                Button {
+                    controller.run(all: true)
+                } label: {
+                    Label("Run All", systemImage: Icon.runAll)
+                }
+                .help("Run every statement on the page (⌘⇧↩)")
                 .disabled(queryController == nil || queryController?.isRunning == true)
 
                 Button {

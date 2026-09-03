@@ -117,8 +117,10 @@ struct DBStudioCommands: Commands {
         }
 
         CommandMenu("Query") {
-            Button("Run") { workspace?.run(all: false) }
+            Button("Run Current or Selection") { workspace?.run(all: false) }
                 .keyboardShortcut(.return, modifiers: .command)
+            Button("Run Selected") { workspace?.runSelection() }
+                .keyboardShortcut(.return, modifiers: [.command, .option])
             Button("Run All") { workspace?.run(all: true) }
                 .keyboardShortcut(.return, modifiers: [.command, .shift])
             Button("Cancel") { workspace?.cancel() }

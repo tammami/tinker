@@ -1,7 +1,7 @@
 import Foundation
 import SQLite3
 
-/// Errors from the local store. These are DBStudio's own storage failing, never a user's
+/// Errors from the local store. These are Tinker's own storage failing, never a user's
 /// database, so they are kept separate from `DBError`.
 public enum StoreError: Error, CustomStringConvertible {
     case openFailed(path: String, message: String)

@@ -53,7 +53,7 @@ public actor ConnectionSession {
         registry: DriverRegistry,
         secrets: any SecretStore,
         tunnelProvider: (any TunnelProvider)? = nil,
-        logger: Logger = Logger(label: "dbstudio.session"),
+        logger: Logger = Logger(label: "tinker.session"),
         clock: any Clock<Duration> = ContinuousClock()
     ) {
         self.config = config

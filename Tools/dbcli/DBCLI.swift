@@ -377,7 +377,7 @@ struct DBCLI {
     static func printUsage() {
         print(
             """
-            dbcli — DBStudio's driver harness
+            dbcli — Tinker's driver harness
 
             USAGE
               dbcli <url> "<sql>"          run statements, printing rows as TSV

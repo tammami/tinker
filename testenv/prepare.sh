@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# testenv/prepare.sh — create the isolated `dbstudio_test` database and user on the
+# testenv/prepare.sh — create the isolated `tinker_test` database and user on the
 # developer's EXISTING local PostgreSQL and/or MySQL servers, then load fixtures.
 #
-#   Reads:  DBSTUDIO_TEST_PG_ADMIN_URL     e.g. postgresql://me@localhost:5432/postgres
-#           DBSTUDIO_TEST_MYSQL_ADMIN_URL  e.g. mysql://root:secret@127.0.0.1:3306/
-#   Prints: the non-admin URLs to export as DBSTUDIO_TEST_PG_URL / DBSTUDIO_TEST_MYSQL_URL
+#   Reads:  TINKER_TEST_PG_ADMIN_URL     e.g. postgresql://me@localhost:5432/postgres
+#           TINKER_TEST_MYSQL_ADMIN_URL  e.g. mysql://root:secret@127.0.0.1:3306/
+#   Prints: the non-admin URLs to export as TINKER_TEST_PG_URL / TINKER_TEST_MYSQL_URL
 #
 # Guarantees (SPEC §16 Phase 0, §17.1):
 #   - idempotent: safe to re-run at any time
 #   - installs, starts, stops and reconfigures nothing
-#   - touches only database `dbstudio_test` and user `dbstudio_test`
+#   - touches only database `tinker_test` and user `tinker_test`
 #   - the test user has rights only on that database
 #
 # Admin URLs are used here and nowhere else. Tests refuse admin users.
 set -euo pipefail
 
-TEST_DB="dbstudio_test"
-TEST_USER="dbstudio_test"
-TEST_PASSWORD="dbstudio_test"   # local-only, fixed so re-runs are idempotent (DECISIONS.md ADR-0004)
+TEST_DB="tinker_test"
+TEST_USER="tinker_test"
+TEST_PASSWORD="tinker_test"   # local-only, fixed so re-runs are idempotent (DECISIONS.md ADR-0004)
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURES="$HERE/fixtures"
@@ -53,7 +53,7 @@ prepare_pg() {
     command -v psql >/dev/null || die "psql not found on PATH (needed for PostgreSQL preparation)"
     parse_url "$admin"
     local host="$URL_HOST" port="${URL_PORT:-5432}"
-    case "$URL_SCHEME" in postgres|postgresql) ;; *) die "DBSTUDIO_TEST_PG_ADMIN_URL must use postgresql://";; esac
+    case "$URL_SCHEME" in postgres|postgresql) ;; *) die "TINKER_TEST_PG_ADMIN_URL must use postgresql://";; esac
 
     log "PostgreSQL: connecting as admin to $host:$port"
     local version
@@ -107,7 +107,7 @@ SQL
     super="$(psql "$test_url" -Atqc "SELECT rolsuper FROM pg_roles WHERE rolname = current_user")"
     [[ "$super" == "f" ]] || die "PostgreSQL: $TEST_USER is superuser; refusing to hand out this URL"
 
-    exports+=("export DBSTUDIO_TEST_PG_URL='$test_url'")
+    exports+=("export TINKER_TEST_PG_URL='$test_url'")
     did_anything=1
 }
 
@@ -119,7 +119,7 @@ prepare_mysql() {
     command -v mysql >/dev/null || die "mysql client not found on PATH (needed for MySQL preparation)"
     parse_url "$admin"
     local host="$URL_HOST" port="${URL_PORT:-3306}" user="$URL_USER" pass="$URL_PASS"
-    case "$URL_SCHEME" in mysql|mariadb) ;; *) die "DBSTUDIO_TEST_MYSQL_ADMIN_URL must use mysql://";; esac
+    case "$URL_SCHEME" in mysql|mariadb) ;; *) die "TINKER_TEST_MYSQL_ADMIN_URL must use mysql://";; esac
 
     # MYSQL_PWD keeps the password off the process list and silences the CLI warning.
     admin_mysql() { MYSQL_PWD="$pass" mysql --protocol=tcp -h "$host" -P "$port" -u "$user" "$@"; }
@@ -152,24 +152,24 @@ SQL
     bad="$(printf '%s\n' "$grants" | grep -v -E "^GRANT USAGE ON \*\.\* TO" | grep -v -E "ON \`?$TEST_DB\`?\.\* TO" || true)"
     [[ -z "$bad" ]] || die "MySQL: $TEST_USER has grants beyond $TEST_DB:\n$bad"
 
-    exports+=("export DBSTUDIO_TEST_MYSQL_URL='mysql://$TEST_USER:$TEST_PASSWORD@$host:$port/$TEST_DB'")
+    exports+=("export TINKER_TEST_MYSQL_URL='mysql://$TEST_USER:$TEST_PASSWORD@$host:$port/$TEST_DB'")
     did_anything=1
 }
 
 # ---------------------------------------------------------------------------
-if [[ -n "${DBSTUDIO_TEST_PG_ADMIN_URL:-}" ]]; then
-    prepare_pg "$DBSTUDIO_TEST_PG_ADMIN_URL"
+if [[ -n "${TINKER_TEST_PG_ADMIN_URL:-}" ]]; then
+    prepare_pg "$TINKER_TEST_PG_ADMIN_URL"
 else
-    warn "DBSTUDIO_TEST_PG_ADMIN_URL not set — skipping PostgreSQL"
+    warn "TINKER_TEST_PG_ADMIN_URL not set — skipping PostgreSQL"
 fi
 
-if [[ -n "${DBSTUDIO_TEST_MYSQL_ADMIN_URL:-}" ]]; then
-    prepare_mysql "$DBSTUDIO_TEST_MYSQL_ADMIN_URL"
+if [[ -n "${TINKER_TEST_MYSQL_ADMIN_URL:-}" ]]; then
+    prepare_mysql "$TINKER_TEST_MYSQL_ADMIN_URL"
 else
-    warn "DBSTUDIO_TEST_MYSQL_ADMIN_URL not set — skipping MySQL"
+    warn "TINKER_TEST_MYSQL_ADMIN_URL not set — skipping MySQL"
 fi
 
-[[ "$did_anything" == 1 ]] || die "nothing to do: set DBSTUDIO_TEST_PG_ADMIN_URL and/or DBSTUDIO_TEST_MYSQL_ADMIN_URL (see testenv/README.md)"
+[[ "$did_anything" == 1 ]] || die "nothing to do: set TINKER_TEST_PG_ADMIN_URL and/or TINKER_TEST_MYSQL_ADMIN_URL (see testenv/README.md)"
 
 echo
 log "Done. Export these before running Scripts/ci.sh (or save them to testenv/.env, which is git-ignored):"

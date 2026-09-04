@@ -125,7 +125,7 @@ final class ConnectionConfigTests: XCTestCase {
     func testSecretRefNaming() {
         let id = UUID(uuidString: "11111111-2222-3333-4444-555555555555") ?? UUID()
         let ref = SecretRef.forConnection(id, field: "password")
-        XCTAssertEqual(ref.service, "com.dbstudio.connection")
+        XCTAssertEqual(ref.service, "com.tinker.connection")
         XCTAssertEqual(ref.account, "\(id.uuidString).password")
     }
 

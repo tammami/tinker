@@ -1,6 +1,6 @@
 # CLAUDE.md — working rules for this repository
 
-You are implementing DBStudio, a native macOS PostgreSQL/MySQL client. `SPEC.md` is the source of truth. Read it fully before any task. This file covers how to work, not what to build.
+You are implementing Tinker, a native macOS PostgreSQL/MySQL client. `SPEC.md` is the source of truth. Read it fully before any task. This file covers how to work, not what to build.
 
 ## Order of operations
 1. Locate the current phase in `PROGRESS.md`. Work only on that phase.
@@ -26,7 +26,7 @@ You are implementing DBStudio, a native macOS PostgreSQL/MySQL client. `SPEC.md`
 - Data grid = AppKit `NSTableView`. SQL editor = AppKit `NSTextView`. Not negotiable; SwiftUI equivalents fail the performance criteria.
 
 ## Testing rules
-- Unit tests need no network. Integration tests run against the developer's existing local servers via `DBSTUDIO_TEST_*` env vars after `testenv/prepare.sh`. Never install, start, stop, or reconfigure a database server. Never use Docker. Never point tests at a database not named `dbstudio_test`, and never use a superuser/root URL for tests (admin URLs are for `prepare.sh` only).
+- Unit tests need no network. Integration tests run against the developer's existing local servers via `TINKER_TEST_*` env vars after `testenv/prepare.sh`. Never install, start, stop, or reconfigure a database server. Never use Docker. Never point tests at a database not named `tinker_test`, and never use a superuser/root URL for tests (admin URLs are for `prepare.sh` only).
 - A driver feature without an integration test that actually ran against at least the local instance is not done. Skipped tests are not passing tests; report them as gaps in `PROGRESS.md`.
 - Performance criteria in SPEC §12.6 are tested with signposts/XCTMetric, not by eye.
 

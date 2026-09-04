@@ -10,39 +10,39 @@ final class TestEnvironmentTests: XCTestCase {
 
     func testPrimaryAndAdditionalURLsAreOrdered() throws {
         let env = [
-            "DBSTUDIO_TEST_PG_URL": "postgresql://dbstudio_test:pw@localhost:5432/dbstudio_test",
-            "DBSTUDIO_TEST_PG_URLS":
-                " postgres://dbstudio_test@10.0.0.2/dbstudio_test , ,postgresql://dbstudio_test@10.0.0.3:5433/dbstudio_test",
+            "TINKER_TEST_PG_URL": "postgresql://tinker_test:pw@localhost:5432/tinker_test",
+            "TINKER_TEST_PG_URLS":
+                " postgres://tinker_test@10.0.0.2/tinker_test , ,postgresql://tinker_test@10.0.0.3:5433/tinker_test",
         ]
         let servers = try TestEnvironment.servers(for: .postgresql, environment: env)
         XCTAssertEqual(servers.map(\.host), ["localhost", "10.0.0.2", "10.0.0.3"])
         XCTAssertEqual(servers.map(\.port), [5432, 5432, 5433])
         XCTAssertEqual(
-            servers.map(\.source), ["DBSTUDIO_TEST_PG_URL", "DBSTUDIO_TEST_PG_URLS", "DBSTUDIO_TEST_PG_URLS"])
+            servers.map(\.source), ["TINKER_TEST_PG_URL", "TINKER_TEST_PG_URLS", "TINKER_TEST_PG_URLS"])
         XCTAssertEqual(servers[0].password, "pw")
-        XCTAssertEqual(servers[0].database, "dbstudio_test")
+        XCTAssertEqual(servers[0].database, "tinker_test")
     }
 
     func testRefusesOtherDatabases() {
-        let env = ["DBSTUDIO_TEST_MYSQL_URL": "mysql://dbstudio_test:pw@127.0.0.1:3306/production"]
+        let env = ["TINKER_TEST_MYSQL_URL": "mysql://tinker_test:pw@127.0.0.1:3306/production"]
         XCTAssertThrowsError(try TestEnvironment.servers(for: .mysql, environment: env)) { error in
             guard case let TestEnvironmentError.wrongDatabase(_, database, expected)? = error as? TestEnvironmentError
             else {
                 return XCTFail("unexpected error \(error)")
             }
             XCTAssertEqual(database, "production")
-            XCTAssertEqual(expected, "dbstudio_test")
+            XCTAssertEqual(expected, "tinker_test")
         }
     }
 
     func testRefusesMissingDatabase() {
-        let env = ["DBSTUDIO_TEST_MYSQL_URL": "mysql://dbstudio_test:pw@127.0.0.1:3306/"]
+        let env = ["TINKER_TEST_MYSQL_URL": "mysql://tinker_test:pw@127.0.0.1:3306/"]
         XCTAssertThrowsError(try TestEnvironment.servers(for: .mysql, environment: env))
     }
 
     func testRefusesAdminUsers() {
         for user in ["root", "postgres", "ROOT"] {
-            let env = ["DBSTUDIO_TEST_PG_URL": "postgresql://\(user):pw@localhost/dbstudio_test"]
+            let env = ["TINKER_TEST_PG_URL": "postgresql://\(user):pw@localhost/tinker_test"]
             XCTAssertThrowsError(try TestEnvironment.servers(for: .postgresql, environment: env), user) { error in
                 guard case TestEnvironmentError.adminUser? = error as? TestEnvironmentError else {
                     return XCTFail("unexpected error \(error)")
@@ -52,7 +52,7 @@ final class TestEnvironmentTests: XCTestCase {
     }
 
     func testRefusesWrongScheme() {
-        let env = ["DBSTUDIO_TEST_PG_URL": "mysql://dbstudio_test@localhost/dbstudio_test"]
+        let env = ["TINKER_TEST_PG_URL": "mysql://tinker_test@localhost/tinker_test"]
         XCTAssertThrowsError(try TestEnvironment.servers(for: .postgresql, environment: env)) { error in
             guard case TestEnvironmentError.wrongScheme? = error as? TestEnvironmentError else {
                 return XCTFail("unexpected error \(error)")
@@ -61,12 +61,12 @@ final class TestEnvironmentTests: XCTestCase {
     }
 
     func testRefusesGarbage() {
-        let env = ["DBSTUDIO_TEST_PG_URL": "not a url"]
+        let env = ["TINKER_TEST_PG_URL": "not a url"]
         XCTAssertThrowsError(try TestEnvironment.servers(for: .postgresql, environment: env))
     }
 
     func testRedactedDescriptionHidesPassword() throws {
-        let env = ["DBSTUDIO_TEST_PG_URL": "postgresql://dbstudio_test:s3cret@localhost/dbstudio_test"]
+        let env = ["TINKER_TEST_PG_URL": "postgresql://tinker_test:s3cret@localhost/tinker_test"]
         let server = try XCTUnwrap(TestEnvironment.servers(for: .postgresql, environment: env).first)
         XCTAssertFalse(server.redactedDescription.contains("s3cret"))
         XCTAssertTrue(server.redactedDescription.contains("***"))

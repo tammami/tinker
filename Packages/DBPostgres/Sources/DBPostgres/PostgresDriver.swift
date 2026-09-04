@@ -48,7 +48,7 @@ public enum PostgresDriver: SQLDriver {
         if let applicationName = config.options[ConnectionConfig.OptionKey.applicationName] {
             startupParameters.append(("application_name", applicationName))
         } else {
-            startupParameters.append(("application_name", "DBStudio"))
+            startupParameters.append(("application_name", "Tinker"))
         }
         configuration.options.additionalStartupParameters = startupParameters
 

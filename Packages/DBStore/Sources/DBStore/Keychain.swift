@@ -38,7 +38,12 @@ public struct KeychainSecretStore: SecretStore {
             guard let data = item as? Data else { return nil }
             return String(data: data, encoding: .utf8)
         case errSecItemNotFound:
-            return nil
+            // A secret saved before the rename lives under the old service; bring it over.
+            guard serviceOverride == nil, reference.service == SecretRef.defaultService else { return nil }
+            let legacy = SecretRef(service: SecretRef.legacyService, account: reference.account)
+            guard let value = try await secret(for: legacy) else { return nil }
+            try? await setSecret(value, for: reference)
+            return value
         default:
             throw KeychainError(status: status, operation: "read")
         }

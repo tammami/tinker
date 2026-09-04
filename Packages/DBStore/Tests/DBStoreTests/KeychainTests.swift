@@ -13,7 +13,7 @@ final class KeychainSecretStoreTests: XCTestCase {
     var connectionID: UUID!
 
     override func setUp() async throws {
-        service = "com.dbstudio.tests.\(UUID().uuidString)"
+        service = "com.tinker.tests.\(UUID().uuidString)"
         store = KeychainSecretStore(serviceOverride: service)
         connectionID = UUID()
 

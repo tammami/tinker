@@ -1,5 +1,5 @@
 // swift-tools-version: 6.2
-// DBStudio workspace root.
+// Tinker workspace root.
 //
 // Every library lives under Packages/<Name> and the CLI harness under Tools/dbcli.
 // A single root manifest gives one build graph, one `swift test`, and one local
@@ -21,7 +21,7 @@ let strict: [SwiftSetting] = [
 ]
 
 let package = Package(
-    name: "DBStudio",
+    name: "Tinker",
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "DBCore", targets: ["DBCore"]),

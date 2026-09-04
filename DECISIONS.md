@@ -13,12 +13,12 @@ Date: 2026-09-03 (Phase 0)
 
 **Consequences.** Separate packages would enforce the import direction structurally, and SwiftPM does not fully enforce it for sibling targets. `Scripts/ci.sh` therefore lints every `import` in `Packages/*/Sources` against an allow-list (DBCore → Foundation + Logging only; drivers never import each other; DBStore never imports drivers). Building each package in isolation would otherwise rebuild NIO seven times per CI run.
 
-## ADR-0002 — App target is `App/DBStudio.xcodeproj`, product `DBStudio`, bundle id `com.thinkfree.DBStudio`
+## ADR-0002 — App target is `App/Tinker.xcodeproj`, product `Tinker`, bundle id `com.thinkfree.Tinker`
 Date: 2026-09-03 (Phase 0)
 
-**Context.** The repository was created as `ThinkStudio.xcodeproj` with a boilerplate SwiftUI app (macOS 26.5 deployment target, Swift 5 mode, App Sandbox on, default MainActor isolation). SPEC names the product DBStudio, requires macOS 14.0+, Swift 6 strict concurrency, hardened runtime, and no sandbox (§2).
+**Context.** The repository was created as `ThinkStudio.xcodeproj` with a boilerplate SwiftUI app (macOS 26.5 deployment target, Swift 5 mode, App Sandbox on, default MainActor isolation). SPEC names the product Tinker, requires macOS 14.0+, Swift 6 strict concurrency, hardened runtime, and no sandbox (§2).
 
-**Decision.** The boilerplate project was replaced by `App/DBStudio.xcodeproj` (synchronized folder `App/DBStudio/`), following the spec's naming and build settings. The bundle-id prefix keeps the developer's `com.thinkfree` organisation. Keychain service and Application Support paths use the spec's `DBStudio` names.
+**Decision.** The boilerplate project was replaced by `App/Tinker.xcodeproj` (synchronized folder `App/Tinker/`), following the spec's naming and build settings. The bundle-id prefix keeps the developer's `com.thinkfree` organisation. Keychain service and Application Support paths use the spec's `Tinker` names.
 
 **Consequences.** If the product must ship under the name ThinkStudio, rename `PRODUCT_NAME`/`PRODUCT_BUNDLE_IDENTIFIER` and the Application Support folder in one commit; nothing else depends on the name.
 
@@ -36,7 +36,7 @@ Date: 2026-09-03 (Phase 0)
 
 **Context.** `testenv/prepare.sh` must be idempotent and print URLs the developer exports. A random password would change on every run and desynchronise the exported URL.
 
-**Decision.** User `dbstudio_test`, password `dbstudio_test`, database `dbstudio_test`. The user is `NOSUPERUSER NOCREATEDB NOCREATEROLE` on PG and has only `USAGE ON *.*` plus `ALL ON dbstudio_test.*` on MySQL; `prepare.sh` verifies both after loading fixtures and refuses to print the URL otherwise.
+**Decision.** User `tinker_test`, password `tinker_test`, database `tinker_test`. The user is `NOSUPERUSER NOCREATEDB NOCREATEROLE` on PG and has only `USAGE ON *.*` plus `ALL ON tinker_test.*` on MySQL; `prepare.sh` verifies both after loading fixtures and refuses to print the URL otherwise.
 
 **Consequences.** Local-only credentials. On PG the test user can still *connect* to other databases (CONNECT is granted to PUBLIC by default) but owns nothing there and cannot create objects; revoking that would mean modifying other databases, which SPEC §17.1 forbids.
 
@@ -52,9 +52,9 @@ Date: 2026-09-03 (Phase 0)
 ## ADR-0006 — Admin-user check in `DBTestKit` is a name heuristic until Phase 1
 Date: 2026-09-03 (Phase 0)
 
-**Context.** SPEC §17.1 requires tests to refuse a URL whose user has privileges beyond `dbstudio_test`. Without a driver (Phase 1) the privilege level cannot be queried.
+**Context.** SPEC §17.1 requires tests to refuse a URL whose user has privileges beyond `tinker_test`. Without a driver (Phase 1) the privilege level cannot be queried.
 
-**Decision.** Phase 0 refuses the database name being anything but `dbstudio_test` and refuses users named `root`, `postgres`, `admin`, `mysql`. Phase 1 adds the real check at connect time (PG `rolsuper`, MySQL `SHOW GRANTS`) inside the integration-test fixtures.
+**Decision.** Phase 0 refuses the database name being anything but `tinker_test` and refuses users named `root`, `postgres`, `admin`, `mysql`. Phase 1 adds the real check at connect time (PG `rolsuper`, MySQL `SHOW GRANTS`) inside the integration-test fixtures.
 
 **Consequences.** Until Phase 1, a non-standard admin account name is not caught. Tracked in PROGRESS.md.
 
@@ -122,7 +122,7 @@ Date: 2026-09-03 (Phase 2)
 
 **Decision.** Password and private-key-file authentication ship. `.agent` throws a `tunnelFailed(stage: .sshAuth, …)` whose message names the alternative (`~/.ssh/id_ed25519`). The spec's stated fallback — libssh2 through a C module — would replace the whole tunnel implementation for one authentication method and is not worth it in v0.1.
 
-**Consequences.** A user whose key is only in the agent, or on a hardware token, must point DBStudio at a key file. Recorded as a gap in PROGRESS.md. ECDSA key *files* are also unsupported, because Citadel exposes OpenSSH readers for ed25519 and RSA only; ed25519 is what `ssh-keygen` produces by default.
+**Consequences.** A user whose key is only in the agent, or on a hardware token, must point Tinker at a key file. Recorded as a gap in PROGRESS.md. ECDSA key *files* are also unsupported, because Citadel exposes OpenSSH readers for ed25519 and RSA only; ed25519 is what `ssh-keygen` produces by default.
 
 ## ADR-0014 — Tunnel tests use an SSH server hosted in the test process
 Date: 2026-09-03 (Phase 2)
@@ -131,7 +131,7 @@ Date: 2026-09-03 (Phase 2)
 
 **Decision.** The tunnel suite starts an SSH server inside the test process using Citadel's server support, with a generated host key and a delegate that accepts one password or one public key. Tests then forward to a local echo server and to the real local PostgreSQL.
 
-**Consequences.** Key exchange, authentication and `direct-tcpip` forwarding are exercised over a real socket against a real SSH implementation, so the client is genuinely covered. What is *not* covered is interoperability with OpenSSH's `sshd` — its key-exchange and cipher preferences, its `known_hosts` behaviour end to end, and jump hosts. Those remain gaps until `DBSTUDIO_TEST_SSH_PASSWORD_URL` / `DBSTUDIO_TEST_SSH_JUMP_URL` name a reachable server.
+**Consequences.** Key exchange, authentication and `direct-tcpip` forwarding are exercised over a real socket against a real SSH implementation, so the client is genuinely covered. What is *not* covered is interoperability with OpenSSH's `sshd` — its key-exchange and cipher preferences, its `known_hosts` behaviour end to end, and jump hosts. Those remain gaps until `TINKER_TEST_SSH_PASSWORD_URL` / `TINKER_TEST_SSH_JUMP_URL` name a reachable server.
 
 Two Citadel defects were found along the way and worked around in the test server rather than in the library: `DirectTCPIPForwardingDelegate` installs only outbound handlers, so it forwards nothing; and `Curve25519.Signing.PrivateKey.makeSSHRepresentation()` writes a key its own parser rejects with `invalidPadding`. Key fixtures are therefore generated with `ssh-keygen`, which is what users have anyway.
 
@@ -156,7 +156,7 @@ Date: 2026-09-03 (Phase 2)
 ## ADR-0017 — A `DBGrid` package holds the grid's model
 Date: 2026-09-03 (Phase 3)
 
-**Context.** SPEC §3 puts the data grid under `App/DBStudio/Features/DataGrid/`, and SPEC §17 requires unit tests for `EditBuffer` semantics and paging-strategy selection. Code in the Xcode app target cannot be reached by `swift test`, which is what `Scripts/ci.sh` runs.
+**Context.** SPEC §3 puts the data grid under `App/Tinker/Features/DataGrid/`, and SPEC §17 requires unit tests for `EditBuffer` semantics and paging-strategy selection. Code in the Xcode app target cannot be reached by `swift test`, which is what `Scripts/ci.sh` runs.
 
 **Decision.** The grid's model — `RowBuffer`, `EditBuffer`, `GridModel`, `GridCommitter`, `ClipboardFormatter`, `RowExporter`, `SessionGridLoader` — lives in a new `Packages/DBGrid`. Only the AppKit views and the tab controller stay in the app.
 
@@ -176,7 +176,7 @@ Date: 2026-09-03 (Phase 3–5)
 
 **Context.** SPEC §17 asks for a minimal XCUITest covering launch, create connection, connect, open table, run query and cancel query. XCUITest drives the app through the accessibility system, which requires the machine to grant Accessibility permission to the test runner. This machine denies synthetic input to the build session, and a build machine cannot grant it to itself.
 
-**Decision.** `DBStudio --smoke-test` runs the same sequence headlessly against the objects the views drive: `AppEnvironment` opens the store, `ConnectionSession` connects, `QueryTabController` runs a statement and reads its rows, cancels a `pg_sleep(30)` and checks it returned in under five seconds, and `TableTabController` introspects and pages a real table. `Scripts/ci.sh` runs it after building the app.
+**Decision.** `Tinker --smoke-test` runs the same sequence headlessly against the objects the views drive: `AppEnvironment` opens the store, `ConnectionSession` connects, `QueryTabController` runs a statement and reads its rows, cancels a `pg_sleep(30)` and checks it returned in under five seconds, and `TableTabController` introspects and pages a real table. `Scripts/ci.sh` runs it after building the app.
 
 **Consequences.** Every layer below the views is covered end to end on each CI run, and the checks are readable and fast. What is *not* covered is the view layer itself: menu items, focus, drawing, mouse and keyboard handling in the grid and editor. Those remain manual, and PROGRESS.md says so.
 
@@ -212,7 +212,7 @@ Date: 2026-09-03 (Phase 7)
 
 **Context.** Sparkle 2 needs an appcast URL and an EdDSA public key, and the matching private key signs each release. Only whoever ships the app has those, and committing a placeholder key would make an unsigned feed look trusted.
 
-**Decision.** `Info.plist` reads `SUFeedURL` and `SUPublicEDKey` from build settings that `Scripts/release.sh` fills in from `DBSTUDIO_APPCAST_URL` and `DBSTUDIO_SPARKLE_PUBLIC_KEY`. A build without them creates no `SPUStandardUpdaterController` at all, and the Check for Updates menu item is disabled and says so.
+**Decision.** `Info.plist` reads `SUFeedURL` and `SUPublicEDKey` from build settings that `Scripts/release.sh` fills in from `TINKER_APPCAST_URL` and `TINKER_SPARKLE_PUBLIC_KEY`. A build without them creates no `SPUStandardUpdaterController` at all, and the Check for Updates menu item is disabled and says so.
 
 **Consequences.** A development build never touches the network for updates and never logs Sparkle's "no feed" error. Automatic checking is off until the user turns it on, which is the right default for a tool that talks to production databases. The release script prints the `sign_update` command whose output goes into the appcast.
 
@@ -248,7 +248,7 @@ Date: 2026-09-03
 
 **Context.** macOS 26 draws app icons in light, dark, tinted and clear appearances, and applies the shape, gradient, specular highlight and shadow itself. An asset catalogue cannot express that: `actool` rejects `appearances` entries under the `mac` idiom and rejects a `platform` value of `macos` or `macOS` — the appearance format in Xcode's own templates is iOS-only. Both single-size layouts warned, which fails `Scripts/ci.sh`. The supported input is an Icon Composer `.icon` document, and Icon Composer is a GUI application with no command line.
 
-**Decision.** `DBStudio.icon` is written by hand rather than through the GUI. It is a plain directory: `icon.json` naming one group, one layer and the background fill, and `Assets/bulb.svg` holding the artwork. The schema was read out of `IconComposerFoundation`; colours are `space:components` strings, which is what "Invalid color encoding, missing ':' delimiter" was complaining about. `ASSETCATALOG_COMPILER_APPICON_NAME` names it, and the synchronized folder group picks it up with no project surgery.
+**Decision.** `Tinker.icon` is written by hand rather than through the GUI. It is a plain directory: `icon.json` naming one group, one layer and the background fill, and `Assets/bulb.svg` holding the artwork. The schema was read out of `IconComposerFoundation`; colours are `space:components` strings, which is what "Invalid color encoding, missing ':' delimiter" was complaining about. `ASSETCATALOG_COMPILER_APPICON_NAME` names it, and the synchronized folder group picks it up with no project surgery.
 
 **Consequences.** The icon is adaptive: the system composites the squircle, the gradient, the specular sweep and the shadow, and derives the dark and tinted appearances, so none of that is painted into the artwork any more. The source is one SVG a designer can edit, which is why `Scripts/make-icon.swift` and the ten fixed-size PNGs are gone. The format is not publicly documented, so an Xcode upgrade could change it; `xcrun actool --compile` on the `.icon` reproduces the check in seconds, and `Scripts/ci.sh` fails on any warning it emits.
 

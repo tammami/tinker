@@ -765,9 +765,9 @@ extension MySQLIntegrationTests {
             let me = try XCTUnwrap(users.first { $0.name == server.user })
             let grants = try await introspector.grants(for: me)
             XCTAssertTrue(grants.contains { $0.uppercased().hasPrefix("GRANT") }, "\(grants)")
-            XCTAssertTrue(grants.contains { $0.contains("dbstudio_test") }, "\(grants)")
+            XCTAssertTrue(grants.contains { $0.contains("tinker_test") }, "\(grants)")
             let statements = try UserOperations.create(
-                UserRequest(name: "dbstudio_test_new_user", host: "localhost", password: "x"), dialect: .mysql
+                UserRequest(name: "tinker_test_new_user", host: "localhost", password: "x"), dialect: .mysql
             )
             do {
                 _ = try await connection.executeCollecting(statements[0])

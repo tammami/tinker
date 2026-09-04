@@ -10,16 +10,16 @@ public enum TestEngine: String, Sendable, Hashable, CaseIterable {
     /// Environment variable holding the single primary test URL (SPEC §17.1).
     public var primaryVariable: String {
         switch self {
-        case .postgresql: "DBSTUDIO_TEST_PG_URL"
-        case .mysql: "DBSTUDIO_TEST_MYSQL_URL"
+        case .postgresql: "TINKER_TEST_PG_URL"
+        case .mysql: "TINKER_TEST_MYSQL_URL"
         }
     }
 
     /// Environment variable holding a comma-separated list of additional test URLs.
     public var additionalVariable: String {
         switch self {
-        case .postgresql: "DBSTUDIO_TEST_PG_URLS"
-        case .mysql: "DBSTUDIO_TEST_MYSQL_URLS"
+        case .postgresql: "TINKER_TEST_PG_URLS"
+        case .mysql: "TINKER_TEST_MYSQL_URLS"
         }
     }
 
@@ -75,10 +75,10 @@ public enum TestEnvironmentError: Error, Hashable, CustomStringConvertible {
     }
 }
 
-/// Resolves integration-test servers from `DBSTUDIO_TEST_*` environment variables (SPEC §17.1).
+/// Resolves integration-test servers from `TINKER_TEST_*` environment variables (SPEC §17.1).
 public enum TestEnvironment {
     /// The only database name integration tests may touch.
-    public static let requiredDatabaseName = "dbstudio_test"
+    public static let requiredDatabaseName = "tinker_test"
 
     /// User names that are refused outright. The definitive privilege check
     /// (PG: not superuser; MySQL: no global grants) runs once a driver exists (Phase 1).
@@ -234,6 +234,6 @@ public enum TestGuards {
 /// collects them into its coverage summary.
 public enum TestLog {
     public static func note(_ message: String) {
-        FileHandle.standardError.write(Data("[dbstudio-test] \(message)\n".utf8))
+        FileHandle.standardError.write(Data("[tinker-test] \(message)\n".utf8))
     }
 }

@@ -7,18 +7,18 @@ All seven phases of SPEC §16 are complete. See the per-phase entries below, and
 ## Phase 0 — Scaffold (2026-09-03)
 
 ### Done
-- Repository layout per SPEC §3: `Packages/{DBCore,DBPostgres,DBMySQL,DBTunnel,DBStore,DBSQL,DBTestKit}`, `App/DBStudio`, `Tools/dbcli`, `testenv/`, `Scripts/`.
+- Repository layout per SPEC §3: `Packages/{DBCore,DBPostgres,DBMySQL,DBTunnel,DBStore,DBSQL,DBTestKit}`, `App/Tinker`, `Tools/dbcli`, `testenv/`, `Scripts/`.
 - Root `Package.swift` (tools 6.2, Swift 6 language mode → strict concurrency complete, macOS 14) with one target per package plus test targets; only dependency is swift-log (ADR-0001).
 - `DBCore.SQLDialect` (SPEC §7/§9) is the single real type landed; all other packages are compiling placeholders.
-- `DBTestKit.TestEnvironment`: resolves `DBSTUDIO_TEST_{PG,MYSQL}_URL(S)`, refuses any database other than `dbstudio_test` and admin user names (fails, does not skip), skips with a reason when unset, and prints a redacted summary.
+- `DBTestKit.TestEnvironment`: resolves `TINKER_TEST_{PG,MYSQL}_URL(S)`, refuses any database other than `tinker_test` and admin user names (fails, does not skip), skips with a reason when unset, and prints a redacted summary.
 - `Tools/dbcli` prints `hello`.
-- `App/DBStudio.xcodeproj`: SwiftUI app, macOS 14.0, arm64 only, Swift 6, strict concurrency, hardened runtime on, App Sandbox off, warnings as errors, links `DBCore` from the root package; opens one empty window (ADR-0002). Shared scheme `DBStudio`.
-- `testenv/prepare.sh`: creates `dbstudio_test` db + user on the developer's existing PG/MySQL from admin URLs, loads `testenv/fixtures/<dialect>/*.sql` as the test user, verifies not-superuser / no-global-grants, prints the non-admin URLs. Idempotent (re-run verified). Installs nothing.
+- `App/Tinker.xcodeproj`: SwiftUI app, macOS 14.0, arm64 only, Swift 6, strict concurrency, hardened runtime on, App Sandbox off, warnings as errors, links `DBCore` from the root package; opens one empty window (ADR-0002). Shared scheme `Tinker`.
+- `testenv/prepare.sh`: creates `tinker_test` db + user on the developer's existing PG/MySQL from admin URLs, loads `testenv/fixtures/<dialect>/*.sql` as the test user, verifies not-superuser / no-global-grants, prints the non-admin URLs. Idempotent (re-run verified). Installs nothing.
 - `Scripts/ci.sh`: rebuilds first-party modules with zero-warning gate, lints import direction, runs `swift test`, builds the app with xcodebuild, warns visibly when an engine's URL is unset, and ends with a coverage summary.
 
 ### Verified against local servers
 - PostgreSQL 16.15 (Homebrew, `localhost:5432`): prepare OK; test user `rolsuper=f`, `CREATE TABLE` in another database denied.
-- MySQL 9.4.0 (Laravel Herd, `127.0.0.1:3306`, root has an empty password): prepare OK; grants are exactly `USAGE ON *.*` + `ALL ON dbstudio_test.*`; `CREATE DATABASE` denied.
+- MySQL 9.4.0 (Laravel Herd, `127.0.0.1:3306`, root has an empty password): prepare OK; grants are exactly `USAGE ON *.*` + `ALL ON tinker_test.*`; `CREATE DATABASE` denied.
 - `Scripts/ci.sh` green with both URLs exported.
 
 ### Tests
@@ -30,7 +30,7 @@ All seven phases of SPEC §16 are complete. See the per-phase entries below, and
 - Real privilege check (PG superuser, MySQL global grants) at connect time → Phase 1 (ADR-0006).
 - Fixture set is a single `smoke` table; the full SPEC §17 fixture data (Unicode, 1 MB strings, extreme numerics, DST timestamps, 1M-row `big_table`) lands with the phases that consume it.
 - No integration test actually opens a network connection yet (no driver). `ci.sh` reports the configured engines from the environment; from Phase 1 the driver tests log the detected server version.
-- Only MySQL 9.4 is available locally. MySQL 9 has removed `mysql_native_password`; that auth path stays untested until a 5.7/8.0/MariaDB URL is added to `DBSTUDIO_TEST_MYSQL_URLS`.
+- Only MySQL 9.4 is available locally. MySQL 9 has removed `mysql_native_password`; that auth path stays untested until a 5.7/8.0/MariaDB URL is added to `TINKER_TEST_MYSQL_URLS`.
 - SSH: `sudo` is not available non-interactively in this environment, so Remote Login status could not be checked; Phase 2 needs it enabled in System Settings.
 
 ---
@@ -58,9 +58,9 @@ PostgreSQL 16.15 (Homebrew, localhost:5432), reported in the CI coverage summary
 ### Gaps that did not run, and why
 - **`RAISE NOTICE` output** is never populated: postgres-nio does not expose `NoticeResponse` (ADR-0009). `QueryCompletion.notices` is always empty for PostgreSQL.
 - **Columns of an empty result set** are not reported for query tabs, for the same reason (ADR-0009). Table tabs are unaffected.
-- **Authentication-failure path is untested on this machine**: the local `pg_hba.conf` authorises loopback with `trust`, so a wrong password still connects. The test skips with that reason rather than passing. Add a password-enforcing server to `DBSTUDIO_TEST_PG_URLS` to cover it.
+- **Authentication-failure path is untested on this machine**: the local `pg_hba.conf` authorises loopback with `trust`, so a wrong password still connects. The test skips with that reason rather than passing. Add a password-enforcing server to `TINKER_TEST_PG_URLS` to cover it.
 - **Encrypted connections are untested**: the local PostgreSQL is built without TLS, so `sslmode=require` fails with `tlsRequiredButUnavailable` — the correct behaviour, but the encrypted path itself never ran. `verify-ca` and `verify-full` are therefore also uncovered.
-- **Only PostgreSQL 16 was exercised.** `DBSTUDIO_TEST_PG_URLS` is empty, so version branching for 11 and 12 (`prokind`, `attgenerated`) ran only on its modern branch.
+- **Only PostgreSQL 16 was exercised.** `TINKER_TEST_PG_URLS` is empty, so version branching for 11 and 12 (`prokind`, `attgenerated`) ran only on its modern branch.
 - **Client-certificate TLS** is wired but unexercised; SPEC §16 places it in Phase 3.
 
 ---
@@ -70,7 +70,7 @@ PostgreSQL 16.15 (Homebrew, localhost:5432), reported in the CI coverage summary
 ### Done
 - **`ConnectionSession` (§9)**: actor owning the tunnel, a pool of at most 8 physical connections with a 5-minute idle reap, a state stream (`disconnected` / `connecting(stage:)` / `connected` / `degraded`), leases per tab, rollback of any transaction a returned connection still holds, liveness check before reuse, the session-only read-only unlock, the introspection cache with per-table invalidation, and `testConnection` reporting stage by stage. Secrets, tunnels and drivers arrive through `SecretStore`, `TunnelProvider` and `DriverRegistry` so DBCore keeps its two imports (ADR-0012).
 - **`DBTunnel`**: `SSHTunnelProvider` over Citadel with password and private-key authentication (ed25519 and RSA, passphrase supported), one level of jump host, and the three known-hosts policies backed by a real `~/.ssh/known_hosts` parser that understands plain, bracketed-port, multi-host and HMAC-SHA1-hashed entries and appends newly accepted keys. `SSHPortForward` binds an ephemeral loopback port and glues each accepted socket to a `direct-tcpip` channel on the same event loop (ADR-0015).
-- **`DBStore` (§15)**: SQLite over the C API in WAL mode with a busy timeout, numbered migrations tracked in `PRAGMA user_version`, and typed access to connections, groups, query history (capped at 10,000 and trimmed on write), grid preferences and settings. `KeychainSecretStore` stores passwords, SSH passwords and passphrases under `com.dbstudio.connection`, and deletes all three when a connection is removed.
+- **`DBStore` (§15)**: SQLite over the C API in WAL mode with a busy timeout, numbered migrations tracked in `PRAGMA user_version`, and typed access to connections, groups, query history (capped at 10,000 and trimmed on write), grid preferences and settings. `KeychainSecretStore` stores passwords, SSH passwords and passphrases under `com.tinker.connection`, and deletes all three when a connection is removed.
 - **`dbcli`**: `--ssh user@host[:port]`, `--ssh-key`, `--ssh-password`.
 
 ### Tests
@@ -83,7 +83,7 @@ PostgreSQL 16.15 (Homebrew, localhost:5432), reported in the CI coverage summary
 
 ### Gaps that did not run, and why
 - **No test ran against OpenSSH's `sshd`.** Remote Login is off on this machine and enabling it needs administrator rights the test environment may not take. The in-process server covers the client's protocol path but not interoperability with `sshd`'s algorithm preferences. `dbcli --ssh user@localhost` against the local PostgreSQL — the literal Phase 2 acceptance criterion — therefore could not be run; the equivalent is covered by `testPostgresThroughTheTunnel`.
-- **Jump hosts are untested.** `SSHClient.jump(to:)` is wired but no second server was stood up, and `DBSTUDIO_TEST_SSH_JUMP_URL` is unset.
+- **Jump hosts are untested.** `SSHClient.jump(to:)` is wired but no second server was stood up, and `TINKER_TEST_SSH_JUMP_URL` is unset.
 - **SSH agent authentication is not implemented** (ADR-0013); `.agent` throws with a message naming the alternative.
 - **ECDSA private-key files are unsupported**, because Citadel provides OpenSSH readers for ed25519 and RSA only.
 - **`known_hosts` is never consulted in an integration test**: the tunnel tests use the `ignore` policy, since the in-process server generates a fresh host key each run. Parsing and policy selection are unit-tested against real key material.
@@ -122,7 +122,7 @@ plumbing and none of the three is testable in isolation.
 - `GridCommitterTests` (6): the happy path in one transaction, rollback when an `UPDATE` affects zero rows or two, a server error keeping the server's words, `INSERT … RETURNING` counting as one row, and an empty commit opening no transaction.
 - `GridModelTests` (17): page loading, exhaustion, no duplicate fetches, keyset selection only when a preceding page is loaded, offset fallback on a jump, sort and filter reloading from page 0, sort cycling, editability rules, original-identity WHERE clauses, commit clearing the buffer, a failed commit keeping it, streamed results and load failures.
 - **`GridIntegrationTests` (10) against real PostgreSQL**: the first page of the million-row fixture in **79 ms** (criterion: under 500 ms), deep paging staying correct on a keyset cursor, memory bounded while scrolling 120 pages, server-side sort and filter, a filter value that would drop the table proving parameters are bound, three cells across two rows committing as two `UPDATE`s, **concurrent modification failing the commit and writing nothing**, insert and delete in one commit, composite/UUID/no-key behaviour, and an exact count of 1,000,000.
-- **App smoke test** (`DBStudio --smoke-test`, run by `Scripts/ci.sh`): store opens, session connects, a query returns its rows and columns, `SELECT pg_sleep(30)` cancels in **0.59 s**, and a table tab introspects and pages a real table.
+- **App smoke test** (`Tinker --smoke-test`, run by `Scripts/ci.sh`): store opens, session connects, a query returns its rows and columns, `SELECT pg_sleep(30)` cancels in **0.59 s**, and a table tab introspects and pages a real table.
 
 ### Gaps that did not run, and why
 - **The view layer itself is untested.** macOS denies synthetic keyboard and mouse input to this build session, so neither XCUITest nor scripted input can drive menus, focus, drawing or the grid's mouse handling (ADR-0019). The app was launched and photographed: it loads its store, lists its connection, opens a query tab with ⌘T, and reports "Connected". Everything below the views is covered by the smoke test and the integration suites. **The full shortcut table in SPEC §10.2 has not been verified by hand.**
@@ -148,7 +148,7 @@ plumbing and none of the three is testable in isolation.
 - `GridIntegrationTests` now runs on both engines: the first page of MySQL's million-row fixture arrives in **67 ms**.
 
 ### Gaps that did not run, and why
-- **`mysql_native_password` is untested.** MySQL 9.4 removed the plugin, and it is the only server available here. Add a MySQL 5.7 or 8.0 URL to `DBSTUDIO_TEST_MYSQL_URLS` to cover it.
+- **`mysql_native_password` is untested.** MySQL 9.4 removed the plugin, and it is the only server available here. Add a MySQL 5.7 or 8.0 URL to `TINKER_TEST_MYSQL_URLS` to cover it.
 - **MariaDB is untested**, so its `information_schema` differences — routine parameters, index statistics, `GENERATION_EXPRESSION` — ran only on their MySQL branch.
 - **`sha256_password` is untested**, for the same reason: no server offers it here.
 - **Encrypted MySQL connections are untested.** The local server refused the TLS handshake, so `require` exercised only its failure path, and `verify-ca` and `verify-identity` never ran.
@@ -160,14 +160,14 @@ plumbing and none of the three is testable in isolation.
 
 ### Done
 - **App icon**: a generated set at every size the catalogue asks for, 16 pt through 512 pt at 1× and 2×, drawn as three stacked discs on a blue squircle.
-- **Hardened runtime and entitlements**: `DBStudio.entitlements` turns the sandbox off — SSH tunnels and export need it (SPEC §2) — enables the network client, and grants none of the runtime exceptions. The hardened runtime is on in both configurations.
+- **Hardened runtime and entitlements**: `Tinker.entitlements` turns the sandbox off — SSH tunnels and export need it (SPEC §2) — enables the network client, and grants none of the runtime exceptions. The hardened runtime is on in both configurations.
 - **Sparkle 2** linked into the app target and wired behind an `Updater` facade. The feed URL and public key come from the environment at release time (ADR-0023); a build without them creates no updater, disables the menu item and says why. Automatic checking is off by default.
-- **Crash reporting**, opt-in and local only: reports go to `Application Support/DBStudio/Diagnostics`, record the app and system version and a stack trace, and never contain SQL, values or credentials. Settings has a Diagnostics pane to turn it on, count the reports, reveal them in Finder and delete them.
+- **Crash reporting**, opt-in and local only: reports go to `Application Support/Tinker/Diagnostics`, record the app and system version and a stack trace, and never contain SQL, values or credentials. Settings has a Diagnostics pane to turn it on, count the reports, reveal them in Finder and delete them.
 - **First-run experience**: shown once when there are no connections, stating where passwords are kept, that every grid change is previewed as SQL and runs in one transaction, and what Production and Read-only do. It offers the diagnostics choice there rather than assuming it.
 - **`Scripts/release.sh`**: archive, export, verify the signature and hardened runtime, notarize, staple, `spctl` assess, build the DMG, sign and notarize it, and print the Sparkle signing command. `--skip-notarize` and `--unsigned` stop earlier. It derives the team id from the signing identity and refuses to run without a Developer ID certificate, naming what to install.
 
 ### Verified
-- `Scripts/release.sh --unsigned` produces `DBStudio-0.1.0.dmg`, 7.2 MB, containing the app and an Applications symlink.
+- `Scripts/release.sh --unsigned` produces `Tinker-0.1.0.dmg`, 7.2 MB, containing the app and an Applications symlink.
 - The DMG mounts, and the app **inside the mounted image** passes the full smoke test against the local PostgreSQL — store, connection, query, cancel, table tab.
 - `Sparkle.framework` is embedded in the released bundle.
 - Running the script without a Developer ID certificate fails with the list of available identities and the command to create the notary profile.
@@ -248,7 +248,7 @@ test could not see, because it exercised the same objects in a different order.
 
 ### Gaps
 
-- ~~The app icon is not adaptive.~~ **Done.** `DBStudio.icon` is a hand-authored Icon
+- ~~The app icon is not adaptive.~~ **Done.** `Tinker.icon` is a hand-authored Icon
   Composer document — `icon.json` plus one SVG layer — so the system composites the shape,
   gradient, specular highlight and shadow and derives the dark and tinted appearances. The
   schema came out of `IconComposerFoundation` (ADR-0027). `Scripts/make-icon.swift` and the

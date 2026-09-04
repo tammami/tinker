@@ -3,7 +3,7 @@
 #
 #   1. Build every package and test target (Swift 6, strict concurrency, warnings are errors).
 #   2. Lint the dependency direction (App → DB* → DBCore; DBCore imports only Foundation + swift-log).
-#   3. Run unit tests. Integration tests run for each engine whose DBSTUDIO_TEST_*_URL is set,
+#   3. Run unit tests. Integration tests run for each engine whose TINKER_TEST_*_URL is set,
 #      otherwise they are skipped with a VISIBLE warning — never a silent pass.
 #   4. Build the macOS app with warnings as errors.
 #   5. Print a coverage summary: which engines actually ran.
@@ -31,7 +31,7 @@ bold "Build (swift build --build-tests, zero warnings in first-party code)"
 # Touch first-party sources so llbuild recompiles them (cached dependencies stay), so that
 # every warning is actually emitted on this run and can be caught below.
 find Packages Tools -name '*.swift' -exec touch {} +
-BUILD_LOG="$(mktemp -t dbstudio-ci-build)"
+BUILD_LOG="$(mktemp -t tinker-ci-build)"
 if ! swift build --build-tests 2>&1 | tee "$BUILD_LOG"; then
     fail "build failed (log: $BUILD_LOG)"
 fi
@@ -77,12 +77,12 @@ echo "  ok"
 
 # ---------------------------------------------------------------------------
 bold "Tests"
-PG_SET=0;    [[ -n "${DBSTUDIO_TEST_PG_URL:-}${DBSTUDIO_TEST_PG_URLS:-}" ]]       && PG_SET=1
-MYSQL_SET=0; [[ -n "${DBSTUDIO_TEST_MYSQL_URL:-}${DBSTUDIO_TEST_MYSQL_URLS:-}" ]] && MYSQL_SET=1
-[[ $PG_SET == 1 ]]    || warn "DBSTUDIO_TEST_PG_URL not set — PostgreSQL integration tests will be SKIPPED"
-[[ $MYSQL_SET == 1 ]] || warn "DBSTUDIO_TEST_MYSQL_URL not set — MySQL integration tests will be SKIPPED"
+PG_SET=0;    [[ -n "${TINKER_TEST_PG_URL:-}${TINKER_TEST_PG_URLS:-}" ]]       && PG_SET=1
+MYSQL_SET=0; [[ -n "${TINKER_TEST_MYSQL_URL:-}${TINKER_TEST_MYSQL_URLS:-}" ]] && MYSQL_SET=1
+[[ $PG_SET == 1 ]]    || warn "TINKER_TEST_PG_URL not set — PostgreSQL integration tests will be SKIPPED"
+[[ $MYSQL_SET == 1 ]] || warn "TINKER_TEST_MYSQL_URL not set — MySQL integration tests will be SKIPPED"
 
-TEST_LOG="$(mktemp -t dbstudio-ci-tests)"
+TEST_LOG="$(mktemp -t tinker-ci-tests)"
 # `swift test` reports skipped tests as "skipped" with the XCTSkip reason; keep the full log.
 if ! swift test --skip-build 2>&1 | tee "$TEST_LOG"; then
     fail "tests failed (log: $TEST_LOG)"
@@ -91,10 +91,10 @@ fi
 # ---------------------------------------------------------------------------
 if [[ $SKIP_APP == 0 ]]; then
     bold "App build (xcodebuild; warnings-as-errors is set on the app target in the project)"
-    APP_LOG="$(mktemp -t dbstudio-ci-app)"
+    APP_LOG="$(mktemp -t tinker-ci-app)"
     if ! xcodebuild \
-            -project App/DBStudio.xcodeproj \
-            -scheme DBStudio \
+            -project App/Tinker.xcodeproj \
+            -scheme Tinker \
             -configuration Debug \
             -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath .build/DerivedData \
@@ -133,8 +133,8 @@ skipped_count="$(grep -cE "skipped \([0-9.]+ seconds\)" "$TEST_LOG" || true)"
 echo "  skipped tests: $skipped_count"
 grep -E "Test skipped" "$TEST_LOG" | sed -E 's/^.*: (Test skipped.*)$/    \1/' | sort -u || true
 echo
-echo "  PostgreSQL integration: $([[ $PG_SET == 1 ]] && echo "configured: ${DBSTUDIO_TEST_PG_URL:-<PG_URLS>}" | sed -E 's#://([^:@/]+):[^@]*@#://\1:***@#' || echo "NOT RUN (env unset)")"
-echo "  MySQL integration:      $([[ $MYSQL_SET == 1 ]] && echo "configured: ${DBSTUDIO_TEST_MYSQL_URL:-<MYSQL_URLS>}" | sed -E 's#://([^:@/]+):[^@]*@#://\1:***@#' || echo "NOT RUN (env unset)")"
+echo "  PostgreSQL integration: $([[ $PG_SET == 1 ]] && echo "configured: ${TINKER_TEST_PG_URL:-<PG_URLS>}" | sed -E 's#://([^:@/]+):[^@]*@#://\1:***@#' || echo "NOT RUN (env unset)")"
+echo "  MySQL integration:      $([[ $MYSQL_SET == 1 ]] && echo "configured: ${TINKER_TEST_MYSQL_URL:-<MYSQL_URLS>}" | sed -E 's#://([^:@/]+):[^@]*@#://\1:***@#' || echo "NOT RUN (env unset)")"
 echo "  engines that actually connected (reported by driver tests from Phase 1 on):"
 grep -E "server version" "$TEST_LOG" | sed "s/^/    /" | sort -u || echo "    none (no driver yet)"
 echo

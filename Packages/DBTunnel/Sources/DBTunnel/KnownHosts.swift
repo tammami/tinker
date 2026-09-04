@@ -4,7 +4,7 @@ import Foundation
 import NIOCore
 import NIOSSH
 
-/// Reads and appends to OpenSSH's `known_hosts`, so DBStudio trusts the same host keys
+/// Reads and appends to OpenSSH's `known_hosts`, so Tinker trusts the same host keys
 /// the user's own `ssh` command already trusts.
 public struct KnownHostsFile: Sendable {
     public let path: String

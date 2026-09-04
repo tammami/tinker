@@ -13,7 +13,7 @@ final class KnownHostsTests: XCTestCase {
 
     override func setUpWithError() throws {
         directory = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("dbstudio-known-hosts-\(UUID().uuidString)")
+            .appendingPathComponent("tinker-known-hosts-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         path = directory.appendingPathComponent("known_hosts").path
     }
@@ -237,10 +237,10 @@ enum SSHKeyFixture {
     }
 
     static func generate(type: String, passphrase: String = "") throws -> Key {
-        let path = NSTemporaryDirectory() + "dbstudio-key-\(UUID().uuidString)"
+        let path = NSTemporaryDirectory() + "tinker-key-\(UUID().uuidString)"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh-keygen")
-        var arguments = ["-t", type, "-f", path, "-N", passphrase, "-C", "dbstudio-test", "-q"]
+        var arguments = ["-t", type, "-f", path, "-N", passphrase, "-C", "tinker-test", "-q"]
         if type == "rsa" { arguments += ["-b", "2048"] }
         process.arguments = arguments
         process.standardOutput = Pipe()

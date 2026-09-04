@@ -1,4 +1,4 @@
-# DBStudio — Product & Technical Specification
+# Tinker — Product & Technical Specification
 
 Version: 0.1 (MVP scope)
 Target: macOS, Apple Silicon only
@@ -23,7 +23,7 @@ Every phase ends with: build passes with zero warnings under strict concurrency,
 
 ## 1. Product overview
 
-DBStudio is a native macOS database client for developers, positioned as a fast, safe replacement for Navicat/TablePlus for PostgreSQL and MySQL. Design principles, in priority order:
+Tinker is a native macOS database client for developers, positioned as a fast, safe replacement for Navicat/TablePlus for PostgreSQL and MySQL. Design principles, in priority order:
 
 1. **Never corrupt or lose user data.** Every write to a database is explicit, previewable as SQL, and reversible before commit.
 2. **Handle large result sets without degrading.** 1M-row tables must scroll at 60fps and never load fully into memory.
@@ -62,7 +62,7 @@ Do not add other dependencies without recording a justification in `DECISIONS.md
 ## 3. Repository layout
 
 ```
-DBStudio/
+Tinker/
 ├── CLAUDE.md
 ├── SPEC.md                    (this file)
 ├── DECISIONS.md               (ADR log, append-only)
@@ -77,7 +77,7 @@ DBStudio/
 │   ├── DBSQL/                 (SQL text utilities: statement splitter, identifier quoting, DDL/DML generators, highlighting adapter)
 │   └── DBTestKit/             (shared test fixtures, env-var server resolution, skip-with-reason helpers)
 ├── App/
-│   └── DBStudio/              (Xcode app target; SwiftUI + AppKit)
+│   └── Tinker/              (Xcode app target; SwiftUI + AppKit)
 │       ├── App/               (entry, scenes, commands, menus)
 │       ├── Features/
 │       │   ├── Connections/
@@ -92,7 +92,7 @@ DBStudio/
 ├── Tools/
 │   └── dbcli/                 (CLI harness exercising DBCore without UI; used for driver dev and integration tests)
 └── testenv/
-    ├── prepare.sh             (creates `dbstudio_test` db + user on the servers named in env vars; installs nothing)
+    ├── prepare.sh             (creates `tinker_test` db + user on the servers named in env vars; installs nothing)
     ├── fixtures/pg/*.sql      (fixture schema + data)
     ├── fixtures/mysql/*.sql
     └── README.md              (how to point tests at any server via env vars)
@@ -359,7 +359,7 @@ public struct SSHConfig: Sendable, Codable {
 5. Track state: `.disconnected`, `.connecting(stage:)`, `.connected`, `.degraded(Error)`, and publish it (AsyncStream) to the UI.
 6. Reconnect policy: on connection drop, mark `.degraded`, do not auto-reconnect while a transaction was open (user must decide); otherwise reconnect on next use with one retry.
 
-Secrets: stored in macOS Keychain under service `com.dbstudio.connection`, account = `<configID>.<field>`. Access group not needed. On config deletion, delete Keychain items. Passwords are never written to disk, logs, or crash reports.
+Secrets: stored in macOS Keychain under service `com.tinker.connection`, account = `<configID>.<field>`. Access group not needed. On config deletion, delete Keychain items. Passwords are never written to disk, logs, or crash reports.
 
 ---
 
@@ -458,7 +458,7 @@ Validation: host/user required; port 1–65535; key file must exist and not be w
 ### 11.3 Acceptance criteria
 
 - Can create, edit, duplicate, delete, and group connections; changes persist across relaunch.
-- Passwords never appear in `~/Library/Application Support/DBStudio/*` files (test asserts this).
+- Passwords never appear in `~/Library/Application Support/Tinker/*` files (test asserts this).
 - SSH tunnel through a password-auth host and a key-auth host both work against the SSH test target (see §17.1).
 - Connecting to a stopped server surfaces `.connectionFailed` with stage `tcp` within the timeout.
 
@@ -639,7 +639,7 @@ count, so what produced the rows on screen is always visible.
 
 ## 15. Persistence (`DBStore`)
 
-SQLite database at `~/Library/Application Support/DBStudio/store.sqlite` (WAL mode). Tables:
+SQLite database at `~/Library/Application Support/Tinker/store.sqlite` (WAL mode). Tables:
 - `connections` (id, json blob of `ConnectionConfig` minus secrets, sort_order, updated_at)
 - `groups` (path, expanded)
 - `query_history` (id, connection_id, database, sql, started_at, duration_ms, rows, error, success)
@@ -705,19 +705,19 @@ Each phase lists deliverables and acceptance criteria. Do not reorder.
 
 ### Phase 0 — Scaffold (½ day)
 - Repo layout per §3, `Package.swift` workspace, empty packages compiling, app target launching an empty window, `Tools/dbcli` printing "hello".
-- `testenv/prepare.sh`: reads `DBSTUDIO_TEST_PG_ADMIN_URL` and `DBSTUDIO_TEST_MYSQL_ADMIN_URL` (superuser/root URLs to the developer's existing local servers), creates database `dbstudio_test` and user `dbstudio_test` with rights only on that database, loads fixtures. Idempotent. Installs and starts nothing. Prints the non-admin URLs to export as `DBSTUDIO_TEST_PG_URL` / `DBSTUDIO_TEST_MYSQL_URL`.
-- `Scripts/ci.sh`: builds and runs unit tests; if `DBSTUDIO_TEST_PG_URL` / `DBSTUDIO_TEST_MYSQL_URL` are set, also runs integration tests for those engines; otherwise skips them with a visible warning, never a silent pass.
+- `testenv/prepare.sh`: reads `TINKER_TEST_PG_ADMIN_URL` and `TINKER_TEST_MYSQL_ADMIN_URL` (superuser/root URLs to the developer's existing local servers), creates database `tinker_test` and user `tinker_test` with rights only on that database, loads fixtures. Idempotent. Installs and starts nothing. Prints the non-admin URLs to export as `TINKER_TEST_PG_URL` / `TINKER_TEST_MYSQL_URL`.
+- `Scripts/ci.sh`: builds and runs unit tests; if `TINKER_TEST_PG_URL` / `TINKER_TEST_MYSQL_URL` are set, also runs integration tests for those engines; otherwise skips them with a visible warning, never a silent pass.
 - Accept: `Scripts/ci.sh` green after `testenv/prepare.sh` against the developer's local servers.
 
 ### Phase 1 — DBCore + PostgreSQL driver (2 weeks)
 - §5, §6, §7 (Postgres), §8 (Postgres introspector), `DBSQL.StatementSplitter` (PG dialect), `DBSQL.Identifier` quoting.
 - `dbcli`: `dbcli pg://user:pass@host/db "SELECT …"` streams rows as TSV; `dbcli … --introspect` dumps schema JSON; `dbcli … --cancel-after 2s` demonstrates cancel.
 - Tests: type round-trip for every mapped type against all PG versions; cancel; SCRAM auth; TLS require against a self-signed fixture; introspection snapshots for a fixture schema (tables, views, matviews, composite PK, FKs, identity columns, enums, arrays).
-- Accept: all above green on the local PG (`DBSTUDIO_TEST_PG_URL`) and on any additional URL in `DBSTUDIO_TEST_PG_URLS` (comma-separated, optional). Log the detected server version in the test output.
+- Accept: all above green on the local PG (`TINKER_TEST_PG_URL`) and on any additional URL in `TINKER_TEST_PG_URLS` (comma-separated, optional). Log the detected server version in the test output.
 
 ### Phase 2 — ConnectionSession, tunnel, store (1.5 weeks)
 - §9 session actor with pool, state stream, reconnect policy. `DBTunnel` with Citadel (password, key, agent, jump host). `DBStore` with migrations, Keychain wrapper.
-- SSH test target: by default the local machine's `sshd` (Remote Login must be enabled in System Settings; `testenv/README.md` documents it) with the current user via agent/key auth. Password-auth and jump-host tests run only when `DBSTUDIO_TEST_SSH_PASSWORD_URL` / `DBSTUDIO_TEST_SSH_JUMP_URL` are set; otherwise they are skipped with a warning.
+- SSH test target: by default the local machine's `sshd` (Remote Login must be enabled in System Settings; `testenv/README.md` documents it) with the current user via agent/key auth. Password-auth and jump-host tests run only when `TINKER_TEST_SSH_PASSWORD_URL` / `TINKER_TEST_SSH_JUMP_URL` are set; otherwise they are skipped with a warning.
 - Tests: tunnel connect (key/agent always; password and jump when configured); session pool limits; Keychain round-trip; assert no secret bytes in store file.
 - Accept: `dbcli` can connect via `--ssh user@localhost` to the local PG.
 
@@ -738,8 +738,8 @@ Each phase lists deliverables and acceptance criteria. Do not reorder.
 ### Phase 6 — MySQL driver (1.5 weeks)
 - §7.3 MySQL, introspector, splitter `DELIMITER` support, dialect-specific paging/quoting/DML generation.
 - The app must require **zero** UI code changes to support MySQL. If a UI change is needed, the abstraction leaked; fix it in DBCore/DBSQL and record in DECISIONS.md.
-- Tests: mirror the PG suite against the local MySQL (`DBSTUDIO_TEST_MYSQL_URL`) and any URLs in `DBSTUDIO_TEST_MYSQL_URLS` (intended for a MariaDB 10.11+ and a MySQL 5.7 server if you have them), with special attention to caching_sha2 auth (TLS on and off), unsigned BIGINT max, DECIMAL precision, DATETIME vs TIMESTAMP, zero dates under permissive sql_mode.
-- Known gap: without a MySQL 5.7 and a MariaDB server in `DBSTUDIO_TEST_MYSQL_URLS`, `mysql_native_password` and MariaDB catalog differences are untested. Record this in `PROGRESS.md` at the end of the phase; do not claim coverage that did not run.
+- Tests: mirror the PG suite against the local MySQL (`TINKER_TEST_MYSQL_URL`) and any URLs in `TINKER_TEST_MYSQL_URLS` (intended for a MariaDB 10.11+ and a MySQL 5.7 server if you have them), with special attention to caching_sha2 auth (TLS on and off), unsigned BIGINT max, DECIMAL precision, DATETIME vs TIMESTAMP, zero dates under permissive sql_mode.
+- Known gap: without a MySQL 5.7 and a MariaDB server in `TINKER_TEST_MYSQL_URLS`, `mysql_native_password` and MariaDB catalog differences are untested. Record this in `PROGRESS.md` at the end of the phase; do not claim coverage that did not run.
 - Accept: identical feature matrix to PG; MySQL 8.4 default install connects with no user configuration beyond host/user/password.
 
 ### Phase 7 — Release hardening (1 week)
@@ -771,12 +771,12 @@ Deferred to v0.2 (do not build now, do not stub): import, data transfer, backup/
 
 ### 17.1 Test environment (no Docker)
 
-- The developer's existing local PostgreSQL and MySQL are the primary targets. `testenv/prepare.sh` only creates the isolated `dbstudio_test` database and user on them; it never modifies server configuration, other databases, or global settings.
+- The developer's existing local PostgreSQL and MySQL are the primary targets. `testenv/prepare.sh` only creates the isolated `tinker_test` database and user on them; it never modifies server configuration, other databases, or global settings.
 - All servers are supplied purely through environment variables:
-  - `DBSTUDIO_TEST_PG_URL` / `DBSTUDIO_TEST_PG_URLS`
-  - `DBSTUDIO_TEST_MYSQL_URL` / `DBSTUDIO_TEST_MYSQL_URLS`
-  - `DBSTUDIO_TEST_SSH_PASSWORD_URL`, `DBSTUDIO_TEST_SSH_JUMP_URL`
-- Integration tests **must** run against a database named `dbstudio_test` and refuse to run (fail loudly) if the URL points anywhere else or if the user in the URL has privileges beyond that database (PG: not superuser; MySQL: no global grants). They drop and recreate fixture objects at start; they never touch other databases. This is the only protection for the developer's real local data.
+  - `TINKER_TEST_PG_URL` / `TINKER_TEST_PG_URLS`
+  - `TINKER_TEST_MYSQL_URL` / `TINKER_TEST_MYSQL_URLS`
+  - `TINKER_TEST_SSH_PASSWORD_URL`, `TINKER_TEST_SSH_JUMP_URL`
+- Integration tests **must** run against a database named `tinker_test` and refuse to run (fail loudly) if the URL points anywhere else or if the user in the URL has privileges beyond that database (PG: not superuser; MySQL: no global grants). They drop and recreate fixture objects at start; they never touch other databases. This is the only protection for the developer's real local data.
 - Skipped tests are reported as skipped with the reason. CI output ends with a coverage summary: which engines/versions actually ran.
 - **Performance tests**: grid scroll and memory using `XCTMetric` and os_signpost; export memory flatness.
 - **UI tests**: minimal XCUITest smoke: launch, create connection, connect, open table, run query, cancel query. Everything else is covered below the UI layer by design.

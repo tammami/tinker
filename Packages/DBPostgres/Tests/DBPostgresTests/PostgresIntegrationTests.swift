@@ -6,7 +6,7 @@ import XCTest
 
 @testable import DBPostgres
 
-/// Integration tests against every server named in `DBSTUDIO_TEST_PG_URL(S)`.
+/// Integration tests against every server named in `TINKER_TEST_PG_URL(S)`.
 ///
 /// They skip with a reason when no server is configured and **fail** when a configured
 /// server is one the suite must not touch (SPEC §17.1). The server version is reported so
@@ -690,7 +690,7 @@ extension PostgresIntegrationTests {
             let sessions = try await server.activity()
             let me = try XCTUnwrap(sessions.first { $0.isCurrent })
             XCTAssertEqual(me.id, connection.backendID)
-            XCTAssertEqual(me.database, "dbstudio_test")
+            XCTAssertEqual(me.database, "tinker_test")
             XCTAssertNotNil(me.user)
             // Terminating a pid that does not exist is refused by the server, verbatim.
             do {
@@ -756,10 +756,10 @@ extension PostgresIntegrationTests {
             let users = try await introspector.users()
             let me = try XCTUnwrap(users.first { $0.name == server.user })
             let grants = try await introspector.grants(for: me)
-            XCTAssertTrue(grants.contains { $0.contains("dbstudio_test") }, "\(grants)")
+            XCTAssertTrue(grants.contains { $0.contains("tinker_test") }, "\(grants)")
             // The test role may not create roles; the server's refusal is what the app shows.
             let statements = try UserOperations.create(
-                UserRequest(name: "dbstudio_test_new_user", password: "x"), dialect: .postgresql
+                UserRequest(name: "tinker_test_new_user", password: "x"), dialect: .postgresql
             )
             do {
                 _ = try await connection.executeCollecting(statements[0])

@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Scripts/release.sh — build, sign, notarize and package DBStudio (SPEC §16 Phase 7).
+# Scripts/release.sh — build, sign, notarize and package Tinker (SPEC §16 Phase 7).
 #
 #   Scripts/release.sh                 full release: archive, sign, notarize, staple, DMG
 #   Scripts/release.sh --skip-notarize stop after signing; still builds the DMG
 #   Scripts/release.sh --unsigned      no signing at all, for a local smoke test
 #
 # Environment:
-#   DBSTUDIO_SIGNING_IDENTITY   "Developer ID Application: … (TEAMID)"
-#   DBSTUDIO_TEAM_ID            the ten-character team identifier
-#   DBSTUDIO_NOTARY_PROFILE     a notarytool keychain profile (default: DBStudio)
-#   DBSTUDIO_APPCAST_URL        Sparkle feed URL, baked into Info.plist
-#   DBSTUDIO_SPARKLE_PUBLIC_KEY Sparkle EdDSA public key, baked into Info.plist
+#   TINKER_SIGNING_IDENTITY   "Developer ID Application: … (TEAMID)"
+#   TINKER_TEAM_ID            the ten-character team identifier
+#   TINKER_NOTARY_PROFILE     a notarytool keychain profile (default: Tinker)
+#   TINKER_APPCAST_URL        Sparkle feed URL, baked into Info.plist
+#   TINKER_SPARKLE_PUBLIC_KEY Sparkle EdDSA public key, baked into Info.plist
 #
 # Create the notary profile once with:
-#   xcrun notarytool store-credentials DBStudio \
+#   xcrun notarytool store-credentials Tinker \
 #       --apple-id you@example.com --team-id TEAMID --password <app-specific-password>
 set -euo pipefail
 
@@ -34,15 +34,15 @@ warn() { printf '\033[1;33mWARNING:\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31mFAIL:\033[0m %s\n' "$*"; exit 1; }
 
 BUILD_DIR=".build/release"
-ARCHIVE="$BUILD_DIR/DBStudio.xcarchive"
+ARCHIVE="$BUILD_DIR/Tinker.xcarchive"
 EXPORT_DIR="$BUILD_DIR/export"
 APP="$EXPORT_DIR/Tinker.app"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
-IDENTITY="${DBSTUDIO_SIGNING_IDENTITY:-}"
-TEAM_ID="${DBSTUDIO_TEAM_ID:-}"
-NOTARY_PROFILE="${DBSTUDIO_NOTARY_PROFILE:-DBStudio}"
+IDENTITY="${TINKER_SIGNING_IDENTITY:-}"
+TEAM_ID="${TINKER_TEAM_ID:-}"
+NOTARY_PROFILE="${TINKER_NOTARY_PROFILE:-Tinker}"
 
 if [[ "$MODE" != "unsigned" && -z "$IDENTITY" ]]; then
     # A Developer ID certificate is what separates a distributable build from a local one.
@@ -63,7 +63,7 @@ if [[ "$MODE" != "unsigned" ]]; then
         TEAM_ID="${BASH_REMATCH[1]}"
         echo "Derived team id: $TEAM_ID"
     fi
-    [[ -n "$TEAM_ID" ]] || fail "Set DBSTUDIO_TEAM_ID; it could not be read from '$IDENTITY'."
+    [[ -n "$TEAM_ID" ]] || fail "Set TINKER_TEAM_ID; it could not be read from '$IDENTITY'."
     if [[ "$IDENTITY" != "Developer ID Application:"* ]]; then
         warn "'$IDENTITY' is not a Developer ID Application certificate.
   The build will be signed but Gatekeeper will refuse it on another Mac, and it
@@ -74,7 +74,7 @@ fi
 # ---------------------------------------------------------------------------
 bold "Version"
 VERSION="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
-    /dev/stdin <<< "$(xcodebuild -project App/DBStudio.xcodeproj -target DBStudio -showBuildSettings 2>/dev/null |
+    /dev/stdin <<< "$(xcodebuild -project App/Tinker.xcodeproj -target Tinker -showBuildSettings 2>/dev/null |
         awk '/MARKETING_VERSION/ {print "<plist><dict><key>CFBundleShortVersionString</key><string>" $3 "</string></dict></plist>"}' |
         head -1)" 2>/dev/null || echo "0.1.0")"
 BUILD_NUMBER="$(date +%Y%m%d%H%M)"
@@ -83,8 +83,8 @@ echo "  version $VERSION build $BUILD_NUMBER"
 # ---------------------------------------------------------------------------
 bold "Archive"
 ARCHIVE_ARGS=(
-    -project App/DBStudio.xcodeproj
-    -scheme DBStudio
+    -project App/Tinker.xcodeproj
+    -scheme Tinker
     -configuration Release
     -destination 'generic/platform=macOS'
     -archivePath "$ARCHIVE"
@@ -92,13 +92,13 @@ ARCHIVE_ARGS=(
     ONLY_ACTIVE_ARCH=NO
     ARCHS=arm64
 )
-if [[ -n "${DBSTUDIO_APPCAST_URL:-}" ]]; then
-    ARCHIVE_ARGS+=(DBSTUDIO_APPCAST_URL="$DBSTUDIO_APPCAST_URL")
+if [[ -n "${TINKER_APPCAST_URL:-}" ]]; then
+    ARCHIVE_ARGS+=(TINKER_APPCAST_URL="$TINKER_APPCAST_URL")
 fi
-if [[ -n "${DBSTUDIO_SPARKLE_PUBLIC_KEY:-}" ]]; then
-    ARCHIVE_ARGS+=(DBSTUDIO_SPARKLE_PUBLIC_KEY="$DBSTUDIO_SPARKLE_PUBLIC_KEY")
+if [[ -n "${TINKER_SPARKLE_PUBLIC_KEY:-}" ]]; then
+    ARCHIVE_ARGS+=(TINKER_SPARKLE_PUBLIC_KEY="$TINKER_SPARKLE_PUBLIC_KEY")
 else
-    warn "DBSTUDIO_SPARKLE_PUBLIC_KEY is unset; the build will report updates as not configured"
+    warn "TINKER_SPARKLE_PUBLIC_KEY is unset; the build will report updates as not configured"
 fi
 if [[ "$MODE" == "unsigned" ]]; then
     ARCHIVE_ARGS+=(CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="")
@@ -188,14 +188,14 @@ ls -lh "$DMG" | awk '{print "  " $5}'
 
 # ---------------------------------------------------------------------------
 bold "Appcast"
-if [[ -n "${DBSTUDIO_APPCAST_URL:-}" ]]; then
+if [[ -n "${TINKER_APPCAST_URL:-}" ]]; then
     cat <<APPCAST
   Sign the DMG for Sparkle and add an <item> to the appcast:
     ./bin/sign_update "$DMG"
-  The feed this build points at is $DBSTUDIO_APPCAST_URL
+  The feed this build points at is $TINKER_APPCAST_URL
 APPCAST
 else
-    warn "DBSTUDIO_APPCAST_URL is unset; this build cannot check for updates"
+    warn "TINKER_APPCAST_URL is unset; this build cannot check for updates"
 fi
 
 echo

@@ -4,8 +4,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 xcodebuild \
-    -project App/DBStudio.xcodeproj \
-    -scheme DBStudio \
+    -project App/Tinker.xcodeproj \
+    -scheme Tinker \
     -configuration "${1:-Debug}" \
     -destination 'platform=macOS,arch=arm64' \
     -derivedDataPath .build/DerivedData \

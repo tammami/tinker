@@ -3,7 +3,7 @@ import Foundation
 /// A reference to a secret held in the macOS Keychain. The secret itself never
 /// appears in a config, on disk, in a log, or in a crash report.
 public struct SecretRef: Sendable, Hashable, Codable {
-    /// Keychain service, always `com.dbstudio.connection`.
+    /// Keychain service, always `com.tinker.connection`.
     public let service: String
     /// Keychain account, `<configID>.<field>`.
     public let account: String
@@ -13,7 +13,10 @@ public struct SecretRef: Sendable, Hashable, Codable {
         self.account = account
     }
 
-    public static let defaultService = "com.dbstudio.connection"
+    public static let defaultService = "com.tinker.connection"
+    /// The service the app used while it was called DBStudio; a secret still filed
+    /// there is read once and moved.
+    public static let legacyService = "com.dbstudio.connection"
 
     /// The reference for one field of one connection, e.g. `password` or `sshPassphrase`.
     public static func forConnection(_ id: UUID, field: String) -> SecretRef {

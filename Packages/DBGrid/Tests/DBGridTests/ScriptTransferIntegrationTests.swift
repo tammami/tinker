@@ -25,7 +25,7 @@ final class ScriptTransferIntegrationTests: XCTestCase {
         let all =
             ((try? TestEnvironment.servers(for: .postgresql)) ?? [])
             + ((try? TestEnvironment.servers(for: .mysql)) ?? [])
-        if all.isEmpty { throw XCTSkip("neither DBSTUDIO_TEST_PG_URL nor DBSTUDIO_TEST_MYSQL_URL is set") }
+        if all.isEmpty { throw XCTSkip("neither TINKER_TEST_PG_URL nor TINKER_TEST_MYSQL_URL is set") }
         return all
     }
 

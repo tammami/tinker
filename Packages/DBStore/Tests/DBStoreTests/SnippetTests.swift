@@ -6,7 +6,7 @@ import XCTest
 
 final class SnippetTests: XCTestCase {
     func temporaryStore() async throws -> DBStore {
-        let path = NSTemporaryDirectory() + "dbstudio-snippets-\(UUID().uuidString).sqlite"
+        let path = NSTemporaryDirectory() + "tinker-snippets-\(UUID().uuidString).sqlite"
         return try await DBStore(path: path)
     }
 

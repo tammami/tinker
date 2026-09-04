@@ -10,7 +10,7 @@ final class DBStoreTests: XCTestCase {
 
     override func setUp() async throws {
         directory = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("dbstudio-store-tests-\(UUID().uuidString)")
+            .appendingPathComponent("tinker-store-tests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         storePath = directory.appendingPathComponent("store.sqlite").path
     }
@@ -79,7 +79,7 @@ final class DBStoreTests: XCTestCase {
             knownHostsPolicy: .strict
         )
         config.statementTimeout = .seconds(30)
-        config.options = ["application_name": "DBStudio"]
+        config.options = ["application_name": "Tinker"]
         try await store.save(config)
         await store.close()
 
@@ -166,7 +166,7 @@ final class DBStoreTests: XCTestCase {
         // The reference itself is stored, and it names the Keychain rather than a value.
         let contents = try Data(contentsOf: URL(fileURLWithPath: storePath))
         let storeText = String(decoding: contents, as: UTF8.self)
-        XCTAssertTrue(storeText.contains("com.dbstudio.connection"))
+        XCTAssertTrue(storeText.contains("com.tinker.connection"))
     }
 
     // MARK: - Groups

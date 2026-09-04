@@ -21,7 +21,7 @@ import XCTest
 /// take (SPEC §17.1). The in-process server speaks the same protocol over a real socket,
 /// so the client path — key exchange, authentication, `direct-tcpip` forwarding — is
 /// genuinely exercised. Password and jump-host coverage against a *real* sshd still comes
-/// from `DBSTUDIO_TEST_SSH_PASSWORD_URL` / `DBSTUDIO_TEST_SSH_JUMP_URL` when they are set.
+/// from `TINKER_TEST_SSH_PASSWORD_URL` / `TINKER_TEST_SSH_JUMP_URL` when they are set.
 final class TunnelIntegrationTests: XCTestCase {
     var logger: Logger {
         var logger = Logger(label: "test.tunnel")

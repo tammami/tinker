@@ -1,0 +1,32 @@
+{
+  "fill": {
+    "automatic-gradient": "srgb:0.16,0.20,0.38,1.00"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "tinker.svg",
+          "name": "Tinker"
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "specular": true,
+      "translucency": {
+        "enabled": true,
+        "value": 0.5
+      }
+    }
+  ],
+  "supported-platforms": {
+    "circles": [
+      "watchOS"
+    ],
+    "squares": [
+      "macOS"
+    ]
+  }
+}

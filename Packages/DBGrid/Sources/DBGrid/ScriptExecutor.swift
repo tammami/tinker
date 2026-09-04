@@ -119,6 +119,14 @@ public struct ScriptExecutionFailure: Sendable, Hashable, Identifiable {
     public let excerpt: String
     public let message: String
 
+    public init(id: Int, statementNumber: Int64, line: Int?, excerpt: String, message: String) {
+        self.id = id
+        self.statementNumber = statementNumber
+        self.line = line
+        self.excerpt = excerpt
+        self.message = message
+    }
+
     public var description: String {
         let place = line.map { "line \($0)" } ?? "statement \(statementNumber)"
         return "\(place): \(message)"

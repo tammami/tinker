@@ -392,15 +392,17 @@ public final class WorkspaceController {
     }
 
     public func presentDump() {
-        guard let id = workspace.activeConnectionID else { return }
+        // From the menu there may be no active connection; the sheet asks either way,
+        // with the active one (or the first) only as a starting point.
+        guard let id = workspace.activeConnectionID ?? environment.connections.first?.id else { return }
         let schema = workspace.selectedTab?.tableRef?.schemaRef ?? defaultSchema(for: id)
-        workspace.pendingDump = DumpRequest(connectionID: id, schema: schema, tables: nil)
+        workspace.pendingDump = DumpRequest(connectionID: id, schema: schema, tables: nil, choosesSource: true)
     }
 
     public func presentScriptImport() {
-        guard let id = workspace.activeConnectionID else { return }
+        guard let id = workspace.activeConnectionID ?? environment.connections.first?.id else { return }
         workspace.pendingScriptImport = ScriptImportRequest(
-            connectionID: id, database: workspace.activeConnection?.database)
+            connectionID: id, database: workspace.activeConnection?.database, choosesTarget: true)
     }
 
     public func showServerActivity() {

@@ -198,6 +198,10 @@ enum UIDemo {
                 if let ref = demoSchemaRef(schema) {
                     workspace.pendingDump = DumpRequest(connectionID: config.id, schema: ref, tables: nil)
                 }
+            case "dumpchoose":
+                controller.presentDump()
+            case "importchoose":
+                controller.presentScriptImport()
             case "importsql":
                 workspace.pendingScriptImport = ScriptImportRequest(connectionID: config.id, database: config.database)
             case "paste":

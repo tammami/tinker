@@ -9,13 +9,15 @@ import UniformTypeIdentifiers
 ///
 /// Structure only, structure and data, or data only; PostgreSQL data as COPY blocks
 /// or INSERTs; every object optional. The file is written as the rows stream, so the
-/// size of the database never matters to the app's memory.
+/// size of the database never matters to the app's memory. Opened from the Tools menu,
+/// the sheet first asks which connection, database and schema to dump.
 struct DumpSheet: View {
     let request: DumpRequest
     let environment: AppEnvironment
     let onDismiss: () -> Void
 
     @State private var controller: TransferController
+    @State private var endpoint: EndpointModel
     @State private var options: DumpOptions
     @State private var compress = false
     @State private var tables: [TableInfo] = []
@@ -29,25 +31,31 @@ struct DumpSheet: View {
         self.onDismiss = onDismiss
         let dialect = environment.connections.first { $0.id == request.connectionID }?.dialect ?? .postgresql
         _controller = State(initialValue: TransferController(environment: environment))
+        _endpoint = State(
+            initialValue: EndpointModel(
+                environment: environment, connectionID: request.connectionID, schema: request.schema))
         _options = State(initialValue: DumpOptions.preferred(for: dialect))
     }
 
-    private var config: ConnectionConfig? { environment.connections.first { $0.id == request.connectionID } }
+    /// Where the dump reads from: the row that was clicked, or what the pickers say.
+    private var connectionID: UUID {
+        request.choosesSource ? (endpoint.connectionID ?? request.connectionID) : request.connectionID
+    }
+    private var schema: SchemaRef { request.choosesSource ? (endpoint.schemaRef ?? request.schema) : request.schema }
+    private var config: ConnectionConfig? { environment.connections.first { $0.id == connectionID } }
     private var dialect: SQLDialect { config?.dialect ?? .postgresql }
 
     private var scopeTitle: String {
         if let tables = request.tables {
             return tables.count == 1 ? "Dump “\(tables[0].name)”" : "Dump \(tables.count) tables"
         }
-        return dialect == .mysql
-            ? "Dump database “\(request.schema.database)”" : "Dump schema “\(request.schema.schema)”"
+        if request.choosesSource { return "Dump Database" }
+        return dialect == .mysql ? "Dump database “\(schema.database)”" : "Dump schema “\(schema.schema)”"
     }
 
     private var sourceLine: String {
         let name = config?.name ?? "connection"
-        return dialect == .mysql
-            ? "\(name) · \(request.schema.database)"
-            : "\(name) · \(request.schema.database) · \(request.schema.schema)"
+        return dialect == .mysql ? "\(name) · \(schema.database)" : "\(name) · \(schema.database) · \(schema.schema)"
     }
 
     private var chosenTables: [TableInfo] {
@@ -59,7 +67,7 @@ struct DumpSheet: View {
         if let tables = request.tables, tables.count == 1 {
             base = tables[0].name
         } else {
-            base = dialect == .mysql ? request.schema.database : "\(request.schema.database)_\(request.schema.schema)"
+            base = dialect == .mysql ? schema.database : "\(schema.database)_\(schema.schema)"
         }
         return base + (compress ? ".sql.gz" : ".sql")
     }
@@ -70,6 +78,12 @@ struct DumpSheet: View {
             contentInset: 0
         ) {
             VStack(spacing: 0) {
+                if request.choosesSource {
+                    sourcePicker
+                        .padding(.horizontal, DesignTokens.Spacing.lg)
+                        .padding(.top, DesignTokens.Spacing.lg)
+                        .disabled(controller.isRunning)
+                }
                 Form {
                     Section {
                         Picker("Content", selection: $options.content) {
@@ -160,22 +174,74 @@ struct DumpSheet: View {
                 }
             }
         }
-        .task { await loadTables() }
+        .task {
+            if request.choosesSource {
+                await endpoint.loadConnection()
+            }
+            await loadTables()
+        }
+    }
+
+    /// Connection, database and schema pickers, for a dump started from the menu.
+    private var sourcePicker: some View {
+        @Bindable var endpoint = endpoint
+        return VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            HStack(spacing: DesignTokens.Spacing.md) {
+                FieldRow(label: "Connection", labelWidth: 80) {
+                    Picker("", selection: $endpoint.connectionID) {
+                        ForEach(environment.connections) { config in Text(config.name).tag(UUID?.some(config.id)) }
+                    }
+                    .labelsHidden()
+                    .onChange(of: endpoint.connectionID) { _, _ in
+                        Task {
+                            await endpoint.loadConnection()
+                            options = DumpOptions.preferred(for: dialect)
+                            await loadTables()
+                        }
+                    }
+                }
+                FieldRow(label: "Database", labelWidth: 70) {
+                    Picker("", selection: $endpoint.database) {
+                        ForEach(endpoint.databases, id: \.self) { name in Text(name).tag(name) }
+                    }
+                    .labelsHidden()
+                    .disabled(endpoint.databases.isEmpty)
+                    .onChange(of: endpoint.database) { _, _ in
+                        Task {
+                            await endpoint.loadDatabase()
+                            await loadTables()
+                        }
+                    }
+                }
+                if !endpoint.isMySQL {
+                    FieldRow(label: "Schema", labelWidth: 56) {
+                        Picker("", selection: $endpoint.schema) {
+                            ForEach(endpoint.schemas, id: \.self) { name in Text(name).tag(name) }
+                        }
+                        .labelsHidden()
+                        .disabled(endpoint.schemas.isEmpty)
+                        .onChange(of: endpoint.schema) { _, _ in Task { await loadTables() } }
+                    }
+                }
+            }
+            if let error = endpoint.error {
+                InlineBanner(kind: .error, message: error, onDismiss: {})
+            }
+        }
     }
 
     private func loadTables() async {
         guard request.tables == nil else { return }
         isLoadingTables = true
         defer { isLoadingTables = false }
-        guard let session = environment.session(for: request.connectionID, database: request.schema.database) else {
-            return
-        }
+        let ref = schema
+        guard let session = environment.session(for: connectionID, database: ref.database) else { return }
         do {
             _ = try await session.connect()
-            let schema = request.schema
-            let all = try await session.introspection(.tables(schema)) { try await $0.tables(in: schema) }
+            let all = try await session.introspection(.tables(ref)) { try await $0.tables(in: ref) }
             tables = all.filter { $0.kind != .systemTable }
             selected = Set(tables.map(\.name))
+            loadError = nil
         } catch {
             loadError = (error as? DBError)?.errorDescription ?? String(describing: error)
         }
@@ -192,6 +258,7 @@ struct DumpSheet: View {
         if compress, url.pathExtension != "gz" { url = url.appendingPathExtension("gz") }
         var chosen = options
         if dialect == .mysql { chosen.dataStyle = .insert }
-        controller.dump(request, tables: chosenTables, options: chosen, compress: compress, to: url)
+        let resolved = DumpRequest(connectionID: connectionID, schema: schema, tables: request.tables)
+        controller.dump(resolved, tables: chosenTables, options: chosen, compress: compress, to: url)
     }
 }

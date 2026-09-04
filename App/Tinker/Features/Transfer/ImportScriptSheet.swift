@@ -17,6 +17,7 @@ struct ImportScriptSheet: View {
     let onDismiss: () -> Void
 
     @State private var controller: TransferController
+    @State private var endpoint: EndpointModel
     @State private var fileURL: URL?
     @State private var fileSize: Int64 = 0
     @State private var isCompressed = false
@@ -42,15 +43,28 @@ struct ImportScriptSheet: View {
         self.environment = environment
         self.onDismiss = onDismiss
         _controller = State(initialValue: TransferController(environment: environment))
+        let start = environment.connections.first { $0.id == request.connectionID }
+        let database = request.database ?? start?.database ?? ""
+        _endpoint = State(
+            initialValue: EndpointModel(
+                environment: environment, connectionID: request.connectionID,
+                schema: SchemaRef(database: database, schema: "")))
     }
 
-    private var config: ConnectionConfig? { environment.connections.first { $0.id == request.connectionID } }
+    /// Where the script runs: the row that was clicked, or what the pickers say.
+    private var connectionID: UUID {
+        request.choosesTarget ? (endpoint.connectionID ?? request.connectionID) : request.connectionID
+    }
+    private var database: String? {
+        request.choosesTarget ? (endpoint.database.isEmpty ? nil : endpoint.database) : request.database
+    }
+    private var config: ConnectionConfig? { environment.connections.first { $0.id == connectionID } }
     private var dialect: SQLDialect { config?.dialect ?? .postgresql }
     private var isProduction: Bool { config?.isProduction ?? false }
 
     private var targetLine: String {
         let name = config?.name ?? "connection"
-        let database = request.database ?? config?.database ?? ""
+        let database = database ?? config?.database ?? ""
         return database.isEmpty ? name : "\(name) · \(database)"
     }
 
@@ -60,6 +74,12 @@ struct ImportScriptSheet: View {
             width: DesignTokens.Metrics.wideSheetWidth, contentInset: 0
         ) {
             VStack(spacing: 0) {
+                if request.choosesTarget {
+                    targetPicker
+                        .padding(.horizontal, DesignTokens.Spacing.lg)
+                        .padding(.top, DesignTokens.Spacing.lg)
+                        .disabled(controller.isRunning)
+                }
                 filePicker
                     .padding(.horizontal, DesignTokens.Spacing.lg)
                     .padding(.top, DesignTokens.Spacing.lg)
@@ -117,6 +137,33 @@ struct ImportScriptSheet: View {
         }
     }
 
+    /// Connection and database pickers, for an import started from the menu.
+    private var targetPicker: some View {
+        @Bindable var endpoint = endpoint
+        return VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            HStack(spacing: DesignTokens.Spacing.md) {
+                FieldRow(label: "Into connection", labelWidth: 100) {
+                    Picker("", selection: $endpoint.connectionID) {
+                        ForEach(environment.connections) { config in Text(config.name).tag(UUID?.some(config.id)) }
+                    }
+                    .labelsHidden()
+                    .onChange(of: endpoint.connectionID) { _, _ in Task { await endpoint.loadConnection() } }
+                }
+                FieldRow(label: "Database", labelWidth: 70) {
+                    Picker("", selection: $endpoint.database) {
+                        ForEach(endpoint.databases, id: \.self) { name in Text(name).tag(name) }
+                    }
+                    .labelsHidden()
+                    .disabled(endpoint.databases.isEmpty)
+                }
+            }
+            if let error = endpoint.error {
+                InlineBanner(kind: .error, message: error, onDismiss: {})
+            }
+        }
+        .task { await endpoint.loadConnection() }
+    }
+
     private var filePicker: some View {
         HStack(spacing: DesignTokens.Spacing.sm) {
             Image(systemName: Icon.text)
@@ -171,6 +218,7 @@ struct ImportScriptSheet: View {
         }
         options.stopOnError = stopOnError
         options.disableForeignKeyChecks = disableForeignKeyChecks
-        controller.importScript(request, from: fileURL, options: options)
+        let resolved = ScriptImportRequest(connectionID: connectionID, database: database)
+        controller.importScript(resolved, from: fileURL, options: options)
     }
 }

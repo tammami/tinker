@@ -33,11 +33,16 @@ public struct DumpRequest: Identifiable, Sendable, Hashable {
     public let schema: SchemaRef
     /// nil means the whole schema, with a table picker in the sheet.
     public let tables: [TableInfo]?
+    /// True when the request came from the Tools menu rather than a row in the tree:
+    /// the sheet then asks which connection, database and schema to dump, with the
+    /// given ones only as a starting point.
+    public let choosesSource: Bool
 
-    public init(connectionID: UUID, schema: SchemaRef, tables: [TableInfo]? = nil) {
+    public init(connectionID: UUID, schema: SchemaRef, tables: [TableInfo]? = nil, choosesSource: Bool = false) {
         self.connectionID = connectionID
         self.schema = schema
         self.tables = tables
+        self.choosesSource = choosesSource
     }
 }
 
@@ -47,10 +52,14 @@ public struct ScriptImportRequest: Identifiable, Sendable, Hashable {
     public let connectionID: UUID
     /// The database the script runs against; nil is the connection's own.
     public let database: String?
+    /// True when the request came from the Tools menu: the sheet asks for the
+    /// connection and database, starting from the given ones.
+    public let choosesTarget: Bool
 
-    public init(connectionID: UUID, database: String?) {
+    public init(connectionID: UUID, database: String?, choosesTarget: Bool = false) {
         self.connectionID = connectionID
         self.database = database
+        self.choosesTarget = choosesTarget
     }
 }
 

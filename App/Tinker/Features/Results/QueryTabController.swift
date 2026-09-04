@@ -203,10 +203,24 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
                     guard let self else { throw DBError.notConnected }
                     return try await self.connectionForRun(session: session)
                 }
-                let grid = GridModel(source: .query(statement.text), dialect: dialect, loader: loader)
+                // A SELECT over one table with its key edits like a table tab.
+                let editing = await editTarget(for: statement.text, session: session)
+                let grid = GridModel(
+                    source: .query(statement.text), dialect: dialect, loader: loader,
+                    identityColumns: editing?.key ?? [], identityKind: editing?.keyKind)
                 grid.isPaged = true
                 await grid.load(page: 0)
                 if let failure = grid.lastError { throw failure }
+                if let editing {
+                    let names = Set(grid.columns.map(\.name))
+                    let sameTable = grid.columns.allSatisfy { $0.tableOID == nil || $0.tableOID == editing.tableOID }
+                    if editing.key.allSatisfy(names.contains), sameTable {
+                        grid.editTarget = editing.table
+                        grid.editableColumns = editing.columns.intersection(names)
+                    } else {
+                        grid.setIdentity(columns: [], kind: nil)
+                    }
+                }
                 let duration = clockStart.duration(to: .now)
                 result.grid = grid
                 result.completion = QueryCompletion(
@@ -284,6 +298,125 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             bumpRevision()
             return true
         }
+    }
+
+    /// What editing a result of `sql` would write to, when it reads one table whose key
+    /// can be looked up; nil means the rows stay read-only.
+    private func editTarget(
+        for sql: String, session: ConnectionSession
+    ) async -> (
+        table: TableRef, key: [String], keyKind: DBValueKind?, columns: Set<String>, tableOID: String
+    )? {
+        guard let match = QuerySourceTable.detect(sql, dialect: dialect) else { return nil }
+        let database = session.config.database ?? ""
+        let table: TableRef
+        switch dialect {
+        case .mysql:
+            let schema = match.schema ?? sessionDatabase ?? database
+            table = TableRef(schema: SchemaRef.mysql(schema), name: match.name)
+        case .postgresql:
+            table = TableRef(database: database, schema: match.schema ?? sessionDatabase ?? "public", name: match.name)
+        }
+        guard
+            let columns = try? await session.introspection(.columns(table), load: { try await $0.columns(of: table) }),
+            !columns.isEmpty
+        else { return nil }
+        var key =
+            (try? await session.introspection(.primaryKey(table), load: { try await $0.primaryKey(of: table) })) ?? nil
+        if key == nil || key?.isEmpty == true {
+            let (lease, connection) = (try? await session.lease()) ?? (nil, nil)
+            if let lease, let connection {
+                key = try? await connection.introspector.rowIdentity(of: table)
+                await session.release(lease)
+            }
+        }
+        guard let key, !key.isEmpty else { return nil }
+        let keyKind = key.count == 1 ? columns.first { $0.name == key[0] }?.kind : nil
+        let editable = Set(columns.filter { !$0.isGenerated }.map(\.name))
+        return (table, key, keyKind, editable, "\(table.schema).\(table.name)")
+    }
+
+    // MARK: - Editing a result
+
+    /// Pending edits on the selected result, for the status bar and the menu.
+    public var pendingEditCount: Int { selectedResult?.grid?.edits.pendingStatementCount ?? 0 }
+
+    public func pendingStatements() -> [GeneratedStatement] {
+        (try? selectedResult?.grid?.pendingStatements()) ?? []
+    }
+
+    public func discardEdits() {
+        selectedResult?.grid?.edits.discardAll()
+        bumpRevision()
+    }
+
+    public func setSelectionNull() {
+        guard let grid = selectedResult?.grid, grid.isEditable else { return }
+        for row in selection.rows(totalRows: grid.displayRowCount) {
+            for column in selection.columns(totalColumns: grid.columns.count) {
+                grid.setValue(.null, row: row, column: column)
+            }
+        }
+        bumpRevision()
+    }
+
+    public func deleteSelectedRows() {
+        guard let grid = selectedResult?.grid, grid.isEditable else { return }
+        grid.markDeleted(rows: selection.rows(totalRows: grid.displayRowCount))
+        bumpRevision()
+    }
+
+    public func addRow() {
+        guard let grid = selectedResult?.grid, grid.isEditable else { return }
+        grid.addRow()
+        bumpRevision()
+    }
+
+    public func rowValues(_ row: Int) -> [DBValue]? {
+        guard let grid = selectedResult?.grid, row >= 0, row < grid.displayRowCount else { return nil }
+        return (0 ..< grid.columns.count).map { grid.value(row: row, column: $0) ?? .null }
+    }
+
+    /// Writes the pending edits through the tab's own connection.
+    ///
+    /// With auto-commit on, the edits are one transaction of their own. With it off they
+    /// join the tab's open transaction under a savepoint, so a refused statement takes
+    /// only the edits back, not the statements the user ran before them; the transaction
+    /// then commits when the user commits it. Either way the page is re-read afterwards,
+    /// so a timestamp the server set is what the grid shows.
+    public func commitEdits() async -> String? {
+        guard let result = selectedResult, let grid = result.grid, grid.isEditable, let session else { return nil }
+        if await session.isReadOnly { return "This connection is read-only" }
+        do {
+            let connection = try await connectionForRun(session: session)
+            let runner = HeldConnectionRunner(connection: connection, usesSavepoint: !autoCommit)
+            let committed = try await grid.commit(using: runner)
+            isInTransaction = await connection.isInTransaction
+            await grid.reload()
+            result.message = Self.pageMessage(grid, exactTotal: result.exactTotal, duration: .zero)
+            bumpRevision()
+            return committed.statementCount == 0
+                ? nil
+                : "Committed \(committed.statementCount) statement\(committed.statementCount == 1 ? "" : "s")"
+                    + (autoCommit ? "" : " into the open transaction")
+        } catch let error as GridCommitError {
+            errorBanner = QueryErrorBanner(error: error, statement: error.statement ?? result.statement)
+            bumpRevision()
+            return error.description
+        } catch {
+            errorBanner = QueryErrorBanner(error: error, statement: result.statement)
+            bumpRevision()
+            return (error as? DBError)?.errorDescription ?? String(describing: error)
+        }
+    }
+
+    /// Re-reads every paged result, so rows show what the server holds now.
+    private func reloadPagedResults() async {
+        for result in results {
+            guard let grid = result.grid, grid.isPaged else { continue }
+            await grid.reload()
+        }
+        bumpRevision()
     }
 
     static func pageMessage(_ grid: GridModel, exactTotal: Int64?, duration: Duration) -> String {
@@ -525,6 +658,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     }
 
     public func commitTransaction() async {
+        defer { Task { await reloadPagedResults() } }
         guard let connection = heldConnection else { return }
         do {
             try await connection.commit()
@@ -748,8 +882,37 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
 
     public func gridDidChangeSelection(_ selection: GridSelection) { self.selection = selection }
     public func gridDidRequestLoad(range: Range<Int>) {}
-    public func gridDidCommitEdit(row: Int, column: Int, text: String) {}
-    public func gridDidRequestInspector() {}
+    public func gridDidCommitEdit(row: Int, column: Int, text: String) {
+        guard let grid = selectedResult?.grid, grid.columns.indices.contains(column) else { return }
+        guard grid.isColumnEditable(column) else {
+            if let reason = grid.readOnlyReason {
+                errorBanner = QueryErrorBanner(
+                    error: DBError.protocolError(reason), statement: selectedResult?.statement ?? "")
+            } else {
+                errorBanner = QueryErrorBanner(
+                    error: DBError.protocolError(
+                        "\(grid.columns[column].name) is not a column of the table; it cannot be written back"),
+                    statement: selectedResult?.statement ?? "")
+            }
+            bumpRevision()
+            return
+        }
+        guard let value = ValueCoercion.coerce(text, to: grid.columns[column].kind) else {
+            errorBanner = QueryErrorBanner(
+                error: DBError.protocolError("\"\(text)\" is not a valid \(grid.columns[column].nativeTypeName)"),
+                statement: selectedResult?.statement ?? "")
+            bumpRevision()
+            return
+        }
+        grid.setValue(value, row: row, column: column)
+        bumpRevision()
+    }
+    public func gridDidRequestInspector() { onRequestInspector?() }
+    /// Set by the tab view; the grid asks for the inspector with the space bar.
+    @ObservationIgnored public var onRequestInspector: (() -> Void)?
+    public func gridDidRequestSetNull() { setSelectionNull() }
+    public func gridDidRequestDeleteRows() { deleteSelectedRows() }
+    public func gridDidRequestAddRow() { addRow() }
     public func gridDidChangeColumnWidths(_ widths: [String: Double]) {}
     public func gridDidRequestCopy(format: ClipboardFormat) { copySelection(format: format) }
 
@@ -769,5 +932,45 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         )
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+/// Runs a grid commit on the query tab's own connection.
+///
+/// With `usesSavepoint` the edits sit inside the transaction already open on that
+/// connection, fenced by a savepoint so a failure undoes only them.
+private struct HeldConnectionRunner: GridStatementRunner {
+    let connection: any SQLConnection
+    let usesSavepoint: Bool
+
+    func beginTransaction() async throws {
+        if usesSavepoint {
+            _ = try await connection.executeCollecting("SAVEPOINT tinker_edit")
+        } else {
+            try await connection.beginTransaction()
+        }
+    }
+
+    func commitTransaction() async throws {
+        if usesSavepoint {
+            _ = try await connection.executeCollecting("RELEASE SAVEPOINT tinker_edit")
+        } else {
+            try await connection.commit()
+        }
+    }
+
+    func rollbackTransaction() async throws {
+        if usesSavepoint {
+            _ = try await connection.executeCollecting("ROLLBACK TO SAVEPOINT tinker_edit")
+        } else {
+            try await connection.rollback()
+        }
+    }
+
+    func run(_ statement: GeneratedStatement) async throws -> StatementOutcome {
+        let result = try await connection.executeCollecting(statement.sql, parameters: statement.parameters)
+        return StatementOutcome(
+            affectedRows: result.completion.affectedRows, returnedRows: result.rows, returnedColumns: result.columns,
+            lastInsertID: result.completion.lastInsertID)
     }
 }

@@ -235,6 +235,47 @@ extension SmokeTest {
             check("insert at caret appends on a new line", query.sql == "SELECT 1;\nSELECT 2;")
             await query.selectDatabase("public")
             check("switching the search path reports it", query.statusText == "Using public")
+
+            // MARK: Query results page and edit like a table
+            query.sql = "SELECT id, name, amount FROM smoke_features ORDER BY id"
+            query.caretOffset = 0
+            query.run(all: true)
+            try await waitUntil(timeout: .seconds(20)) {
+                !query.isRunning && query.results.first?.statement.hasPrefix("SELECT id") == true
+            }
+            let resultGrid = query.results.first?.grid
+            check(
+                "a one-table SELECT pages on the server and is editable (\(resultGrid?.readOnlyReason ?? "editable"))",
+                resultGrid?.isPaged == true && resultGrid?.isEditable == true)
+            if let resultGrid, let nameColumn = resultGrid.columns.firstIndex(where: { $0.name == "name" }) {
+                query.gridDidCommitEdit(row: 0, column: nameColumn, text: "Edited via query")
+                check("an edit on a result is pending until committed", query.pendingEditCount == 1)
+                let message = await query.commitEdits()
+                let edited = (try? await sql("SELECT name FROM \(scratchName) ORDER BY id LIMIT 1"))??.firstText
+                check(
+                    "committing result edits writes by key and re-reads the page (\(message ?? ""))",
+                    edited == "Edited via query"
+                        && resultGrid.value(row: 0, column: nameColumn) == .string("Edited via query"))
+                // Auto-commit off: the edit joins the tab's transaction until that commits.
+                await query.setAutoCommit(false)
+                query.gridDidCommitEdit(row: 0, column: nameColumn, text: "Grace")
+                _ = await query.commitEdits()
+                let uncommitted = (try? await sql("SELECT name FROM \(scratchName) ORDER BY id LIMIT 1"))??.firstText
+                check(
+                    "with auto-commit off the edit waits in the open transaction",
+                    query.isInTransaction && uncommitted == "Edited via query")
+                await query.commitTransaction()
+                let committed = (try? await sql("SELECT name FROM \(scratchName) ORDER BY id LIMIT 1"))??.firstText
+                check("committing the transaction lands the result edit", committed == "Grace")
+                await query.setAutoCommit(true)
+            }
+            query.sql = "SELECT s.id FROM smoke_features s JOIN smoke_features t ON t.id = s.id"
+            query.caretOffset = 0
+            query.run(all: true)
+            try await waitUntil(timeout: .seconds(20)) {
+                !query.isRunning && query.results.first?.statement.contains("JOIN") == true
+            }
+            check("a join result stays read-only", query.results.first?.grid?.isEditable == false)
             await query.releaseHeldConnection()
 
             // MARK: Structure: create, alter, drop

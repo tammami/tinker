@@ -402,11 +402,24 @@ final class GridModelTests: XCTestCase {
         XCTAssertFalse(withoutKey.setValue(.string("edited"), row: 0, column: 1))
     }
 
-    func testQueryResultsAreAlwaysReadOnly() {
+    func testQueryResultsEditOnlyWithATableAndItsKey() {
         let loader = FixtureLoader(totalRows: 0)
         let model = GridModel(source: .query("SELECT 1"), dialect: .postgresql, loader: loader)
         XCTAssertFalse(model.isEditable)
-        XCTAssertEqual(model.readOnlyReason, "Query results are read-only")
+        XCTAssertEqual(model.readOnlyReason, "Read only — select from one table with its primary key to edit")
+
+        // A result that reads one table edits like that table, but only its own columns.
+        let keyed = GridModel(
+            source: .query("SELECT id, name, upper(name) AS loud FROM t"), dialect: .postgresql, loader: loader,
+            identityColumns: ["id"], identityKind: .int)
+        keyed.editTarget = TableRef(database: "db", schema: "public", name: "t")
+        keyed.editableColumns = ["id", "name"]
+        XCTAssertTrue(keyed.isEditable)
+        XCTAssertNil(keyed.readOnlyReason)
+        XCTAssertEqual(keyed.writableTable?.name, "t")
+        keyed.setIdentity(columns: [], kind: nil)
+        XCTAssertFalse(keyed.isEditable)
+        XCTAssertEqual(keyed.readOnlyReason, "Read only — the key is not in the result")
     }
 
     func testPendingStatementsUseOriginalIdentityValues() async throws {

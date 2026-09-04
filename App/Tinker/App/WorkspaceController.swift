@@ -339,6 +339,14 @@ public final class WorkspaceController {
 
     public func commit() {
         if let controller = activeQueryController {
+            // Edits on a result come first; with none pending, Commit means the transaction.
+            let statements = controller.pendingStatements()
+            if !statements.isEmpty, let tab = workspace.selectedTab, let config = workspace.activeConnection {
+                workspace.commitPreview = CommitPreview(
+                    statements: statements, dialect: controller.dialect,
+                    connectionName: config.name, isProduction: config.isProduction, tab: tab)
+                return
+            }
             Task { await controller.commitTransaction() }
             return
         }
@@ -453,9 +461,23 @@ public final class WorkspaceController {
     }
 
     public func paste() { activeTableController?.paste() }
-    public func setNull() { activeTableController?.setSelectionNull() }
-    public func addRow() { activeTableController?.addRow() }
-    public func deleteRows() { activeTableController?.deleteSelectedRows() }
+    public func setNull() {
+        if let query = activeQueryController {
+            query.setSelectionNull()
+        } else {
+            activeTableController?.setSelectionNull()
+        }
+    }
+    public func addRow() {
+        if let query = activeQueryController { query.addRow() } else { activeTableController?.addRow() }
+    }
+    public func deleteRows() {
+        if let query = activeQueryController {
+            query.deleteSelectedRows()
+        } else {
+            activeTableController?.deleteSelectedRows()
+        }
+    }
 
     public func cycleResultTab(forward: Bool) {
         guard let controller = activeQueryController, !controller.results.isEmpty else { return }

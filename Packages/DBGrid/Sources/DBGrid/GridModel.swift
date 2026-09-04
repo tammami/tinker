@@ -178,18 +178,45 @@ public final class GridModel {
         return edits.pendingInserts[offset]
     }
 
-    /// True when the grid may be edited: it shows a table that has a row identity.
+    /// For a query result: the one table its rows come from, once that is known, so
+    /// the rows can be edited the way a table tab's are.
+    public var editTarget: TableRef?
+    /// For a query result: the columns that are the table's own; an expression or an
+    /// alias has nothing to write back to. nil means every column.
+    public var editableColumns: Set<String>?
+
+    /// The table a commit writes to: the table shown, or the one a query reads.
+    public var writableTable: TableRef? {
+        if case let .table(table) = source { return table }
+        return editTarget
+    }
+
+    /// True when the grid may be edited: its rows belong to a table that has a row identity.
     public var isEditable: Bool {
-        if case .table = source { return !identityColumns.isEmpty }
-        return false
+        writableTable != nil && !identityColumns.isEmpty
     }
 
     /// Why editing is unavailable, for the status bar.
     public var readOnlyReason: String? {
         switch source {
-        case .query: "Query results are read-only"
+        case .query:
+            editTarget == nil
+                ? "Read only — select from one table with its primary key to edit"
+                : (identityColumns.isEmpty ? "Read only — the key is not in the result" : nil)
         case .table: identityColumns.isEmpty ? "No primary key — read only" : nil
         }
+    }
+
+    /// Changes which columns identify a row, once a query result reveals its columns.
+    public func setIdentity(columns: [String], kind: DBValueKind?) {
+        identityColumns = columns
+        identityKind = kind
+    }
+
+    public func isColumnEditable(_ column: Int) -> Bool {
+        guard isEditable, columns.indices.contains(column) else { return false }
+        guard let editableColumns else { return true }
+        return editableColumns.contains(columns[column].name)
     }
 
     // MARK: - Reading
@@ -385,7 +412,7 @@ public final class GridModel {
     /// Records a cell edit, if the grid is editable.
     @discardableResult
     public func setValue(_ value: DBValue, row: Int, column: Int) -> Bool {
-        guard isEditable, column < columns.count else { return false }
+        guard isColumnEditable(column) else { return false }
         if let insert = pendingInsert(at: row) {
             edits.setInsertValue(value, id: insert.id, column: columns[column].name)
             return true
@@ -424,7 +451,7 @@ public final class GridModel {
 
     /// The statements a commit would run, for the preview sheet.
     public func pendingStatements() throws -> [GeneratedStatement] {
-        guard case let .table(table) = source else { return [] }
+        guard let table = writableTable else { return [] }
         let generator = DMLGenerator(dialect: dialect, table: table, identityColumns: identityColumns)
         return try edits.statements(using: generator)
     }

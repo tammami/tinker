@@ -115,8 +115,11 @@ public struct WorkspaceView: View {
             CommitPreviewView(
                 preview: preview,
                 onExecute: {
-                    guard let controller = tableControllers[preview.tab.id] else { return }
-                    _ = await controller.commit()
+                    if let controller = tableControllers[preview.tab.id] {
+                        _ = await controller.commit()
+                    } else if let query = queryControllers[preview.tab.id] {
+                        _ = await query.commitEdits()
+                    }
                     workspace.commitPreview = nil
                 },
                 onCancel: { workspace.commitPreview = nil }

@@ -106,6 +106,17 @@ enum UIDemo {
                     try? await Task.sleep(for: .milliseconds(400))
                     query.run(all: true)
                 }
+            case "editquery":
+                let tab = controller.newQueryTab(connectionID: config.id, sql: "SELECT * FROM customers ORDER BY id;")
+                if let query = controller.queryController(for: tab) {
+                    try? await Task.sleep(for: .milliseconds(400))
+                    query.run(all: true)
+                    try? await Task.sleep(for: .milliseconds(1500))
+                    if let grid = query.selectedResult?.grid, grid.isEditable, grid.columns.count > 1 {
+                        query.gridDidCommitEdit(row: 0, column: 1, text: "Edited in the result grid")
+                        query.selection = GridSelection(row: 0, column: 1)
+                    }
+                }
             case "completion":
                 let tab = controller.newQueryTab(connectionID: config.id, sql: "SELECT * FROM cus")
                 if let query = controller.queryController(for: tab) {

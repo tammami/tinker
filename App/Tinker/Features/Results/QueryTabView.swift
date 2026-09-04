@@ -70,6 +70,11 @@ public struct QueryTabView: View {
     /// Run controls on the left, the tab's session in the middle, the transaction on the
     /// right: what to do, where it goes, and what state it leaves behind.
     var editorToolbar: some View {
+        toolbarContent
+            .onAppear { controller.onRequestInspector = { workspace.isInspectorVisible = true } }
+    }
+
+    var toolbarContent: some View {
         PaneBar {
             Button {
                 controller.editorDidRequestRun(.current, selection: controller.selectedRange)
@@ -411,12 +416,36 @@ public struct QueryTabView: View {
     private func rowsPane(_ result: QueryResultTab) -> some View {
         VStack(spacing: 0) {
             if let grid = result.grid {
-                DataGridView(
-                    model: grid,
-                    selection: $controller.selection,
-                    revision: controller.revision,
-                    delegate: controller
-                )
+                HStack(spacing: 0) {
+                    DataGridView(
+                        model: grid,
+                        selection: $controller.selection,
+                        revision: controller.revision,
+                        delegate: controller
+                    )
+                    if workspace.isInspectorVisible {
+                        Divider()
+                        CellInspectorView(
+                            columns: grid.columns,
+                            focusedColumn: controller.selection.focusColumn,
+                            focusedRow: controller.selection.focusRow,
+                            rowValues: controller.rowValues(controller.selection.focusRow),
+                            rowState: grid.rowChangeState(controller.selection.focusRow),
+                            isEditable: grid.isEditable,
+                            hasReference: { _ in false },
+                            onCommit: { column, text in
+                                controller.gridDidCommitEdit(
+                                    row: controller.selection.focusRow, column: column, text: text)
+                            },
+                            onSetNull: { column in
+                                grid.setValue(.null, row: controller.selection.focusRow, column: column)
+                                controller.bumpRevision()
+                            },
+                            onFollow: { _ in }
+                        )
+                        .id(controller.revision)
+                    }
+                }
                 if grid.hasReachedMemoryCap {
                     InlineBanner(
                         kind: .warning,
@@ -458,6 +487,22 @@ public struct QueryTabView: View {
                 } else if let grid = result.grid {
                     Text("\(grid.displayRowCount) row\(grid.displayRowCount == 1 ? "" : "s")")
                         .monospacedDigit()
+                }
+                if let grid = result.grid, grid.isPaged, let reason = grid.readOnlyReason {
+                    Text(reason).foregroundStyle(.secondary).lineLimit(1)
+                }
+                if let grid = result.grid, grid.edits.pendingStatementCount > 0 {
+                    Button("Discard") { controller.discardEdits() }
+                        .controlSize(.small)
+                    Button {
+                        presentCommitPreview(grid)
+                    } label: {
+                        Label("Commit \(grid.edits.pendingStatementCount)…", systemImage: Icon.commit)
+                    }
+                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+                }
+                if result.grid != nil {
                     if controller.selection.rowSpan > 1 || controller.selection.columnSpan > 1 {
                         Text("\(controller.selection.rowSpan)×\(controller.selection.columnSpan) selected")
                             .monospacedDigit()
@@ -469,6 +514,16 @@ public struct QueryTabView: View {
 }
 
 extension QueryTabView {
+    /// The edits a result holds, shown as the statements they become before they run.
+    func presentCommitPreview(_ grid: GridModel) {
+        guard let config = workspace.environment.connections.first(where: { $0.id == tab.connectionID }) else { return }
+        let statements = controller.pendingStatements()
+        guard !statements.isEmpty else { return }
+        workspace.commitPreview = CommitPreview(
+            statements: statements, dialect: grid.dialect, connectionName: config.name,
+            isProduction: config.isProduction, tab: tab)
+    }
+
     /// First / previous / next / last for a paged result, as on a table tab.
     var pager: some View {
         HStack(spacing: 0) {

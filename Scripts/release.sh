@@ -207,19 +207,45 @@ lipo -info "$APP/Contents/MacOS/Tinker" | sed 's/^/  /'
 if [[ "$MODE" == "share" ]]; then
     bold "Zip to share"
     ZIP="$BUILD_DIR/Tinker-$VERSION.zip"
+    SHARE_DIR="$BUILD_DIR/Tinker-$VERSION"
+    rm -rf "$SHARE_DIR"
+    mkdir -p "$SHARE_DIR"
+    cp -R "$APP" "$SHARE_DIR/"
+    # The steps the recipient has to take, next to the app so they are not lost.
+    cat > "$SHARE_DIR/Read me first.txt" <<README
+Tinker $VERSION — how to open it the first time
+
+This copy is signed but not notarized by Apple, so macOS blocks the first launch
+with "Tinker Not Opened — Apple could not verify…". That is expected. Do this once:
+
+  1. Move Tinker.app into Applications.
+  2. Double-click it. When the "Not Opened" message appears, click Done (NOT Move to Bin).
+  3. Open System Settings → Privacy & Security, scroll down to Security.
+     You will see "Tinker was blocked to protect your Mac" — click Open Anyway,
+     then Open in the confirmation. (Password or Touch ID may be asked.)
+  4. From then on Tinker opens normally.
+
+  Shortcut, if you use Terminal:
+     xattr -dr com.apple.quarantine /Applications/Tinker.app
+  and then open it as usual.
+
+Needs macOS 14 or later. Runs on Apple silicon and Intel Macs.
+README
     # ditto keeps the bundle's permissions and structure; a folder dragged into a chat
     # or a Finder-compressed copy of a modified bundle may not.
-    ditto -c -k --keepParent --sequesterRsrc "$APP" "$ZIP"
+    ditto -c -k --keepParent --sequesterRsrc "$SHARE_DIR" "$ZIP"
     echo "  $ZIP"
     ls -lh "$ZIP" | awk '{print "  " $5}'
     cat <<SHARE
 
   This build is not notarized (that needs a Developer ID certificate), so on the
-  recipient's Mac Gatekeeper will refuse a double-click the first time. Tell them:
-    1. Unzip, move Tinker.app to Applications.
-    2. Right-click Tinker.app → Open → Open. (Once; after that it opens normally.)
-       Or, in Terminal:  xattr -dr com.apple.quarantine /Applications/Tinker.app
-  It needs macOS 14 or later, and runs on Apple silicon and Intel.
+  recipient's Mac the first double-click shows "Tinker Not Opened — Apple could not
+  verify…" with only Done / Move to Bin. On macOS 15 and later right-click → Open
+  does NOT get past this. The recipient has to, once:
+    1. Click Done, then open System Settings → Privacy & Security → scroll to
+       Security → "Tinker was blocked…" → Open Anyway → Open.
+    Or, in Terminal:  xattr -dr com.apple.quarantine /Applications/Tinker.app
+  The zip carries "Read me first.txt" saying the same. macOS 14 or later.
 SHARE
 fi
 
@@ -229,6 +255,7 @@ STAGING="$BUILD_DIR/dmg"
 rm -rf "$STAGING"
 mkdir -p "$STAGING"
 cp -R "$APP" "$STAGING/"
+if [[ "$MODE" == "share" ]]; then cp "$SHARE_DIR/Read me first.txt" "$STAGING/"; fi
 ln -s /Applications "$STAGING/Applications"
 hdiutil create -volname "Tinker $VERSION" -srcfolder "$STAGING" \
     -ov -format UDZO -fs HFS+ "$DMG" >/dev/null

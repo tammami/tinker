@@ -247,6 +247,27 @@ private struct CellValueEditor: View {
                 }
             }
 
+        case let .raw(typeName, nil, bytes?) where GeometryParser.isGeometryType(typeName):
+            // Geometry: the well-known text, which is what can be read, copied and mapped.
+            let feature = GeometryParser.parse(bytes: bytes, dialect: .postgresql)
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                HStack(spacing: DesignTokens.Spacing.sm) {
+                    Badge(text: feature?.shape.typeName ?? "GEOMETRY", color: .accentColor)
+                    if let srid = feature?.srid { Badge(text: "SRID \(srid)") }
+                    Text("\(bytes.count) bytes").font(.caption).foregroundStyle(.secondary)
+                }
+                ScrollView {
+                    Text(feature?.shape.wkt ?? CellInspectorView.hexDump(bytes))
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(DesignTokens.Spacing.sm)
+                }
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius))
+                Text("Open the Map pane to see it drawn.").font(.caption).foregroundStyle(.tertiary)
+            }
+
         case let .bytes(data):
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
                 Text("\(data.count) bytes").font(.caption).foregroundStyle(.secondary)

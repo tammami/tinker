@@ -60,9 +60,10 @@ public final class SQLTextView: NSTextView {
         // equivalents before the menu does; the menu carries the same three.
         if event.charactersIgnoringModifiers?.lowercased() == "r" {
             let scope: SQLRunScope =
-                event.modifierFlags.contains(.option) ? .all : event.modifierFlags.contains(.shift) ? .selection : .current
+                event.modifierFlags.contains(.option)
+                ? .all : event.modifierFlags.contains(.shift) ? .selection : .current
             let selected = selectedRange()
-            let selection: Range<Int>? = selected.length > 0 ? selected.location..<NSMaxRange(selected) : nil
+            let selection: Range<Int>? = selected.length > 0 ? selected.location ..< NSMaxRange(selected) : nil
             MainActor.assumeIsolated {
                 self.coordinator?.delegate?.editorDidRequestRun(scope, selection: selection)
             }

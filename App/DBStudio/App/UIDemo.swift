@@ -43,7 +43,9 @@ enum UIDemo {
         guard let root = sidebar.find(id: config.id.uuidString) else { return }
         await sidebar.expand(root)
         let databases = sidebar.find(id: root.id)?.children ?? []
-        guard let database = databases.first(where: { $0.title == (config.database ?? "") }) ?? databases.first else {
+        // The map scene wants the seeded test database whatever the connection defaults to.
+        let preferredDatabase = wanted.contains("map") ? "dbstudio_test" : (config.database ?? "")
+        guard let database = databases.first(where: { $0.title == preferredDatabase }) ?? databases.first else {
             return
         }
         await sidebar.expand(database)
@@ -152,6 +154,11 @@ enum UIDemo {
                 if let ref = demoSchemaRef(schema) {
                     workspace.newTableContext = (config.id, ref)
                     workspace.isNewTablePresented = true
+                }
+            case "map":
+                if let places = tables.first(where: { $0.name == "spatial_places" }) {
+                    controller.openTable(places.ref, connectionID: config.id)
+                    UserDefaults.standard.set(true, forKey: "uiDemo.map")
                 }
             case "palette":
                 workspace.isCommandPalettePresented = true

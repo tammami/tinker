@@ -1,4 +1,5 @@
 import DBCore
+import DBGrid
 import DBSQL
 import DBTestKit
 import Logging
@@ -774,6 +775,35 @@ extension MySQLIntegrationTests {
             } catch let error as DBError {
                 XCTAssertFalse(error.errorDescription?.isEmpty ?? true)
             }
+        }
+    }
+}
+
+extension MySQLIntegrationTests {
+    /// MySQL's own geometry arrives as SRID + WKB and reads back as longitude/latitude.
+    func testSpatialColumnsDecodeToPlaceableShapes() async throws {
+        try await withEachServer { connection, _ in
+            let result = try await connection.executeCollecting(
+                "SELECT id, kind, geom FROM spatial_places WHERE geom IS NOT NULL ORDER BY id"
+            )
+            XCTAssertEqual(result.rows.count, 6)
+            let geomColumn = try XCTUnwrap(result.columns.firstIndex { $0.name == "geom" })
+            XCTAssertTrue(
+                GeometryParser.isGeometryType(result.columns[geomColumn].nativeTypeName),
+                result.columns[geomColumn].nativeTypeName)
+            let monas = try XCTUnwrap(GeometryParser.parse(result.rows[0][geomColumn], dialect: .mysql))
+            XCTAssertEqual(monas.srid, 4326)
+            guard case let .point(point) = monas.shape else { return XCTFail("Monas is a point") }
+            XCTAssertEqual(point.longitude, 106.8272, accuracy: 1e-6)
+            XCTAssertEqual(point.latitude, -6.1754, accuracy: 1e-6)
+            let avenue = try XCTUnwrap(GeometryParser.parse(result.rows[4][geomColumn], dialect: .mysql))
+            guard case let .line(points) = avenue.shape else { return XCTFail("the avenue is a line") }
+            XCTAssertEqual(points.count, 3)
+            XCTAssertEqual(points[0].longitude, 106.8230, accuracy: 1e-6)
+            let park = try XCTUnwrap(GeometryParser.parse(result.rows[5][geomColumn], dialect: .mysql))
+            guard case let .polygon(rings) = park.shape else { return XCTFail("the park is a polygon") }
+            XCTAssertEqual(rings.first?.count, 5)
+            XCTAssertFalse(park.isUnplaceable)
         }
     }
 }

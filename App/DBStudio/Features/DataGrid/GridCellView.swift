@@ -104,6 +104,9 @@ final class GridCellView: NSView {
     /// The text a cell shows: long values are cut here and shown in full in the inspector.
     static func displayText(for value: DBValue) -> String {
         switch value {
+        case let .raw(typeName, nil, bytes?) where GeometryParser.isGeometryType(typeName):
+            // A geometry arrives as bytes; its well-known text is what a person can read.
+            return GeometryParser.parse(bytes: bytes, dialect: .postgresql)?.shape.summary ?? "<\(bytes.count) bytes>"
         case let .array(items):
             let joined = items.map { $0.text ?? "NULL" }.joined(separator: ", ")
             return truncate("{\(joined)}")

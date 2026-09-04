@@ -77,7 +77,9 @@ enum SmokeTest {
             partial.caretOffset = partial.sql.utf16.count
             partial.editorDidRequestRun(.current, selection: nil)
             try await waitUntil(timeout: .seconds(20)) { !partial.isRunning && partial.results.count == 1 }
-            check("run current runs only the statement at the caret", partial.results.first?.grid?.columns.first?.name == "second")
+            check(
+                "run current runs only the statement at the caret",
+                partial.results.first?.grid?.columns.first?.name == "second")
             await partial.releaseHeldConnection()
 
             // Cancellation: a long statement must stop quickly and leave the tab usable.

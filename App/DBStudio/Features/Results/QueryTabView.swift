@@ -197,6 +197,7 @@ public struct QueryTabView: View {
     enum ResultPane: String, CaseIterable, Identifiable {
         case result = "Rows"
         case text = "Text"
+        case map = "Map"
         case message = "Message"
         case profile = "Profile"
         case status = "Status"
@@ -207,11 +208,20 @@ public struct QueryTabView: View {
             switch self {
             case .result: Icon.data
             case .text: Icon.text
+            case .map: Icon.map
             case .message: Icon.message
             case .profile: Icon.profile
             case .status: Icon.status
             }
         }
+    }
+
+    @State private var mapColumn = -1
+
+    /// Geometry columns in the selected result, when it has any.
+    private var resultGeometryColumns: [Int] {
+        guard let grid = controller.selectedResult?.grid else { return [] }
+        return GeometryColumns.detect(in: grid, dialect: controller.dialect)
     }
 
     /// The result strip: one chip per statement on the left, the pane picker on the right.
@@ -227,7 +237,7 @@ public struct QueryTabView: View {
             }
             Spacer(minLength: DesignTokens.Spacing.sm)
             Picker("Pane", selection: $resultPane) {
-                ForEach(ResultPane.allCases) { pane in
+                ForEach(ResultPane.allCases.filter { $0 != .map || !resultGeometryColumns.isEmpty }) { pane in
                     Label(pane.rawValue, systemImage: pane.icon).tag(pane)
                 }
             }
@@ -272,6 +282,7 @@ public struct QueryTabView: View {
             case .message: messagePane(result)
             case .result: rowsPane(result)
             case .text: textPane(result)
+            case .map: mapPane(result)
             case .profile:
                 tablePane(
                     columns: result.profileColumns, rows: result.profile, note: result.profileNote
@@ -287,7 +298,8 @@ public struct QueryTabView: View {
             EmptyStateView(
                 icon: Icon.run,
                 title: "No results yet",
-                message: "Run the statement under the cursor with ⌘R, the highlighted text with ⌘⇧R, or the whole page with ⌘⌥R."
+                message:
+                    "Run the statement under the cursor with ⌘R, the highlighted text with ⌘⇧R, or the whole page with ⌘⌥R."
             )
         }
     }
@@ -333,6 +345,30 @@ public struct QueryTabView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(DesignTokens.Spacing.lg)
+        }
+    }
+
+    /// The result's geometry column on a map.
+    @ViewBuilder
+    private func mapPane(_ result: QueryResultTab) -> some View {
+        if let grid = result.grid {
+            let columns = resultGeometryColumns
+            MapPaneView(
+                grid: grid,
+                dialect: controller.dialect,
+                revision: controller.revision,
+                column: Binding(
+                    get: { columns.contains(mapColumn) ? mapColumn : (columns.first ?? 0) },
+                    set: { mapColumn = $0 }
+                ),
+                columns: columns,
+                onSelectRow: { row in
+                    controller.selection = GridSelection(row: row, column: 0, mode: .rows)
+                    controller.bumpRevision()
+                }
+            )
+        } else {
+            EmptyStateView(icon: Icon.map, title: "No rows to map")
         }
     }
 

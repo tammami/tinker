@@ -134,7 +134,8 @@ let package = Package(
         ),
         .testTarget(
             name: "DBMySQLTests",
-            dependencies: ["DBMySQL", "DBTestKit"],
+            // DBGrid is test-only here: the spatial check parses what the driver decodes.
+            dependencies: ["DBMySQL", "DBTestKit", "DBGrid"],
             path: "Packages/DBMySQL/Tests/DBMySQLTests",
             swiftSettings: strict
         ),

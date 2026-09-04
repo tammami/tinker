@@ -126,6 +126,7 @@ public enum Icon {
     public static let activity = "waveform.path.ecg"
     public static let source = "chevron.left.forwardslash.chevron.right"
     public static let builder = "rectangle.connected.to.line.below"
+    public static let map = "map"
     public static let join = "link"
 
     // Tabs and panes

@@ -13,12 +13,14 @@ public struct TableTabView: View {
     enum Mode: String, CaseIterable, Identifiable {
         case data = "Data"
         case structure = "Structure"
+        case map = "Map"
         var id: String { rawValue }
 
         var icon: String {
             switch self {
             case .data: Icon.data
             case .structure: Icon.structure
+            case .map: Icon.map
             }
         }
     }
@@ -27,6 +29,13 @@ public struct TableTabView: View {
     @State private var isColumnsPopoverShown = false
     /// The structure pane is built the first time it is asked for, then kept.
     @State private var hasVisitedStructure = false
+    @State private var mapColumn = -1
+
+    /// Geometry columns in the grid, looked for once per revision.
+    private var geometryColumns: [Int] {
+        guard let model = controller.model else { return [] }
+        return GeometryColumns.detect(in: model, dialect: model.dialect)
+    }
 
     public var body: some View {
         VStack(spacing: 0) {
@@ -54,6 +63,23 @@ public struct TableTabView: View {
                     .allowsHitTesting(mode == .structure)
                     .accessibilityHidden(mode != .structure)
                 }
+                if mode == .map, let model = controller.model {
+                    let columns = geometryColumns
+                    MapPaneView(
+                        grid: model,
+                        dialect: model.dialect,
+                        revision: controller.revision,
+                        column: Binding(
+                            get: { columns.contains(mapColumn) ? mapColumn : (columns.first ?? 0) },
+                            set: { mapColumn = $0 }
+                        ),
+                        columns: columns,
+                        onSelectRow: { row in
+                            controller.selection = GridSelection(row: row, column: 0, mode: .rows)
+                            controller.bumpRevision()
+                        }
+                    )
+                }
             }
         }
         .onChange(of: mode) { _, new in
@@ -64,6 +90,13 @@ public struct TableTabView: View {
                 UserDefaults.standard.removeObject(forKey: "uiDemo.structure")
                 mode = .structure
                 hasVisitedStructure = true
+            }
+            if UserDefaults.standard.bool(forKey: "uiDemo.map") {
+                UserDefaults.standard.removeObject(forKey: "uiDemo.map")
+                Task {
+                    try? await Task.sleep(for: .milliseconds(1_200))
+                    mode = .map
+                }
             }
             controller.onRequestInspector = { workspace.isInspectorVisible = true }
             controller.onFollowReference = { table, rules in
@@ -85,7 +118,7 @@ public struct TableTabView: View {
             BarDivider()
 
             Picker("Mode", selection: $mode) {
-                ForEach(Mode.allCases) { mode in
+                ForEach(Mode.allCases.filter { $0 != .map || !geometryColumns.isEmpty }) { mode in
                     Label(mode.rawValue, systemImage: mode.icon).tag(mode)
                 }
             }

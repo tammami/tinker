@@ -84,7 +84,11 @@ struct MapPaneView: View {
                 grid: grid, dialect: dialect, revision: revision, column: column,
                 onSelectRow: onSelectRow, summary: $summary
             )
+            .clipped()
         }
+        // The window's title bar takes its backdrop from what scrolls beneath it; a map
+        // would tint it, so the bar keeps its own background while the map is up.
+        .toolbarBackground(.visible, for: .windowToolbar)
     }
 }
 

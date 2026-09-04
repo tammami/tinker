@@ -140,6 +140,45 @@ public actor PostgresSQLConnection: SQLConnection {
 
     // MARK: - SQLConnection
 
+    /// `COPY table (columns) FROM STDIN` in text format, fed by `body`.
+    ///
+    /// PostgresNIO quotes the table as a single identifier, so the schema is reached
+    /// through `search_path` for the duration of the copy and the previous value put back.
+    public func copyIn(
+        into table: TableRef, columns: [String], body: @Sendable (any BulkLoadWriter) async throws -> Void
+    ) async throws {
+        for name in [table.schema, table.name] + columns where name.contains("\"") {
+            throw DBError.protocolError("COPY cannot target a name containing a double quote: \(name)")
+        }
+        var previousPath =
+            try await Self.rawQuery("SHOW search_path", on: underlying, logger: logger, decoder: decoder)
+            .rows.first?.first?.text ?? "\"$user\", public"
+        // pg_dump scripts empty the path; an empty list has to be spelled as ''.
+        if previousPath.trimmingCharacters(in: .whitespaces).isEmpty { previousPath = "''" }
+        _ = try await Self.rawQuery(
+            "SET search_path TO \(Identifier.quote(table.schema, dialect: .postgresql))",
+            on: underlying, logger: logger, decoder: decoder)
+        var failure: (any Error)?
+        do {
+            try await underlying.copyFrom(table: table.name, columns: columns, logger: logger) { writer in
+                try await body(CopyWriter(writer: writer))
+            }
+        } catch {
+            failure = error
+        }
+        // Put back before anything else can run on this connection, whichever way it went.
+        _ = try? await Self.rawQuery(
+            "SET search_path TO \(previousPath)", on: underlying, logger: logger, decoder: decoder)
+        if let failure { throw PostgresErrorMapper.map(failure, user: config.user) }
+    }
+
+    private struct CopyWriter: BulkLoadWriter {
+        let writer: PostgresCopyFromWriter
+        func write(_ data: Data) async throws {
+            try await writer.write(ByteBuffer(bytes: data))
+        }
+    }
+
     public nonisolated func execute(
         _ sql: String,
         parameters: [DBValue]

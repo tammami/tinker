@@ -200,6 +200,12 @@ public final class WorkspaceModel {
     public var confirmation: DestructiveConfirmation?
     /// A rename, duplicate, import or maintenance request awaiting its sheet.
     public var pendingTableOperation: TableOperationRequest?
+    /// Dump, SQL-file import and paste requests awaiting their sheets.
+    public var pendingDump: DumpRequest?
+    public var pendingScriptImport: ScriptImportRequest?
+    public var pendingPaste: PasteRequest?
+    /// What Copy picked up in the tree, until the next Copy.
+    public var objectClipboard: CopiedObjects?
     /// The command palette (⌘K).
     public var isCommandPalettePresented = false
     /// The folder sheet, when a folder is being made or renamed.

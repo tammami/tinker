@@ -274,16 +274,19 @@ private struct ImportCSVSheet: View {
     @State private var isRunning = false
     @State private var insertedCount: Int64?
     @State private var progressCount: Int64 = 0
+    @State private var format: TabularFormat = .delimited(",")
+    @State private var commitEvery = 0
 
     private var dialect: SQLDialect { OperationRunner.dialect(request.connectionID, environment) }
     private var header: [String] { preview.first ?? [] }
     private var mappedCount: Int { mapping.compactMap { $0 }.count }
+    private var isJSON: Bool { format == .json }
 
     var body: some View {
         SheetFrame(
             title: "Import into \(request.table.name)",
             icon: Icon.importData,
-            subtitle: "Rows are inserted in one transaction. If any value does not fit its column, nothing is changed.",
+            subtitle: "CSV, TSV, JSON or JSON Lines. The file is mapped, not loaded, and rows go in as they are read.",
             width: DesignTokens.Metrics.wideSheetWidth
         ) {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
@@ -291,7 +294,7 @@ private struct ImportCSVSheet: View {
                     Button {
                         chooseFile()
                     } label: {
-                        Label(fileURL == nil ? "Choose CSV File…" : "Choose Another…", systemImage: Icon.open)
+                        Label(fileURL == nil ? "Choose File…" : "Choose Another…", systemImage: Icon.open)
                     }
                     if let fileURL {
                         Text(fileURL.lastPathComponent).font(.callout).lineLimit(1).truncationMode(.middle)
@@ -300,16 +303,20 @@ private struct ImportCSVSheet: View {
                         }
                     }
                     Spacer()
-                    Toggle("First row is a header", isOn: $hasHeader)
-                        .onChange(of: hasHeader) { _, _ in rebuildMapping() }
-                    Picker("Delimiter", selection: $delimiter) {
-                        Text("Comma").tag(",")
-                        Text("Semicolon").tag(";")
-                        Text("Tab").tag("\t")
-                        Text("Pipe").tag("|")
+                    if isJSON {
+                        Text("JSON · keys are the columns").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Toggle("First row is a header", isOn: $hasHeader)
+                            .onChange(of: hasHeader) { _, _ in rebuildMapping() }
+                        Picker("Delimiter", selection: $delimiter) {
+                            Text("Comma").tag(",")
+                            Text("Semicolon").tag(";")
+                            Text("Tab").tag("\t")
+                            Text("Pipe").tag("|")
+                        }
+                        .frame(width: 150)
+                        .onChange(of: delimiter) { _, _ in reparse() }
                     }
-                    .frame(width: 150)
-                    .onChange(of: delimiter) { _, _ in reparse() }
                 }
                 .controlSize(.small)
 
@@ -319,6 +326,14 @@ private struct ImportCSVSheet: View {
                         FieldRow(label: "NULL when", labelWidth: 80) {
                             TextField("empty", text: $nullText).textFieldStyle(.roundedBorder).frame(width: 120)
                         }
+                        FieldRow(label: "Commit every", labelWidth: 90) {
+                            TextField("all at once", value: $commitEvery, format: .number)
+                                .textFieldStyle(.roundedBorder).frame(width: 100)
+                            Text("rows").font(.caption).foregroundStyle(.secondary)
+                        }
+                        .help(
+                            "0 keeps the whole import in one transaction; a number commits along the way, which a very large file needs."
+                        )
                         Spacer()
                         Text("\(mappedCount) of \(header.count) CSV column\(header.count == 1 ? "" : "s") mapped")
                             .font(.caption).foregroundStyle(.secondary)
@@ -437,12 +452,16 @@ private struct ImportCSVSheet: View {
 
     private func chooseFile() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.commaSeparatedText, .tabSeparatedText, .plainText]
+        panel.allowedContentTypes = [.commaSeparatedText, .tabSeparatedText, .json, .plainText, .data]
+        panel.allowsOtherFileTypes = true
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         fileURL = url
         failure = nil
         insertedCount = nil
+        format = TabularFormat.detect(url: url)
+        if case let .delimited(character) = format { delimiter = String(character) }
+        if isJSON { hasHeader = true }
         do {
             // Mapped, not read: the file's bytes are paged in as the reader walks them.
             data = try Data(contentsOf: url, options: .mappedIfSafe)
@@ -454,9 +473,16 @@ private struct ImportCSVSheet: View {
 
     private func reparse() {
         guard let data else { return }
-        var reader = CSVReader(data: data, delimiter: delimiter.first ?? ",")
         var rows: [[String]] = []
-        while rows.count < 6, let row = reader.next() { rows.append(row) }
+        if isJSON {
+            // The keys stand in as the header row so the mapping table reads the same.
+            var reader = JSONRecordReader(data: data)
+            rows.append(reader.header)
+            while rows.count < 6, let row = reader.next() { rows.append(row) }
+        } else {
+            var reader = CSVReader(data: data, delimiter: delimiter.first ?? ",")
+            while rows.count < 6, let row = reader.next() { rows.append(row) }
+        }
         preview = rows
         rebuildMapping()
     }
@@ -484,9 +510,11 @@ private struct ImportCSVSheet: View {
         progressCount = 0
         failure = nil
         defer { isRunning = false }
-        let plan = CSVImportPlan(table: request.table, mapping: mapping, hasHeader: hasHeader, nullText: nullText)
+        // JSON records never carry a header row; the keys were the header in the preview.
+        let plan = CSVImportPlan(
+            table: request.table, mapping: mapping, hasHeader: isJSON ? false : hasHeader, nullText: nullText,
+            commitEveryRows: commitEvery)
         let importer = CSVImporter(plan: plan, columns: columns, dialect: dialect)
-        var reader = CSVReader(data: data, delimiter: delimiter.first ?? ",")
         do {
             if await session.isReadOnly {
                 throw DBError.protocolError("This connection is read-only. Unlock it with ⌘⇧L first.")
@@ -494,8 +522,17 @@ private struct ImportCSVSheet: View {
             _ = try await session.connect()
             let (lease, connection) = try await session.lease()
             defer { Task { await session.release(lease) } }
-            let count = try await importer.run(reader: &reader, on: connection) { done in
-                Task { @MainActor in progressCount = done }
+            let count: Int64
+            if isJSON {
+                var reader = JSONRecordReader(data: data)
+                count = try await importer.run(reader: &reader, on: connection) { done in
+                    Task { @MainActor in progressCount = done }
+                }
+            } else {
+                var reader = CSVReader(data: data, delimiter: delimiter.first ?? ",")
+                count = try await importer.run(reader: &reader, on: connection) { done in
+                    Task { @MainActor in progressCount = done }
+                }
             }
             await session.invalidateIntrospection(.rowCount(request.table))
             insertedCount = count

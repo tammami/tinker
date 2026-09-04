@@ -172,6 +172,9 @@ public final class AppEnvironment {
     // MARK: - Sessions
 
     /// The session for a configuration, created on first use.
+    /// Sessions opened on other databases of a connection, keyed by connection and name.
+    private var databaseSessions: [String: ConnectionSession] = [:]
+
     public func session(for id: UUID) -> ConnectionSession? {
         if let existing = sessions[id] { return existing }
         guard let config = connections.first(where: { $0.id == id }) else { return nil }
@@ -186,8 +189,28 @@ public final class AppEnvironment {
         return session
     }
 
+    /// A session on the same server but another database — what PostgreSQL needs to
+    /// read or write a database other than the one the connection opens. The main
+    /// session is returned when `database` is that one or nil.
+    public func session(for id: UUID, database: String?) -> ConnectionSession? {
+        guard let config = connections.first(where: { $0.id == id }) else { return nil }
+        guard let database, !database.isEmpty, database != config.database else { return session(for: id) }
+        let key = "\(id.uuidString)/\(database)"
+        if let existing = databaseSessions[key] { return existing }
+        var other = config
+        other.database = database
+        let session = ConnectionSession(
+            config: other, registry: registry, secrets: secrets, tunnelProvider: tunnelProvider, logger: logger)
+        databaseSessions[key] = session
+        return session
+    }
+
     /// Drops a cached session so the next use picks up an edited configuration.
     public func invalidateSession(for id: UUID) async {
+        let prefix = id.uuidString + "/"
+        for key in databaseSessions.keys where key.hasPrefix(prefix) {
+            if let other = databaseSessions.removeValue(forKey: key) { await other.disconnect() }
+        }
         guard let session = sessions.removeValue(forKey: id) else { return }
         await session.disconnect()
     }
@@ -195,6 +218,8 @@ public final class AppEnvironment {
     public func disconnectAll() async {
         for session in sessions.values { await session.disconnect() }
         sessions.removeAll()
+        for session in databaseSessions.values { await session.disconnect() }
+        databaseSessions.removeAll()
     }
 
     // MARK: - History, preferences, settings

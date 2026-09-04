@@ -173,6 +173,14 @@ public actor MySQLSQLConnection: SQLConnection {
 
     // MARK: - SQLConnection
 
+    /// MySQL has no server-side bulk-load stream a client can drive statement by
+    /// statement; its dumps carry `INSERT`s, which is what the importer falls back to.
+    public func copyIn(
+        into table: TableRef, columns: [String], body: @Sendable (any BulkLoadWriter) async throws -> Void
+    ) async throws {
+        throw DBError.protocolError("MySQL has no COPY FROM STDIN; rows are loaded with INSERT statements")
+    }
+
     public nonisolated func execute(
         _ sql: String,
         parameters: [DBValue]

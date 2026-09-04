@@ -52,7 +52,7 @@ allowed_imports() {
         DBMySQL)    echo "Foundation Logging DBCore DBSQL MySQLNIO NIO NIOCore NIOPosix NIOSSL NIOConcurrencyHelpers" ;;
         DBTunnel)   echo "Foundation Logging DBCore Citadel Crypto NIO NIOCore NIOPosix NIOSSH" ;;
         DBStore)    echo "Foundation Logging DBCore SQLite3 Security" ;;
-        DBGrid)     echo "Foundation Logging DBCore DBSQL os" ;;
+        DBGrid)     echo "Foundation Logging DBCore DBSQL os zlib" ;;
         DBTestKit)  echo "Foundation Logging DBCore XCTest" ;;
         *)          echo "" ;;
     esac

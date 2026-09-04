@@ -159,6 +159,23 @@ public struct WorkspaceView: View {
                 onCancel: { workspace.pendingTableOperation = nil }
             )
         }
+        .sheet(item: boundWorkspace.pendingDump) { request in
+            DumpSheet(request: request, environment: environment) { workspace.pendingDump = nil }
+        }
+        .sheet(item: boundWorkspace.pendingScriptImport) { request in
+            ImportScriptSheet(request: request, environment: environment) {
+                workspace.pendingScriptImport = nil
+                controller.refresh()
+                Task { await sidebar.refresh(connectionID: request.connectionID) }
+            }
+        }
+        .sheet(item: boundWorkspace.pendingPaste) { request in
+            PasteSheet(request: request, environment: environment) {
+                workspace.pendingPaste = nil
+                controller.refresh()
+                Task { await sidebar.refresh(connectionID: request.targetConnectionID) }
+            }
+        }
         .sheet(isPresented: boundWorkspace.isNewTablePresented) {
             if let context = designerContext {
                 NewTableSheet(

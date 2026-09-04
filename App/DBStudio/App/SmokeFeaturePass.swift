@@ -348,6 +348,85 @@ extension SmokeTest {
                 check("analyze runs", true)
             }
 
+            // MARK: Dump, import and paste
+            do {
+                let dumpURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "smoke-\(UUID().uuidString).sql.gz")
+                defer { try? FileManager.default.removeItem(at: dumpURL) }
+                let rowsBefore = await count()
+                let (lease, connection) = try await session.lease()
+                let tables = try await connection.introspector.tables(in: schema).filter { $0.name == scratch.name }
+                let selection = DumpSelection(schema: schema, tables: tables)
+                var options = DumpOptions.preferred(for: dialect)
+                options.includeDrop = true
+                let writer = try ScriptFileWriter(url: dumpURL, dialect: dialect, compress: true)
+                let channel = ScriptChannel()
+                async let dumped = DatabaseDumper(dialect: dialect, options: options).run(
+                    selection, on: connection, into: channel
+                ) { _ in }
+                while let chunk = try await channel.next() { try writer.write(chunk) }
+                try writer.finish()
+                let dumpOutcome = try await dumped
+                check(
+                    "dump writes the scratch table as gzip COPY (\(dumpOutcome.rows) rows, \(writer.bytesWritten) bytes)",
+                    dumpOutcome.rows == Int64(rowsBefore) && writer.bytesWritten > 0)
+
+                // The duplicate made earlier borrows the scratch table's sequence; it goes first.
+                _ = try await connection.executeCollecting(
+                    "DROP TABLE IF EXISTS \(Identifier.qualified(TableRef(schema: schema, name: "smoke_features_copy"), dialect: dialect))"
+                )
+                _ = try await connection.executeCollecting("DROP TABLE \(scratchName)")
+                let imported = try await ScriptImportRunner.run(
+                    url: dumpURL, dialect: dialect, options: ScriptExecutionOptions(), on: connection
+                ) { _ in }
+                await session.invalidateIntrospection()
+                let rowsAfter = await count()
+                check(
+                    "importing the dump restores the table (\(imported.rows) rows, \(imported.statements) statements)",
+                    imported.failures.isEmpty && rowsAfter == rowsBefore)
+
+                // Paste: the same table next to itself under another name, connection to connection.
+                let pastedRef = TableRef(schema: schema, name: "smoke_features_pasted")
+                let pastedName = Identifier.qualified(pastedRef, dialect: dialect)
+                _ = try? await connection.executeCollecting("DROP TABLE IF EXISTS \(pastedName)")
+                let (targetLease, target) = try await session.lease()
+                let pasted = try await TransferRunner.run(
+                    selection, from: connection, to: target, dialect: dialect, options: options,
+                    renaming: DumpRenaming(tableNames: [scratch.name: pastedRef.name])
+                ) { _ in }
+                await session.release(targetLease)
+                let pastedCount = await count(pastedName)
+                check(
+                    "paste copies structure and data under a new name (\(pastedCount) rows)",
+                    pasted.execution.failures.isEmpty && pastedCount == rowsBefore)
+                _ = try? await connection.executeCollecting("DROP TABLE IF EXISTS \(pastedName)")
+
+                // JSON Lines into the scratch table: keys map onto columns, numbers keep their text.
+                let jsonURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "smoke-\(UUID().uuidString).jsonl")
+                defer { try? FileManager.default.removeItem(at: jsonURL) }
+                try Data(
+                    "{\"name\": \"Json One\", \"amount\": 1.25}\n{\"name\": \"Json Two\", \"amount\": null}\n".utf8
+                )
+                .write(to: jsonURL)
+                var reader = JSONRecordReader(data: try Data(contentsOf: jsonURL, options: .mappedIfSafe))
+                let columns = try await connection.introspector.columns(of: scratch)
+                let plan = CSVImportPlan(
+                    table: scratch,
+                    mapping: CSVImportPlan.matched(header: reader.header, to: columns, table: scratch).mapping,
+                    hasHeader: false, commitEveryRows: 1)
+                let insertedFromJSON = try await CSVImporter(plan: plan, columns: columns, dialect: dialect)
+                    .run(reader: &reader, on: connection)
+                await session.release(lease)
+                let jsonRows =
+                    (try? await sql("SELECT amount FROM \(scratchName) WHERE name LIKE 'Json%' ORDER BY name"))??.rows
+                    ?? []
+                check(
+                    "JSON Lines import maps keys to columns and keeps NULL (\(insertedFromJSON) rows)",
+                    insertedFromJSON == 2 && jsonRows.count == 2 && jsonRows[0][0].text == "1.25"
+                        && jsonRows[1][0].isNull)
+            }
+
             // MARK: Cleanup
             try await sql(
                 "DROP VIEW IF EXISTS \(Identifier.qualified(TableRef(schema: schema, name: "smoke_builder_view"), dialect: dialect))",

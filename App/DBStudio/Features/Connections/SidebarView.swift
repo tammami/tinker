@@ -361,6 +361,8 @@ struct SidebarRow: View {
             Divider()
             newObjectItems(connectionID: id, schema: ref)
             Divider()
+            transferItems(connectionID: id, schema: ref, databaseName: ref.database)
+            Divider()
             Button(sidebar.isExpanded(item.id) ? "Collapse" : "Expand") { toggleExpansion() }
         case let .routine(id, schema, name, signature):
             Button {
@@ -382,6 +384,8 @@ struct SidebarRow: View {
             // once, below a rule.
             let isViews = kind == .view || kind == .materializedView
             newObjectItems(connectionID: id, schema: ref, first: isViews ? .view : .table)
+            Divider()
+            pasteItem(connectionID: id, schema: ref)
             Divider()
             collapseItem
         case let .routineFolder(id, ref):
@@ -414,6 +418,11 @@ struct SidebarRow: View {
             } label: {
                 Label("Users & Privileges…", systemImage: Icon.user)
             }
+            Divider()
+            transferItems(
+                connectionID: id,
+                schema: mysqlSchema(connectionID: id, database: name) ?? SchemaRef(database: name, schema: "public"),
+                databaseName: name)
             Divider()
             if !sidebar.isExpanded(item.id) {
                 Button("Open Database") { toggleExpansion() }
@@ -528,6 +537,60 @@ struct SidebarRow: View {
         }
     }
 
+    /// Dump, Import SQL, Copy and Paste for a schema, a MySQL database or a connection.
+    @ViewBuilder
+    func transferItems(connectionID id: UUID, schema ref: SchemaRef, databaseName: String?) -> some View {
+        let dialect = workspace.environment.connections.first { $0.id == id }?.dialect ?? .postgresql
+        let noun = dialect == .mysql ? "Database" : "Schema"
+        Button {
+            workspace.pendingDump = DumpRequest(connectionID: id, schema: ref, tables: nil)
+        } label: {
+            Label("Dump \(noun)…", systemImage: Icon.export)
+        }
+        Button {
+            workspace.pendingScriptImport = ScriptImportRequest(connectionID: id, database: databaseName)
+        } label: {
+            Label("Import SQL File…", systemImage: Icon.importData)
+        }
+        Button {
+            workspace.objectClipboard = CopiedObjects(
+                connectionID: id, connectionName: connectionName(id), dialect: dialect, schema: ref, tables: nil)
+        } label: {
+            Label("Copy \(noun)", systemImage: Icon.copy)
+        }
+        pasteItem(connectionID: id, schema: ref)
+    }
+
+    /// Paste what the clipboard holds into this schema; only offered for the same kind of server.
+    @ViewBuilder
+    func pasteItem(connectionID id: UUID, schema ref: SchemaRef) -> some View {
+        let dialect = workspace.environment.connections.first { $0.id == id }?.dialect ?? .postgresql
+        if let copied = workspace.objectClipboard, copied.dialect == dialect {
+            Button {
+                workspace.pendingPaste = PasteRequest(source: copied, targetConnectionID: id, targetSchema: ref)
+            } label: {
+                Label("Paste \(copied.label) Here…", systemImage: Icon.paste)
+            }
+        } else {
+            Button {
+            } label: {
+                Label("Paste", systemImage: Icon.paste)
+            }
+            .disabled(true)
+        }
+    }
+
+    func connectionName(_ id: UUID) -> String {
+        workspace.environment.connections.first { $0.id == id }?.name ?? ""
+    }
+
+    /// The schema a connection-level action means: MySQL's database, PostgreSQL's public.
+    func defaultSchema(for config: ConnectionConfig) -> SchemaRef {
+        config.dialect == .mysql
+            ? SchemaRef.mysql(config.database ?? "")
+            : SchemaRef(database: config.database ?? "", schema: "public")
+    }
+
     func presentNewTable(connectionID: UUID, schema: SchemaRef) {
         workspace.newTableContext = (connectionID, schema)
         workspace.isNewTablePresented = true
@@ -564,6 +627,8 @@ struct SidebarRow: View {
             } label: {
                 Label("Users & Privileges…", systemImage: Icon.user)
             }
+            Divider()
+            transferItems(connectionID: id, schema: defaultSchema(for: config), databaseName: config.database)
             Divider()
             Button {
                 workspace.editingConnection = config
@@ -676,6 +741,19 @@ struct SidebarRow: View {
         } label: {
             Label("Copy CREATE Statement", systemImage: Icon.source)
         }
+        Divider()
+        Button {
+            workspace.objectClipboard = CopiedObjects(
+                connectionID: connectionID, connectionName: connectionName(connectionID), dialect: dialect,
+                schema: info.ref.schemaRef, tables: [info])
+        } label: {
+            Label("Copy Table", systemImage: Icon.copy)
+        }
+        Button {
+            workspace.pendingDump = DumpRequest(connectionID: connectionID, schema: info.ref.schemaRef, tables: [info])
+        } label: {
+            Label("Dump Table…", systemImage: Icon.export)
+        }
         if info.kind.isEditable {
             Divider()
             Button {
@@ -697,7 +775,7 @@ struct SidebarRow: View {
                     kind: .importCSV, table: info.ref, connectionID: connectionID
                 )
             } label: {
-                Label("Import from CSV…", systemImage: Icon.importData)
+                Label("Import Data (CSV, TSV, JSON)…", systemImage: Icon.importData)
             }
             Menu {
                 ForEach(MaintenanceAction.available(for: dialect), id: \.self) { action in

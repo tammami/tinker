@@ -96,6 +96,12 @@ public actor FakeConnection: SQLConnection {
         introspector = FakeIntrospector()
     }
 
+    public func copyIn(
+        into table: TableRef, columns: [String], body: @Sendable (any BulkLoadWriter) async throws -> Void
+    ) async throws {
+        throw DBError.protocolError("the fake driver has no bulk load")
+    }
+
     public nonisolated func execute(
         _ sql: String,
         parameters: [DBValue]

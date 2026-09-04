@@ -160,15 +160,21 @@ public struct CSVImportPlan: Sendable, Hashable {
     public var nullText: String
     /// Rows per `INSERT`. Bounded so a statement never grows past what a server accepts.
     public var batchSize: Int
+    /// Commit after this many rows; 0 keeps the whole import in one transaction. A file
+    /// of hundreds of millions of rows is better committed along the way than held in
+    /// one transaction the server may not be able to keep.
+    public var commitEveryRows: Int
 
     public init(
-        table: TableRef, mapping: [String?], hasHeader: Bool = true, nullText: String = "", batchSize: Int = 200
+        table: TableRef, mapping: [String?], hasHeader: Bool = true, nullText: String = "", batchSize: Int = 200,
+        commitEveryRows: Int = 0
     ) {
         self.table = table
         self.mapping = mapping
         self.hasHeader = hasHeader
         self.nullText = nullText
         self.batchSize = min(max(1, batchSize), 1_000)
+        self.commitEveryRows = max(0, commitEveryRows)
     }
 
     /// Matches CSV header names to table columns by name, case-insensitively.
@@ -263,31 +269,49 @@ public struct CSVImporter: Sendable {
 
     /// Runs the import. Returns the number of rows inserted.
     ///
-    /// The whole import is one transaction: either every record is in, or none is. The
-    /// reader is consumed a batch at a time, so memory stays at one batch.
-    public func run(
-        reader: inout CSVReader,
+    /// By default the whole import is one transaction: either every record is in, or
+    /// none is. With `commitEveryRows` set, work is committed along the way and a failure
+    /// loses only the rows since the last commit. The reader is consumed a batch at a
+    /// time, so memory stays at one batch whatever the file's size.
+    public func run<Source: RecordSource>(
+        reader: inout Source,
         on connection: any SQLConnection,
         progress: (@Sendable (Int64) -> Void)? = nil
     ) async throws -> Int64 {
         if plan.hasHeader { _ = reader.next() }
         var inserted: Int64 = 0
-        try await connection.withTransaction {
-            var batch: [[DBValue]] = []
-            batch.reserveCapacity(plan.batchSize)
-            func flush() async throws {
-                guard !batch.isEmpty else { return }
-                let statement = insertStatement(rows: batch)
-                let result = try await connection.executeCollecting(statement.sql, parameters: statement.parameters)
-                inserted += result.completion.affectedRows ?? Int64(batch.count)
-                progress?(inserted)
-                batch.removeAll(keepingCapacity: true)
+        var sinceCommit: Int64 = 0
+        var batch: [[DBValue]] = []
+        batch.reserveCapacity(plan.batchSize)
+
+        func flush() async throws {
+            guard !batch.isEmpty else { return }
+            let statement = insertStatement(rows: batch)
+            let result = try await connection.executeCollecting(statement.sql, parameters: statement.parameters)
+            let count = result.completion.affectedRows ?? Int64(batch.count)
+            inserted += count
+            sinceCommit += count
+            progress?(inserted)
+            batch.removeAll(keepingCapacity: true)
+            if plan.commitEveryRows > 0, sinceCommit >= Int64(plan.commitEveryRows) {
+                try await connection.commit()
+                try await connection.beginTransaction()
+                sinceCommit = 0
             }
+        }
+
+        try await connection.beginTransaction()
+        do {
             while let record = reader.next() {
+                try Task.checkCancellation()
                 batch.append(try values(for: record, number: reader.recordNumber))
                 if batch.count >= plan.batchSize { try await flush() }
             }
             try await flush()
+            try await connection.commit()
+        } catch {
+            try? await connection.rollback()
+            throw error
         }
         return inserted
     }

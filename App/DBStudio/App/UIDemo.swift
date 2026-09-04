@@ -179,6 +179,21 @@ enum UIDemo {
                     workspace.pendingTableOperation = TableOperationRequest(
                         kind: .importCSV, table: preferred.ref, connectionID: config.id)
                 }
+            case "dump":
+                if let ref = demoSchemaRef(schema) {
+                    workspace.pendingDump = DumpRequest(connectionID: config.id, schema: ref, tables: nil)
+                }
+            case "importsql":
+                workspace.pendingScriptImport = ScriptImportRequest(connectionID: config.id, database: config.database)
+            case "paste":
+                if let preferred, let ref = demoSchemaRef(schema) {
+                    let copied = CopiedObjects(
+                        connectionID: config.id, connectionName: config.name, dialect: config.dialect,
+                        schema: ref, tables: [preferred])
+                    workspace.objectClipboard = copied
+                    workspace.pendingPaste = PasteRequest(
+                        source: copied, targetConnectionID: config.id, targetSchema: ref)
+                }
             case "rename":
                 if let preferred {
                     workspace.pendingTableOperation = TableOperationRequest(

@@ -48,6 +48,22 @@ public protocol SQLConnection: AnyObject, Sendable {
     func close() async
 
     var introspector: any SchemaIntrospector { get }
+
+    /// Bulk-loads rows in the server's own text format — PostgreSQL's `COPY … FROM STDIN`.
+    ///
+    /// `body` is handed a writer and pushes the rows through it; the connection stays in
+    /// copy mode until `body` returns or throws. Drivers whose server has no such path
+    /// throw ``DBError/protocolError(_:)`` before `body` runs, so a caller can fall back
+    /// to `INSERT` statements.
+    func copyIn(
+        into table: TableRef, columns: [String], body: @Sendable (any BulkLoadWriter) async throws -> Void
+    ) async throws
+}
+
+/// Where the rows of a bulk load go. Each `write` is one or more whole lines in the
+/// server's text format; the driver sends them on without holding them.
+public protocol BulkLoadWriter: Sendable {
+    func write(_ data: Data) async throws
 }
 
 extension SQLConnection {

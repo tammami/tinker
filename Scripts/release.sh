@@ -3,6 +3,9 @@
 #
 #   Scripts/release.sh                 full release: archive, sign, notarize, staple, DMG
 #   Scripts/release.sh --skip-notarize stop after signing; still builds the DMG
+#   Scripts/release.sh --share         a universal build to hand to someone without a
+#                                      Developer ID: signed with the certificate at hand
+#                                      (or ad hoc), zipped; opened once with right-click → Open
 #   Scripts/release.sh --unsigned      no signing at all, for a local smoke test
 #
 # Environment:
@@ -25,6 +28,10 @@ for argument in "$@"; do
     case "$argument" in
         --skip-notarize) MODE="skip-notarize" ;;
         --unsigned) MODE="unsigned" ;;
+        # A build to hand to someone without a Developer ID: signed with whatever
+        # certificate is at hand (or ad hoc), universal, zipped so nothing is lost on
+        # the way. The recipient opens it once with right-click → Open.
+        --share) MODE="share" ;;
         *) echo "unknown argument: $argument" >&2; exit 2 ;;
     esac
 done
@@ -44,12 +51,22 @@ IDENTITY="${TINKER_SIGNING_IDENTITY:-}"
 TEAM_ID="${TINKER_TEAM_ID:-}"
 NOTARY_PROFILE="${TINKER_NOTARY_PROFILE:-Tinker}"
 
-if [[ "$MODE" != "unsigned" && -z "$IDENTITY" ]]; then
+if [[ "$MODE" == "share" ]]; then
+    if [[ -z "$IDENTITY" ]]; then
+        # Any certificate beats none: an unsigned binary does not launch at all on
+        # Apple silicon. Ad hoc ("-") is the floor.
+        AVAILABLE="$(security find-identity -v -p codesigning 2>/dev/null | grep -E "Developer ID Application|Apple Development" || true)"
+        IDENTITY="$(printf '%s' "$AVAILABLE" | head -1 | sed -E 's/.*"(.*)"/\1/')"
+        [[ -n "$IDENTITY" ]] || IDENTITY="-"
+    fi
+    echo "Using signing identity: $IDENTITY"
+elif [[ "$MODE" != "unsigned" && -z "$IDENTITY" ]]; then
     # A Developer ID certificate is what separates a distributable build from a local one.
     AVAILABLE="$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" || true)"
     if [[ -z "$AVAILABLE" ]]; then
         fail "No Developer ID Application certificate in the keychain.
-  Install one from developer.apple.com, or run with --unsigned for a local build.
+  Install one from developer.apple.com, run with --share for a build to hand to
+  someone (opened once with right-click → Open), or --unsigned for a local build.
   Available identities:
 $(security find-identity -v -p codesigning 2>/dev/null | sed 's/^/    /')"
     fi
@@ -57,7 +74,7 @@ $(security find-identity -v -p codesigning 2>/dev/null | sed 's/^/    /')"
     echo "Using signing identity: $IDENTITY"
 fi
 
-if [[ "$MODE" != "unsigned" ]]; then
+if [[ "$MODE" != "unsigned" && "$MODE" != "share" ]]; then
     # The team identifier is the parenthesised suffix of the identity's common name.
     if [[ -z "$TEAM_ID" && "$IDENTITY" =~ \(([A-Z0-9]{10})\)$ ]]; then
         TEAM_ID="${BASH_REMATCH[1]}"
@@ -89,8 +106,9 @@ ARCHIVE_ARGS=(
     -destination 'generic/platform=macOS'
     -archivePath "$ARCHIVE"
     CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
+    # Universal: the recipient may be on an Intel Mac.
     ONLY_ACTIVE_ARCH=NO
-    ARCHS=arm64
+    ARCHS="arm64 x86_64"
 )
 if [[ -n "${TINKER_APPCAST_URL:-}" ]]; then
     ARCHIVE_ARGS+=(TINKER_APPCAST_URL="$TINKER_APPCAST_URL")
@@ -100,7 +118,8 @@ if [[ -n "${TINKER_SPARKLE_PUBLIC_KEY:-}" ]]; then
 else
     warn "TINKER_SPARKLE_PUBLIC_KEY is unset; the build will report updates as not configured"
 fi
-if [[ "$MODE" == "unsigned" ]]; then
+if [[ "$MODE" == "unsigned" || "$MODE" == "share" ]]; then
+    # Signed afterwards, in one pass over the whole bundle.
     ARCHIVE_ARGS+=(CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="")
 else
     ARCHIVE_ARGS+=(CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$IDENTITY")
@@ -111,7 +130,7 @@ xcodebuild "${ARCHIVE_ARGS[@]}" -quiet archive
 # ---------------------------------------------------------------------------
 bold "Export"
 mkdir -p "$EXPORT_DIR"
-if [[ "$MODE" == "unsigned" ]]; then
+if [[ "$MODE" == "unsigned" || "$MODE" == "share" ]]; then
     cp -R "$ARCHIVE/Products/Applications/Tinker.app" "$EXPORT_DIR/"
 else
     cat > "$BUILD_DIR/ExportOptions.plist" <<PLIST
@@ -134,12 +153,28 @@ fi
 [[ -d "$APP" ]] || fail "the export produced no app at $APP"
 
 # ---------------------------------------------------------------------------
+if [[ "$MODE" == "share" ]]; then
+    bold "Sign for sharing"
+    # Nested code first — Sparkle's XPC services, updater and framework — then the app,
+    # all with the hardened runtime and the app's own entitlements.
+    find "$APP/Contents/Frameworks" -type d \( -name "*.xpc" -o -name "*.app" \) -print0 2>/dev/null |
+        xargs -0 -I{} codesign --force --options runtime --sign "$IDENTITY" {}
+    find "$APP/Contents/Frameworks" -type f -perm -111 -path "*/Versions/*/Autoupdate" -print0 2>/dev/null |
+        xargs -0 -I{} codesign --force --options runtime --sign "$IDENTITY" {}
+    find "$APP/Contents/Frameworks" -type d -name "*.framework" -print0 2>/dev/null |
+        xargs -0 -I{} codesign --force --options runtime --sign "$IDENTITY" {}
+    codesign --force --options runtime --entitlements App/Tinker/Resources/Tinker.entitlements \
+        --sign "$IDENTITY" "$APP"
+    # Nothing that was ever downloaded should carry quarantine into the zip.
+    xattr -cr "$APP"
+fi
+
 bold "Verify signature and hardened runtime"
 if [[ "$MODE" == "unsigned" ]]; then
     warn "unsigned build: signature and notarization are skipped"
 else
     codesign --verify --deep --strict --verbose=2 "$APP"
-    FLAGS="$(codesign -d --verbose=2 "$APP" 2>&1 | grep -E "^flags=" || true)"
+    FLAGS="$(codesign -d --verbose=2 "$APP" 2>&1 | grep -oE "flags=[^ ]+" | head -1 || true)"
     echo "  $FLAGS"
     [[ "$FLAGS" == *runtime* ]] || fail "the hardened runtime is not enabled"
     codesign -d --entitlements - "$APP" 2>/dev/null | grep -q "app-sandbox" \
@@ -166,6 +201,28 @@ if [[ "$MODE" == "full" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+bold "Architectures"
+lipo -info "$APP/Contents/MacOS/Tinker" | sed 's/^/  /'
+
+if [[ "$MODE" == "share" ]]; then
+    bold "Zip to share"
+    ZIP="$BUILD_DIR/Tinker-$VERSION.zip"
+    # ditto keeps the bundle's permissions and structure; a folder dragged into a chat
+    # or a Finder-compressed copy of a modified bundle may not.
+    ditto -c -k --keepParent --sequesterRsrc "$APP" "$ZIP"
+    echo "  $ZIP"
+    ls -lh "$ZIP" | awk '{print "  " $5}'
+    cat <<SHARE
+
+  This build is not notarized (that needs a Developer ID certificate), so on the
+  recipient's Mac Gatekeeper will refuse a double-click the first time. Tell them:
+    1. Unzip, move Tinker.app to Applications.
+    2. Right-click Tinker.app → Open → Open. (Once; after that it opens normally.)
+       Or, in Terminal:  xattr -dr com.apple.quarantine /Applications/Tinker.app
+  It needs macOS 14 or later, and runs on Apple silicon and Intel.
+SHARE
+fi
+
 bold "DMG"
 DMG="$BUILD_DIR/Tinker-$VERSION.dmg"
 STAGING="$BUILD_DIR/dmg"
@@ -175,7 +232,7 @@ cp -R "$APP" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
 hdiutil create -volname "Tinker $VERSION" -srcfolder "$STAGING" \
     -ov -format UDZO -fs HFS+ "$DMG" >/dev/null
-if [[ "$MODE" != "unsigned" ]]; then
+if [[ "$MODE" != "unsigned" && "$MODE" != "share" ]]; then
     codesign --sign "$IDENTITY" --timestamp "$DMG"
     if [[ "$MODE" == "full" ]]; then
         # The disk image is notarized separately from the app inside it.

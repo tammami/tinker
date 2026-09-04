@@ -196,6 +196,33 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         let clockStart = ContinuousClock.now
         do {
             let connection = try await connectionForRun(session: session)
+            // A SELECT pages on the server like a table tab: one page of rows now, the
+            // rest on demand, whatever the table's size.
+            if QueryGridLoader.isPageable(statement.text, dialect: dialect) {
+                let loader = QueryGridLoader(statement: statement.text, dialect: dialect) { [weak self] in
+                    guard let self else { throw DBError.notConnected }
+                    return try await self.connectionForRun(session: session)
+                }
+                let grid = GridModel(source: .query(statement.text), dialect: dialect, loader: loader)
+                grid.isPaged = true
+                await grid.load(page: 0)
+                if let failure = grid.lastError { throw failure }
+                let duration = clockStart.duration(to: .now)
+                result.grid = grid
+                result.completion = QueryCompletion(
+                    affectedRows: nil, lastInsertID: nil, serverTag: nil, durationServer: nil, durationTotal: duration,
+                    notices: [])
+                result.message = Self.pageMessage(grid, exactTotal: nil, duration: duration)
+                await environment.recordHistory(
+                    QueryHistoryEntry(
+                        connectionID: connectionID, database: session.config.database,
+                        sql: statement.text, startedAt: startedAt, duration: duration,
+                        rowCount: Int64(grid.rowCount), succeeded: true
+                    ))
+                isInTransaction = await connection.isInTransaction
+                bumpRevision()
+                return false
+            }
             var columns: [ColumnMeta] = []
             var model: GridModel?
             var rowTotal = 0
@@ -257,6 +284,52 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             bumpRevision()
             return true
         }
+    }
+
+    static func pageMessage(_ grid: GridModel, exactTotal: Int64?, duration: Duration) -> String {
+        guard let range = grid.pageRange else { return "0 rows in \(format(duration))" }
+        var text = "Rows \(range.lowerBound)–\(range.upperBound)"
+        if let exactTotal {
+            text += " of \(exactTotal)"
+        } else if grid.isExhausted, let total = grid.totalCount {
+            text += " of \(total)"
+        }
+        return text + " in \(format(duration))"
+    }
+
+    // MARK: - Result pages
+
+    public var currentPage: Int { (selectedResult?.grid?.pageOffset ?? 0) + 1 }
+    public var canGoBack: Bool { selectedResult?.grid?.hasPreviousPage ?? false }
+    public var canGoForward: Bool {
+        guard let result = selectedResult, let grid = result.grid, grid.hasNextPage else { return false }
+        if let total = result.exactTotal { return Int64(currentPage) * Int64(grid.pageSize) < total }
+        return true
+    }
+
+    public func goToPage(_ page: Int) async {
+        guard let result = selectedResult, let grid = result.grid, grid.isPaged else { return }
+        let started = ContinuousClock.now
+        await grid.goToPage(page)
+        if let failure = grid.lastError {
+            errorBanner = QueryErrorBanner(error: failure, statement: result.statement)
+        } else {
+            result.message = Self.pageMessage(grid, exactTotal: result.exactTotal, duration: started.duration(to: .now))
+        }
+        bumpRevision()
+    }
+
+    public func goToFirstPage() async { await goToPage(0) }
+    public func goToPreviousPage() async { await goToPage(max(0, (selectedResult?.grid?.pageOffset ?? 0) - 1)) }
+    public func goToNextPage() async { await goToPage((selectedResult?.grid?.pageOffset ?? 0) + 1) }
+
+    /// Jumping to the end counts the rows, the one place a `COUNT` over the query is worth it.
+    public func goToLastPage() async {
+        guard let result = selectedResult, let grid = result.grid, grid.isPaged else { return }
+        let total = await grid.exactRowCount()
+        result.exactTotal = total
+        guard let total, total > 0 else { return }
+        await goToPage(Int((total - 1) / Int64(grid.pageSize)))
     }
 
     /// The connection a statement runs on: the held one when a transaction is open, else

@@ -108,6 +108,8 @@ public final class QueryResultTab: Identifiable {
     public var message: String?
     public var error: QueryErrorBanner?
     public var completion: QueryCompletion?
+    /// The row count of a paged result, once Last page asked for it.
+    public var exactTotal: Int64?
 
     /// The panes beside the rows (SPEC §13.2a), read when opened rather than after every
     /// statement: both cost a round trip and a pane nobody looks at should cost nothing.

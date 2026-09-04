@@ -438,15 +438,24 @@ public struct QueryTabView: View {
             }
             Divider()
             StatusBarView {
+                if result.grid?.isPaged == true { pager }
                 // What produced the rows on screen, so it is never in doubt.
                 Text(result.statement.split(whereSeparator: \.isNewline).joined(separator: " "))
                     .font(.system(.caption, design: .monospaced))
+                    .lineLimit(1)
                 Spacer()
                 if let completion = result.completion {
                     Label(Self.seconds(completion.durationTotal), systemImage: Icon.profile)
                         .monospacedDigit()
                 }
-                if let grid = result.grid {
+                if let grid = result.grid, grid.isPaged, let range = grid.pageRange {
+                    Text(
+                        "Rows \(range.lowerBound)–\(range.upperBound)"
+                            + (result.exactTotal.map { " of \($0)" }
+                                ?? (grid.isExhausted ? " of \(grid.totalCount ?? Int64(grid.rowCount))" : ""))
+                    )
+                    .monospacedDigit()
+                } else if let grid = result.grid {
                     Text("\(grid.displayRowCount) row\(grid.displayRowCount == 1 ? "" : "s")")
                         .monospacedDigit()
                     if controller.selection.rowSpan > 1 || controller.selection.columnSpan > 1 {
@@ -455,6 +464,29 @@ public struct QueryTabView: View {
                     }
                 }
             }
+        }
+    }
+}
+
+extension QueryTabView {
+    /// First / previous / next / last for a paged result, as on a table tab.
+    var pager: some View {
+        HStack(spacing: 0) {
+            IconButton(icon: Icon.firstPage, label: "First page") { Task { await controller.goToFirstPage() } }
+                .disabled(!controller.canGoBack)
+            IconButton(icon: Icon.previousPage, label: "Previous page") { Task { await controller.goToPreviousPage() } }
+                .disabled(!controller.canGoBack)
+            Text("Page \(controller.currentPage)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.primary)
+                .frame(minWidth: 52)
+            IconButton(icon: Icon.nextPage, label: "Next page") { Task { await controller.goToNextPage() } }
+                .disabled(!controller.canGoForward)
+            IconButton(icon: Icon.lastPage, label: "Last page — counts the rows to find it") {
+                Task { await controller.goToLastPage() }
+            }
+            .disabled(!controller.canGoForward)
+            BarDivider()
         }
     }
 }

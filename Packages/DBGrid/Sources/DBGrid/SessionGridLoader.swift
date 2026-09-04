@@ -57,6 +57,82 @@ public struct StreamedGridLoader: GridDataLoader {
     public func exactCount(filter: [FilterRule]) async throws -> Int64 { 0 }
 }
 
+/// Pages a query's result on the server, the way a table tab pages a table.
+///
+/// The statement is wrapped as `SELECT * FROM (…) AS page LIMIT n OFFSET m`, so a
+/// `SELECT` over fifty thousand rows costs one page of them, on the wire and in
+/// memory, and the pager reads the rest on demand. Only statements that can stand
+/// inside a subquery qualify; everything else — `SHOW`, `EXPLAIN` — streams as before.
+public struct QueryGridLoader: GridDataLoader {
+    public let statement: String
+    public let dialect: SQLDialect
+    public let pageSize: Int
+    /// Hands back the connection a page runs on: the tab's own held one, so a query
+    /// inside a transaction pages over what that transaction sees.
+    let acquire: @Sendable () async throws -> any SQLConnection
+
+    public init(
+        statement: String, dialect: SQLDialect, pageSize: Int = 1_000,
+        acquire: @escaping @Sendable () async throws -> any SQLConnection
+    ) {
+        self.statement = statement
+        self.dialect = dialect
+        self.pageSize = pageSize
+        self.acquire = acquire
+    }
+
+    /// True for statements a subquery can hold.
+    public static func isPageable(_ sql: String, dialect: SQLDialect) -> Bool {
+        let statement = SQLStatement(text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil)
+        switch statement.leadingKeyword {
+        case "SELECT", "WITH", "VALUES":
+            break
+        case "TABLE":
+            guard dialect == .postgresql else { return false }
+        default:
+            return false
+        }
+        // Locking and cursor clauses cannot sit inside a subquery.
+        let upper = sql.uppercased()
+        return !upper.contains("FOR UPDATE") && !upper.contains("FOR SHARE") && !upper.contains("INTO OUTFILE")
+    }
+
+    static func stripped(_ sql: String) -> String {
+        var text = sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        while text.hasSuffix(";") {
+            text.removeLast()
+            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return text
+    }
+
+    public static func pageSQL(_ sql: String, page: Int, pageSize: Int) -> String {
+        "SELECT * FROM (\(stripped(sql))) AS tinker_page LIMIT \(pageSize) OFFSET \(page * pageSize)"
+    }
+
+    public static func countSQL(_ sql: String) -> String {
+        "SELECT count(*) FROM (\(stripped(sql))) AS tinker_page"
+    }
+
+    public func loadPage(_ request: PageRequest) async throws -> LoadedPage {
+        let connection = try await acquire()
+        let result = try await connection.executeCollecting(
+            Self.pageSQL(statement, page: request.page, pageSize: pageSize))
+        return LoadedPage(columns: result.columns, rows: result.rows)
+    }
+
+    public func exactCount(filter: [FilterRule]) async throws -> Int64 {
+        let connection = try await acquire()
+        let result = try await connection.executeCollecting(Self.countSQL(statement))
+        guard let value = result.rows.first?.first else { return 0 }
+        switch value {
+        case let .int(number): return number
+        case let .uint(number): return Int64(number)
+        default: return Int64(value.text ?? "") ?? 0
+        }
+    }
+}
+
 /// Runs a grid commit on one leased connection, inside one transaction.
 public actor SessionStatementRunner: GridStatementRunner {
     private let session: ConnectionSession

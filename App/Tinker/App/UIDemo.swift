@@ -100,6 +100,12 @@ enum UIDemo {
                     try? await Task.sleep(for: .milliseconds(400))
                     query.run(all: true)
                 }
+            case "bigquery":
+                let tab = controller.newQueryTab(connectionID: config.id, sql: "SELECT * FROM big_table ORDER BY id;")
+                if let query = controller.queryController(for: tab) {
+                    try? await Task.sleep(for: .milliseconds(400))
+                    query.run(all: true)
+                }
             case "completion":
                 let tab = controller.newQueryTab(connectionID: config.id, sql: "SELECT * FROM cus")
                 if let query = controller.queryController(for: tab) {

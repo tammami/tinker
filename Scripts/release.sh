@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Scripts/release.sh — build, sign, notarize and package Tinker (SPEC §16 Phase 7).
 #
-#   Scripts/release.sh                 full release: archive, sign, notarize, staple, DMG
+#   Scripts/release.sh                 full release: archive, Developer ID sign (Xcode
+#                                      cloud signing), notarize, staple, zip and DMG
 #   Scripts/release.sh --skip-notarize stop after signing; still builds the DMG
 #   Scripts/release.sh --share         a universal build to hand to someone without a
 #                                      Developer ID: signed with the certificate at hand
@@ -60,32 +61,16 @@ if [[ "$MODE" == "share" ]]; then
         [[ -n "$IDENTITY" ]] || IDENTITY="-"
     fi
     echo "Using signing identity: $IDENTITY"
-elif [[ "$MODE" != "unsigned" && -z "$IDENTITY" ]]; then
-    # A Developer ID certificate is what separates a distributable build from a local one.
-    AVAILABLE="$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" || true)"
-    if [[ -z "$AVAILABLE" ]]; then
-        fail "No Developer ID Application certificate in the keychain.
-  Install one from developer.apple.com, run with --share for a build to hand to
-  someone (opened once with right-click → Open), or --unsigned for a local build.
-  Available identities:
-$(security find-identity -v -p codesigning 2>/dev/null | sed 's/^/    /')"
+elif [[ "$MODE" != "unsigned" ]]; then
+    # Developer ID signing goes through Xcode's automatic signing: the Developer ID
+    # certificate is cloud-managed by Xcode, created on first use, and never lands in
+    # the local keychain, so nothing here looks for it. The team comes from the project.
+    if [[ -z "$TEAM_ID" ]]; then
+        TEAM_ID="$(xcodebuild -project App/Tinker.xcodeproj -target Tinker -showBuildSettings 2>/dev/null |
+            awk '/DEVELOPMENT_TEAM/ {print $3; exit}')"
     fi
-    IDENTITY="$(printf '%s' "$AVAILABLE" | head -1 | sed -E 's/.*"(.*)"/\1/')"
-    echo "Using signing identity: $IDENTITY"
-fi
-
-if [[ "$MODE" != "unsigned" && "$MODE" != "share" ]]; then
-    # The team identifier is the parenthesised suffix of the identity's common name.
-    if [[ -z "$TEAM_ID" && "$IDENTITY" =~ \(([A-Z0-9]{10})\)$ ]]; then
-        TEAM_ID="${BASH_REMATCH[1]}"
-        echo "Derived team id: $TEAM_ID"
-    fi
-    [[ -n "$TEAM_ID" ]] || fail "Set TINKER_TEAM_ID; it could not be read from '$IDENTITY'."
-    if [[ "$IDENTITY" != "Developer ID Application:"* ]]; then
-        warn "'$IDENTITY' is not a Developer ID Application certificate.
-  The build will be signed but Gatekeeper will refuse it on another Mac, and it
-  cannot be notarized. Use it for local verification only."
-    fi
+    [[ -n "$TEAM_ID" ]] || fail "Set TINKER_TEAM_ID; the project has no DEVELOPMENT_TEAM."
+    echo "Signing with Xcode automatic signing for team $TEAM_ID (Developer ID on export)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -122,8 +107,9 @@ if [[ "$MODE" == "unsigned" || "$MODE" == "share" ]]; then
     # Signed afterwards, in one pass over the whole bundle.
     ARCHIVE_ARGS+=(CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="")
 else
-    ARCHIVE_ARGS+=(CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$IDENTITY")
-    [[ -n "$TEAM_ID" ]] && ARCHIVE_ARGS+=(DEVELOPMENT_TEAM="$TEAM_ID")
+    # Signed for development during the archive (which is what carries the hardened
+    # runtime into the export), re-signed with Developer ID by the export.
+    ARCHIVE_ARGS+=(-allowProvisioningUpdates CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$TEAM_ID")
 fi
 xcodebuild "${ARCHIVE_ARGS[@]}" -quiet archive
 
@@ -139,8 +125,7 @@ else
 <plist version="1.0">
 <dict>
     <key>method</key><string>developer-id</string>
-    <key>signingStyle</key><string>manual</string>
-    <key>signingCertificate</key><string>$IDENTITY</string>
+    <key>signingStyle</key><string>automatic</string>
     <key>teamID</key><string>$TEAM_ID</string>
     <key>destination</key><string>export</string>
 </dict>
@@ -148,7 +133,10 @@ else
 PLIST
     xcodebuild -exportArchive -archivePath "$ARCHIVE" \
         -exportOptionsPlist "$BUILD_DIR/ExportOptions.plist" \
-        -exportPath "$EXPORT_DIR" -quiet
+        -exportPath "$EXPORT_DIR" -allowProvisioningUpdates -quiet
+    IDENTITY="$(codesign -dvv "$APP" 2>&1 | grep -E "^Authority=Developer ID Application" | head -1 | cut -d= -f2-)"
+    [[ -n "$IDENTITY" ]] || fail "the export is not signed with a Developer ID Application certificate"
+    echo "  signed by $IDENTITY"
 fi
 [[ -d "$APP" ]] || fail "the export produced no app at $APP"
 
@@ -198,6 +186,10 @@ if [[ "$MODE" == "full" ]]; then
     xcrun stapler validate "$APP"
     # Gatekeeper's own verdict is the one that matters on a clean machine.
     spctl --assess --type execute --verbose=4 "$APP"
+    # The stapled app, zipped for sending: this is what a recipient double-clicks.
+    RELEASE_ZIP="$BUILD_DIR/Tinker-$VERSION.zip"
+    ditto -c -k --keepParent --sequesterRsrc "$APP" "$RELEASE_ZIP"
+    echo "  $RELEASE_ZIP"
 fi
 
 # ---------------------------------------------------------------------------
@@ -259,13 +251,12 @@ if [[ "$MODE" == "share" ]]; then cp "$SHARE_DIR/Read me first.txt" "$STAGING/";
 ln -s /Applications "$STAGING/Applications"
 hdiutil create -volname "Tinker $VERSION" -srcfolder "$STAGING" \
     -ov -format UDZO -fs HFS+ "$DMG" >/dev/null
-if [[ "$MODE" != "unsigned" && "$MODE" != "share" ]]; then
-    codesign --sign "$IDENTITY" --timestamp "$DMG"
-    if [[ "$MODE" == "full" ]]; then
-        # The disk image is notarized separately from the app inside it.
-        xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
-        xcrun stapler staple "$DMG"
-    fi
+if [[ "$MODE" == "full" ]]; then
+    # The disk image is notarized separately from the (already stapled) app inside it.
+    # It is not code-signed: the Developer ID key is cloud-managed, and notarization
+    # does not require the image itself to be signed.
+    xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$DMG"
 fi
 echo "  $DMG"
 ls -lh "$DMG" | awk '{print "  " $5}'

@@ -47,7 +47,7 @@ enum UIDemo {
         await sidebar.expand(root)
         let databases = sidebar.find(id: root.id)?.children ?? []
         // The map scene wants the seeded test database whatever the connection defaults to.
-        let preferredDatabase = wanted.contains("map") ? "tinker_test" : (config.database ?? "")
+        let preferredDatabase = wanted.contains { $0.hasPrefix("map") } ? "tinker_test" : (config.database ?? "")
         guard let database = databases.first(where: { $0.title == preferredDatabase }) ?? databases.first else {
             return
         }
@@ -227,10 +227,16 @@ enum UIDemo {
                     UserDefaults.standard.set(step, forKey: "uiDemo.toolStep")
                 }
                 workspace.pendingTool = ToolRequest(kind: kind, connectionID: config.id, schema: demoSchemaRef(schema))
-            case "map":
+            case "map", "map-row", "map-peek":
                 if let places = tables.first(where: { $0.name == "spatial_places" }) {
                     controller.openTable(places.ref, connectionID: config.id)
-                    UserDefaults.standard.set(true, forKey: "uiDemo.map")
+                    let flag =
+                        switch item {
+                        case "map": "uiDemo.map"
+                        case "map-row": "uiDemo.mapRow"
+                        default: "uiDemo.mapPeek"
+                        }
+                    UserDefaults.standard.set(true, forKey: flag)
                 }
             case "palette":
                 workspace.isCommandPalettePresented = true

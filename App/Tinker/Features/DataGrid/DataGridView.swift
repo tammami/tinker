@@ -25,6 +25,8 @@ public protocol DataGridDelegate: AnyObject {
     func gridDidRequestDeleteRows()
     func gridDidRequestAddRow()
     func gridDidRequestAutosize(column: Int)
+    /// The context menu's "Show on Map": this one row's geometry, from this column.
+    func gridDidRequestShowOnMap(row: Int, column: Int)
     /// The header's context menu: hide this column, or bring every hidden one back.
     func gridDidRequestHideColumn(_ column: Int)
     func gridDidRequestShowAllColumns()
@@ -40,6 +42,7 @@ public extension DataGridDelegate {
     func gridDidRequestDeleteRows() {}
     func gridDidRequestAddRow() {}
     func gridDidRequestAutosize(column: Int) {}
+    func gridDidRequestShowOnMap(row: Int, column: Int) {}
     func gridDidRequestHideColumn(_ column: Int) {}
     func gridDidRequestShowAllColumns() {}
 }
@@ -151,9 +154,28 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
     var selection: GridSelection
     var selectionBinding: Binding<GridSelection>?
     weak var delegate: (any DataGridDelegate)?
-    weak var tableView: GridTableView?
+    weak var tableView: GridTableView? {
+        didSet { observePeekRequests() }
+    }
     weak var scrollView: NSScrollView?
     var revision = -1
+    private var peekObserver: (any NSObjectProtocol)?
+
+    /// The UI demo cannot right-click, so it asks for the map popover this way.
+    private func observePeekRequests() {
+        guard peekObserver == nil else { return }
+        peekObserver = NotificationCenter.default.addObserver(
+            forName: .tinkerPeekOnMap, object: nil, queue: .main
+        ) { [weak self] note in
+            // Read the cell out of the notification before hopping to the main actor.
+            let row = note.userInfo?["row"] as? Int
+            let column = note.userInfo?["column"] as? Int
+            MainActor.assumeIsolated {
+                guard let self, self.tableView?.window != nil, let row, let column else { return }
+                self.peekOnMap(row: row, column: column)
+            }
+        }
+    }
     var storedColumnWidths: [String: Double] = [:]
     var hiddenColumns: Set<String> = []
 
@@ -603,6 +625,13 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
                 pick.image = NSImage(systemSymbolName: "calendar", accessibilityDescription: nil)
                 menu.addItem(pick)
             }
+            if GeometryColumns.detect(in: model, dialect: model.dialect).contains(column) {
+                let show = NSMenuItem(title: "Show on Map", action: #selector(showOnMap(_:)), keyEquivalent: "")
+                show.target = self
+                show.image = NSImage(systemSymbolName: Icon.map, accessibilityDescription: nil)
+                show.representedObject = [row, column]
+                menu.addItem(show)
+            }
             let inspect = NSMenuItem(
                 title: "Show in Inspector", action: #selector(showInspector(_:)), keyEquivalent: "")
             inspect.target = self
@@ -663,6 +692,32 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
     @objc private func showInspector(_ sender: NSMenuItem) {
         delegate?.gridDidRequestInspector()
     }
+
+    /// "Show on Map": the row's geometry in a popover over its cell, so the grid stays
+    /// where it is; the popover offers the full map pane for that row.
+    @objc private func showOnMap(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [Int], pair.count == 2 else { return }
+        peekOnMap(row: pair[0], column: pair[1])
+    }
+
+    /// Opens the map popover over a cell. Also reached by the UI demo through
+    /// `.tinkerPeekOnMap`, since nothing else can right-click for it.
+    func peekOnMap(row: Int, column: Int) {
+        guard let tableView, let position = position(ofModelColumn: column) else { return }
+        let rect = tableView.frameOfCell(atColumn: position, row: row)
+        let peek = MapPeekView(grid: model, row: row, column: column) { [weak self] in
+            self?.mapPopover?.close()
+            self?.delegate?.gridDidRequestShowOnMap(row: row, column: column)
+        }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: peek)
+        popover.contentSize = NSSize(width: 480, height: 340)
+        mapPopover = popover
+        popover.show(relativeTo: rect, of: tableView, preferredEdge: .maxY)
+    }
+
+    private var mapPopover: NSPopover?
 
     @objc private func copyValue(_ sender: NSMenuItem) {
         guard let pair = sender.representedObject as? [Int], pair.count == 2,
@@ -897,4 +952,9 @@ final class GridHeaderView: NSTableHeaderView {
         }
         return menu
     }
+}
+
+extension Notification.Name {
+    /// Asks the visible grid to open its map popover over a cell (UI demo only).
+    static let tinkerPeekOnMap = Notification.Name("TinkerPeekOnMap")
 }

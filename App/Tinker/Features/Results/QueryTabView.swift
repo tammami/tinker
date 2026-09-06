@@ -60,6 +60,13 @@ public struct QueryTabView: View {
             await controller.loadCompletionSources()
         }
         .onChange(of: controller.sql) { _, new in tab.sql = new }
+        // "Show on Map" from a result cell: that one row, from that column.
+        .onChange(of: controller.mapRequest) { _, request in
+            guard let request else { return }
+            mapColumn = request.column
+            mapRows = [request.row]
+            resultPane = .map
+        }
         .onDisappear {
             let controller = controller
             Task { await controller.releaseHeldConnection() }
@@ -221,6 +228,8 @@ public struct QueryTabView: View {
     }
 
     @State private var mapColumn = -1
+    /// The rows on the map; nil is all of them.
+    @State private var mapRows: Set<Int>?
 
     /// Geometry columns in the selected result, when it has any.
     private var resultGeometryColumns: [Int] {
@@ -366,6 +375,7 @@ public struct QueryTabView: View {
                     set: { mapColumn = $0 }
                 ),
                 columns: columns,
+                rows: $mapRows,
                 onSelectRow: { row in
                     controller.selection = GridSelection(row: row, column: 0, mode: .rows)
                     controller.bumpRevision()

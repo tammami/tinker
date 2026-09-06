@@ -30,6 +30,8 @@ public struct TableTabView: View {
     /// The structure pane is built the first time it is asked for, then kept.
     @State private var hasVisitedStructure = false
     @State private var mapColumn = -1
+    /// The rows on the map; nil is all of them.
+    @State private var mapRows: Set<Int>?
 
     /// Geometry columns in the grid, looked for once per revision.
     private var geometryColumns: [Int] {
@@ -74,6 +76,7 @@ public struct TableTabView: View {
                             set: { mapColumn = $0 }
                         ),
                         columns: columns,
+                        rows: $mapRows,
                         onSelectRow: { row in
                             controller.selection = GridSelection(row: row, column: 0, mode: .rows)
                             controller.bumpRevision()
@@ -84,6 +87,13 @@ public struct TableTabView: View {
         }
         .onChange(of: mode) { _, new in
             if new == .structure { hasVisitedStructure = true }
+        }
+        // "Show on Map" from a cell: that one row, from that column.
+        .onChange(of: controller.mapRequest) { _, request in
+            guard let request else { return }
+            mapColumn = request.column
+            mapRows = [request.row]
+            mode = .map
         }
         .onAppear {
             controller.autoCommit = tab.autoCommit
@@ -97,6 +107,22 @@ public struct TableTabView: View {
                 Task {
                     try? await Task.sleep(for: .milliseconds(1_200))
                     mode = .map
+                }
+            }
+            if UserDefaults.standard.bool(forKey: "uiDemo.mapRow") {
+                UserDefaults.standard.removeObject(forKey: "uiDemo.mapRow")
+                Task {
+                    try? await Task.sleep(for: .milliseconds(1_200))
+                    if let column = geometryColumns.first { controller.mapRequest = MapRequest(row: 2, column: column) }
+                }
+            }
+            if UserDefaults.standard.bool(forKey: "uiDemo.mapPeek") {
+                UserDefaults.standard.removeObject(forKey: "uiDemo.mapPeek")
+                Task {
+                    try? await Task.sleep(for: .milliseconds(1_200))
+                    guard let column = geometryColumns.first else { return }
+                    NotificationCenter.default.post(
+                        name: .tinkerPeekOnMap, object: nil, userInfo: ["row": 2, "column": column])
                 }
             }
             controller.onRequestInspector = { workspace.isInspectorVisible = true }

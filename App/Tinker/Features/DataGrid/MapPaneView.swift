@@ -31,8 +31,21 @@ enum GeometryColumns {
     }
 }
 
-/// The map: every loaded row's geometry from one column, drawn where it belongs, with
-/// points clustered and the view fitted to the whole.
+/// A request from the grid to put one row's geometry on the map.
+public struct MapRequest: Equatable, Sendable {
+    public let row: Int
+    public let column: Int
+    /// Distinguishes two requests for the same cell, so the second still switches panes.
+    let token = UUID()
+
+    public init(row: Int, column: Int) {
+        self.row = row
+        self.column = column
+    }
+}
+
+/// The map: every loaded row's geometry from one column — or just the rows asked for —
+/// drawn where it belongs, with points clustered and the view fitted to the whole.
 ///
 /// Rows are read from the grid model, never copied: what the map holds are the shapes,
 /// converted once per revision, and capped so a table of a million geometries cannot
@@ -43,6 +56,8 @@ struct MapPaneView: View {
     let revision: Int
     @Binding var column: Int
     let columns: [Int]
+    /// The rows on the map; nil is every loaded row.
+    @Binding var rows: Set<Int>?
     let onSelectRow: (Int) -> Void
 
     static let featureCap = 5_000
@@ -64,6 +79,13 @@ struct MapPaneView: View {
                 } else if let first = columns.first {
                     Text(grid.columns[first].name).font(.caption).foregroundStyle(.secondary)
                 }
+                if let rows {
+                    Badge(
+                        text: rows.count == 1 ? "ROW \((rows.first ?? 0) + 1) ONLY" : "\(rows.count) ROWS ONLY",
+                        color: .accentColor)
+                    Button("Show All") { self.rows = nil }
+                        .help("Put every loaded row back on the map")
+                }
                 Spacer()
                 if summary.unplaceable > 0 {
                     Label(
@@ -81,7 +103,7 @@ struct MapPaneView: View {
             .controlSize(.small)
             Divider()
             MapCanvas(
-                grid: grid, dialect: dialect, revision: revision, column: column,
+                grid: grid, dialect: dialect, revision: revision, column: column, rows: rows,
                 onSelectRow: onSelectRow, summary: $summary
             )
             .clipped()
@@ -105,6 +127,7 @@ struct MapCanvas: NSViewRepresentable {
     let dialect: SQLDialect
     let revision: Int
     let column: Int
+    let rows: Set<Int>?
     let onSelectRow: (Int) -> Void
     @Binding var summary: MapSummary
 
@@ -120,13 +143,15 @@ struct MapCanvas: NSViewRepresentable {
             forAnnotationViewWithReuseIdentifier: MKMapViewDefaultClusterAnnotationViewReuseIdentifier)
         context.coordinator.map = map
         context.coordinator.onSelectRow = onSelectRow
-        context.coordinator.reload(grid: grid, dialect: dialect, column: column, revision: revision, summary: $summary)
+        context.coordinator.reload(
+            grid: grid, dialect: dialect, column: column, rows: rows, revision: revision, summary: $summary)
         return map
     }
 
     func updateNSView(_ map: MKMapView, context: Context) {
         context.coordinator.onSelectRow = onSelectRow
-        context.coordinator.reload(grid: grid, dialect: dialect, column: column, revision: revision, summary: $summary)
+        context.coordinator.reload(
+            grid: grid, dialect: dialect, column: column, rows: rows, revision: revision, summary: $summary)
     }
 
     func makeCoordinator() -> MapCoordinator { MapCoordinator() }
@@ -151,15 +176,22 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     var onSelectRow: ((Int) -> Void)?
     private var loadedRevision = -1
     private var loadedColumn = -1
+    private var loadedRows: Set<Int>?
     private var hasFitted = false
 
-    /// Converts the column's values to overlays. Skipped when nothing changed.
-    func reload(grid: GridModel, dialect: SQLDialect, column: Int, revision: Int, summary: Binding<MapSummary>) {
-        guard let map, revision != loadedRevision || column != loadedColumn, grid.columns.indices.contains(column)
+    /// Converts the column's values to overlays. Skipped when nothing changed. A change
+    /// of column or of the row subset fits the view to what is now shown.
+    func reload(
+        grid: GridModel, dialect: SQLDialect, column: Int, rows: Set<Int>?, revision: Int,
+        summary: Binding<MapSummary>
+    ) {
+        guard let map, revision != loadedRevision || column != loadedColumn || rows != loadedRows,
+            grid.columns.indices.contains(column)
         else { return }
-        let columnChanged = column != loadedColumn
+        let columnChanged = column != loadedColumn || rows != loadedRows
         loadedRevision = revision
         loadedColumn = column
+        loadedRows = rows
         map.removeAnnotations(map.annotations)
         map.removeOverlays(map.overlays)
 
@@ -201,6 +233,7 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         }
 
         for row in 0 ..< grid.rowCount {
+            if let rows, !rows.contains(row) { continue }
             if result.placed >= MapPaneView.featureCap {
                 result.capped = true
                 break
@@ -310,4 +343,42 @@ final class RowPolygon: MKPolygon {
 
 extension GeoPoint {
     var coordinate: CLLocationCoordinate2D { CLLocationCoordinate2D(latitude: latitude, longitude: longitude) }
+}
+
+/// One row's geometry, shown over its cell: the shape, where it is, and a way to the full
+/// map pane for that row alone.
+struct MapPeekView: View {
+    let grid: GridModel
+    let row: Int
+    let column: Int
+    let onOpenPane: () -> Void
+
+    @State private var summary = MapSummary()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            MapCanvas(
+                grid: grid, dialect: grid.dialect, revision: 0, column: column, rows: [row],
+                onSelectRow: { _ in }, summary: $summary
+            )
+            Divider()
+            HStack(spacing: DesignTokens.Spacing.sm) {
+                Label("Row \(row + 1) · \(grid.columns[column].name)", systemImage: Icon.map)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if summary.unreadable > 0 {
+                    Text("Unreadable geometry").font(.caption).foregroundStyle(.orange)
+                } else if summary.unplaceable > 0 {
+                    Text("Not longitude/latitude; use ST_Transform(…, 4326)")
+                        .font(.caption).foregroundStyle(.orange).lineLimit(1)
+                }
+                Spacer()
+                Button("Open in Map Pane", action: onOpenPane)
+            }
+            .controlSize(.small)
+            .padding(.horizontal, DesignTokens.Spacing.md)
+            .frame(height: DesignTokens.Metrics.statusHeight + DesignTokens.Spacing.xs)
+        }
+    }
 }

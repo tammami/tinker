@@ -466,6 +466,12 @@ final class MySQLIntegrationTests: XCTestCase {
             XCTAssertEqual(byName["customer_totals"]?.kind, .view)
             XCTAssertEqual(byName["all_types"]?.comment, "Every mapped MySQL type, plus NULLs and extremes")
             XCTAssertNotNil(byName["big_table"]?.sizeBytes)
+
+            // One table on its own reads the same entry the list carries.
+            let single = try await introspector.tableInfo(of: TableRef(schema: schema, name: "all_types"))
+            XCTAssertEqual(single, byName["all_types"])
+            let missing = try await introspector.tableInfo(of: TableRef(schema: schema, name: "no_such_table"))
+            XCTAssertNil(missing)
         }
     }
 

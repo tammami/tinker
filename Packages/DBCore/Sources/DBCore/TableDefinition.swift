@@ -95,6 +95,10 @@ public struct ColumnDefinition: Sendable, Hashable, Codable, Identifiable {
     public var characterSet: String?
     public var collation: String?
     public var comment: String?
+    /// The members of a PostgreSQL enum type, read from the catalog for display. MySQL
+    /// carries its members inside `type` (`enum('a','b')`), so this stays nil there.
+    /// Not part of the definition: the members belong to the type, not the column.
+    public var enumLabels: [String]?
 
     public init(
         id: UUID = UUID(),
@@ -107,7 +111,8 @@ public struct ColumnDefinition: Sendable, Hashable, Codable, Identifiable {
         isGeneratedStored: Bool = true,
         characterSet: String? = nil,
         collation: String? = nil,
-        comment: String? = nil
+        comment: String? = nil,
+        enumLabels: [String]? = nil
     ) {
         self.id = id
         self.name = name
@@ -120,6 +125,7 @@ public struct ColumnDefinition: Sendable, Hashable, Codable, Identifiable {
         self.characterSet = characterSet
         self.collation = collation
         self.comment = comment
+        self.enumLabels = enumLabels
     }
 
     /// Everything about the column except its name, which is what tells a rename from a
@@ -291,7 +297,8 @@ extension TableDefinition {
                     generatedExpression: nil,
                     characterSet: column.characterSet,
                     collation: column.collation,
-                    comment: column.comment
+                    comment: column.comment,
+                    enumLabels: column.enumLabels
                 )
             },
             primaryKey: primaryKey,

@@ -368,6 +368,25 @@ extension SmokeTest {
             check("the alter runs: \(editor.errorText ?? "ok")", editor.errorText == nil)
             await editor.load(force: true)
             check("the structure tab now reads 3 columns", editor.edited?.columns.count == 3)
+            check(
+                "the structure read is quick on a warm connection (\(editor.lastLoadDuration ?? .zero))",
+                (editor.lastLoadDuration ?? .seconds(99)) < .seconds(2))
+            // Two callers at once share one read rather than starting two.
+            let twin = StructureController(
+                table: created, connectionID: config.id, dialect: dialect, environment: environment)
+            async let firstLoad: Void = twin.load()
+            async let secondLoad: Void = twin.load()
+            _ = await (firstLoad, secondLoad)
+            check("a structure read in flight is shared, not repeated", twin.edited?.columns.count == 3)
+            // The designer takes every type apart and puts it back; an untouched column must
+            // come out spelt exactly as the server spelt it, or it would generate DDL.
+            let roundTrips = (editor.edited?.columns ?? []).allSatisfy {
+                ColumnTypeSpec.parse($0.type).render(dialect: dialect) == $0.type
+            }
+            check("column types survive the designer's parse and render", roundTrips)
+            editor.selectedColumnID = editor.edited?.columns.first?.id
+            editor.moveSelection(by: 1)
+            check("arrow keys move the column selection", editor.selectedColumnIndex == 1)
 
             // MARK: Objects, definitions, server
             let objects = ObjectsController(

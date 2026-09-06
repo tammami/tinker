@@ -151,11 +151,8 @@ public final class TableTabController: DataGridDelegate {
             bumpRevision()
             updateStatus()
             // The rows are on screen; read the structure now so the Structure switch is
-            // instant. It goes through the same cache, so nothing is read twice.
-            Task { [weak self] in
-                await self?.structure.load()
-                await self?.structure.loadCollationsIfNeeded()
-            }
+            // instant. The view's own load waits for this one rather than repeating it.
+            Task { [weak self] in await self?.structure.load() }
         } catch {
             errorText = (error as? DBError)?.errorDescription ?? String(describing: error)
         }

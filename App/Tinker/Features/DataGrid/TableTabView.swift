@@ -86,6 +86,7 @@ public struct TableTabView: View {
             if new == .structure { hasVisitedStructure = true }
         }
         .onAppear {
+            controller.autoCommit = tab.autoCommit
             if UserDefaults.standard.bool(forKey: "uiDemo.structure") {
                 UserDefaults.standard.removeObject(forKey: "uiDemo.structure")
                 mode = .structure
@@ -156,6 +157,18 @@ public struct TableTabView: View {
                 .popover(isPresented: $isColumnsPopoverShown, arrowEdge: .bottom) {
                     ColumnsPopover(controller: controller)
                 }
+
+                BarDivider()
+
+                // Bound to the property itself, so the click shows at once; the write it
+                // may owe happens after.
+                Toggle("Auto-commit", isOn: $controller.autoCommit)
+                    .toggleStyle(.checkbox)
+                    .onChange(of: controller.autoCommit) { _, enabled in
+                        tab.autoCommit = enabled
+                        controller.autoCommitDidChange()
+                    }
+                    .help("On writes each edit as you make it; off keeps edits pending until Commit")
 
                 BarDivider()
 
@@ -309,18 +322,45 @@ public struct TableTabView: View {
                         .monospacedDigit()
                 }
             }
-            if let model = controller.model, model.edits.pendingStatementCount > 0 {
-                Button("Discard") { controller.discardEdits() }
+            if let model = controller.model {
+                if controller.autoCommit {
+                    autoCommitStatus(model)
+                } else if model.edits.pendingStatementCount > 0 {
+                    Button("Discard") { controller.discardEdits() }
+                        .controlSize(.small)
+                    Button {
+                        presentCommitPreview()
+                    } label: {
+                        Label("Commit \(model.edits.pendingStatementCount)…", systemImage: Icon.commit)
+                    }
                     .controlSize(.small)
-                Button {
-                    presentCommitPreview()
-                } label: {
-                    Label("Commit \(model.edits.pendingStatementCount)…", systemImage: Icon.commit)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut("s", modifiers: [.command, .shift])
                 }
-                .controlSize(.small)
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut("s", modifiers: [.command, .shift])
             }
+        }
+    }
+
+    /// With auto-commit on there is nothing to confirm: a write in flight says so, a
+    /// write the server refused offers a retry, and a new row says when it will go.
+    @ViewBuilder
+    private func autoCommitStatus(_ model: GridModel) -> some View {
+        if controller.isWriting {
+            ProgressView().controlSize(.small)
+            Text("Saving…")
+        } else if model.edits.pendingStatementCount(.loadedRowsOnly) > 0 {
+            Button("Discard") { controller.discardEdits() }
+                .controlSize(.small)
+            Button {
+                Task { await controller.commit() }
+            } label: {
+                Label("Retry", systemImage: Icon.commit)
+            }
+            .controlSize(.small)
+            .buttonStyle(.borderedProminent)
+            .help("The last write was refused; the edit is still here")
+        } else if !model.edits.pendingInserts.isEmpty {
+            Text("New row saves when you leave it")
         }
     }
 

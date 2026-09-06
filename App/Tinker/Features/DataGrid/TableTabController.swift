@@ -28,6 +28,13 @@ public final class TableTabController: DataGridDelegate {
     public var errorText: String?
     public var isLoading = false
     public var columnsInfo: [ColumnInfo] = []
+    /// On, an edit writes as soon as it is made; off, edits wait for Commit (SPEC §12.3).
+    public var autoCommit = true
+    /// True while an auto-commit write is on the server.
+    public private(set) var isWriting = false
+    @ObservationIgnored private var writeTask: Task<Void, Never>?
+    /// A write asked for while one was running; it goes as soon as that one is done.
+    @ObservationIgnored private var queuedWrite: CommitScope?
 
     public let table: TableRef
     public let connectionID: UUID
@@ -348,6 +355,7 @@ public final class TableTabController: DataGridDelegate {
         model.markDeleted(rows: rows)
         bumpRevision()
         updateStatus()
+        writeIfAutoCommit(.loadedRowsOnly)
     }
 
     public func setSelectionNull() {
@@ -359,6 +367,54 @@ public final class TableTabController: DataGridDelegate {
         }
         bumpRevision()
         updateStatus()
+        writeIfAutoCommit(.loadedRowsOnly)
+    }
+
+    // MARK: - Auto-commit
+
+    /// Writes what is pending when auto-commit is on, one write at a time. A change made
+    /// while a write is on the server waits for it and then goes as the next write, so
+    /// two commits never run at once and no edit is lost between them.
+    private func writeIfAutoCommit(_ scope: CommitScope) {
+        guard autoCommit, let model, model.edits.pendingStatementCount(scope) > 0 else { return }
+        if writeTask != nil {
+            queuedWrite = (queuedWrite == .everything || scope == .everything) ? .everything : .loadedRowsOnly
+            return
+        }
+        writeTask = Task { [weak self] in
+            guard let self else { return }
+            isWriting = true
+            var next: CommitScope? = scope
+            while let scope = next {
+                _ = await commit(scope)
+                next = queuedWrite
+                queuedWrite = nil
+            }
+            isWriting = false
+            writeTask = nil
+        }
+    }
+
+    /// A new row is written when the user leaves it, not while it is being filled in. A
+    /// row the user added and then left untouched holds nothing, so it goes away.
+    private func flushNewRowsIfLeft(focusRow: Int) {
+        guard autoCommit, let model, !model.edits.pendingInserts.isEmpty,
+            !model.isPendingInsertRow(focusRow)
+        else { return }
+        for insert in model.edits.pendingInserts where insert.values.isEmpty {
+            model.edits.removeInsert(id: insert.id)
+        }
+        bumpRevision()
+        updateStatus()
+        writeIfAutoCommit(.everything)
+    }
+
+    /// Turning auto-commit on writes what was waiting, the way the query tab commits its
+    /// open transaction.
+    public func autoCommitDidChange() {
+        guard autoCommit else { return }
+        writeIfAutoCommit(.loadedRowsOnly)
+        flushNewRowsIfLeft(focusRow: selection.focusRow)
     }
 
     public func discardEdits() {
@@ -372,14 +428,15 @@ public final class TableTabController: DataGridDelegate {
         (try? model?.pendingStatements()) ?? []
     }
 
-    /// Runs the commit and refreshes what changed.
-    public func commit() async -> String? {
+    /// Runs the commit and re-reads the page, so a value the server set (a default, a
+    /// trigger's work) is what the grid shows. `loadedRowsOnly` leaves new rows pending.
+    public func commit(_ scope: CommitScope = .everything) async -> String? {
         guard let model, let session else { return nil }
         if await session.isReadOnly { return "This connection is read-only" }
         do {
             let runner = SessionStatementRunner(session: session)
-            let result = try await model.commit(using: runner)
-            await model.reload()
+            let result = try await model.commit(using: runner, scope: scope)
+            await model.reload(keepingNewRows: scope == .loadedRowsOnly)
             bumpRevision()
             updateStatus()
             return result.statementCount == 0
@@ -486,6 +543,7 @@ public final class TableTabController: DataGridDelegate {
     public func gridDidChangeSelection(_ selection: GridSelection) {
         self.selection = selection
         updateStatus()
+        flushNewRowsIfLeft(focusRow: selection.focusRow)
     }
 
     public func gridDidRequestLoad(range: Range<Int>) {
@@ -509,6 +567,8 @@ public final class TableTabController: DataGridDelegate {
         model.setValue(value, row: row, column: column)
         bumpRevision()
         updateStatus()
+        // A loaded row's edit goes now; a new row's waits until the user leaves the row.
+        if !model.isPendingInsertRow(row) { writeIfAutoCommit(.loadedRowsOnly) }
     }
 
     public func gridDidRequestInspector() {

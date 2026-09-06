@@ -38,6 +38,15 @@ public enum CellChangeState: Sendable, Hashable {
     case deleted
 }
 
+/// Which pending changes a commit takes.
+public enum CommitScope: Sendable, Hashable {
+    /// Every pending change: updates, deletes and new rows.
+    case everything
+    /// Only changes to rows the server already has. New rows stay pending, so a row the
+    /// user is still filling in is not written half done.
+    case loadedRowsOnly
+}
+
 /// Everything the user has changed in a grid but not yet committed.
 ///
 /// Nothing reaches the server until the commit runs: the buffer is an overlay the grid
@@ -139,6 +148,26 @@ public struct EditBuffer: Sendable {
         insertions.removeAll()
     }
 
+    /// Drops the changes a commit of `scope` would have written, keeping the rest.
+    public mutating func discard(_ scope: CommitScope) {
+        switch scope {
+        case .everything:
+            discardAll()
+        case .loadedRowsOnly:
+            edits.removeAll()
+            deletions.removeAll()
+            deletionIdentities.removeAll()
+        }
+    }
+
+    /// How many statements a commit of `scope` would run.
+    public func pendingStatementCount(_ scope: CommitScope) -> Int {
+        switch scope {
+        case .everything: pendingStatementCount
+        case .loadedRowsOnly: pendingStatementCount - insertions.count
+        }
+    }
+
     // MARK: - Statement generation
 
     /// Builds the statements a commit would run, in the order the preview shows them:
@@ -147,7 +176,9 @@ public struct EditBuffer: Sendable {
     /// Deletes run before inserts so that replacing a row under a unique key works in one
     /// commit, and updates run first because they identify rows by values a later delete
     /// might remove.
-    public func statements(using generator: DMLGenerator) throws -> [GeneratedStatement] {
+    public func statements(
+        using generator: DMLGenerator, scope: CommitScope = .everything
+    ) throws -> [GeneratedStatement] {
         var statements: [GeneratedStatement] = []
         for row in edits.keys.sorted() {
             guard let edit = edits[row], !edit.changes.isEmpty else { continue }
@@ -162,6 +193,7 @@ public struct EditBuffer: Sendable {
             }
             statements.append(try generator.delete(originalIdentity: identity))
         }
+        guard scope == .everything else { return statements }
         for insert in insertions {
             statements.append(try generator.insert(values: insert.values))
         }

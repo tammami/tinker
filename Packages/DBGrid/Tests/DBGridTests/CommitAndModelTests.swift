@@ -494,3 +494,39 @@ final class GridModelTests: XCTestCase {
         XCTAssertEqual(model.totalCount, 2_500)
     }
 }
+
+final class CommitScopeTests: XCTestCase {
+    let table = TableRef(database: "app", schema: "public", name: "users")
+
+    func makeBuffer() -> EditBuffer {
+        var buffer = EditBuffer()
+        buffer.setValue(.int(2), row: 0, column: "a", loaded: .int(1), identity: ["id": .int(1)])
+        buffer.markDeleted(row: 1, identity: ["id": .int(2)])
+        let insert = buffer.addInsert()
+        buffer.setInsertValue(.string("new"), id: insert.id, column: "name")
+        return buffer
+    }
+
+    func testLoadedRowsOnlyLeavesNewRowsOut() throws {
+        let buffer = makeBuffer()
+        let generator = DMLGenerator(dialect: .postgresql, table: table, identityColumns: ["id"])
+        let all = try buffer.statements(using: generator)
+        let loaded = try buffer.statements(using: generator, scope: .loadedRowsOnly)
+        XCTAssertEqual(all.count, 3)
+        XCTAssertEqual(loaded.count, 2)
+        XCTAssertFalse(loaded.contains { $0.sql.hasPrefix("INSERT") })
+        XCTAssertEqual(buffer.pendingStatementCount(.loadedRowsOnly), 2)
+        XCTAssertEqual(buffer.pendingStatementCount(.everything), 3)
+    }
+
+    func testDiscardingLoadedRowsKeepsTheNewRow() {
+        var buffer = makeBuffer()
+        buffer.discard(.loadedRowsOnly)
+        XCTAssertEqual(buffer.pendingInserts.count, 1)
+        XCTAssertEqual(buffer.pendingInserts.first?.values["name"], .string("new"))
+        XCTAssertTrue(buffer.editedRowIndices.isEmpty)
+        XCTAssertTrue(buffer.deletedRowIndices.isEmpty)
+        buffer.discard(.everything)
+        XCTAssertTrue(buffer.isEmpty)
+    }
+}

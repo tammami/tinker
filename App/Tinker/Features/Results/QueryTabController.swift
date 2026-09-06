@@ -358,12 +358,57 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             }
         }
         bumpRevision()
+        writeIfAutoCommit(.loadedRowsOnly)
     }
 
     public func deleteSelectedRows() {
         guard let grid = selectedResult?.grid, grid.isEditable else { return }
         grid.markDeleted(rows: selection.rows(totalRows: grid.displayRowCount))
         bumpRevision()
+        writeIfAutoCommit(.loadedRowsOnly)
+    }
+
+    // MARK: - Auto-commit of result edits
+
+    /// True while an auto-commit write of result edits is on the server.
+    public private(set) var isWritingEdits = false
+    @ObservationIgnored private var writeTask: Task<Void, Never>?
+    @ObservationIgnored private var queuedWrite: CommitScope?
+
+    /// With auto-commit on, an edit to a result is written as it is made, one write at a
+    /// time; an edit made during a write follows it. Off, edits wait for Commit.
+    private func writeIfAutoCommit(_ scope: CommitScope) {
+        guard autoCommit, let grid = selectedResult?.grid, grid.edits.pendingStatementCount(scope) > 0 else {
+            return
+        }
+        if writeTask != nil {
+            queuedWrite = (queuedWrite == .everything || scope == .everything) ? .everything : .loadedRowsOnly
+            return
+        }
+        writeTask = Task { [weak self] in
+            guard let self else { return }
+            isWritingEdits = true
+            var next: CommitScope? = scope
+            while let scope = next {
+                _ = await commitEdits(scope)
+                next = queuedWrite
+                queuedWrite = nil
+            }
+            isWritingEdits = false
+            writeTask = nil
+        }
+    }
+
+    /// A new row goes when the user leaves it; one left untouched holds nothing and is dropped.
+    private func flushNewRowsIfLeft(focusRow: Int) {
+        guard autoCommit, let grid = selectedResult?.grid, !grid.edits.pendingInserts.isEmpty,
+            !grid.isPendingInsertRow(focusRow)
+        else { return }
+        for insert in grid.edits.pendingInserts where insert.values.isEmpty {
+            grid.edits.removeInsert(id: insert.id)
+        }
+        bumpRevision()
+        writeIfAutoCommit(.everything)
     }
 
     public func addRow() {
@@ -384,15 +429,15 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     /// only the edits back, not the statements the user ran before them; the transaction
     /// then commits when the user commits it. Either way the page is re-read afterwards,
     /// so a timestamp the server set is what the grid shows.
-    public func commitEdits() async -> String? {
+    public func commitEdits(_ scope: CommitScope = .everything) async -> String? {
         guard let result = selectedResult, let grid = result.grid, grid.isEditable, let session else { return nil }
         if await session.isReadOnly { return "This connection is read-only" }
         do {
             let connection = try await connectionForRun(session: session)
             let runner = HeldConnectionRunner(connection: connection, usesSavepoint: !autoCommit)
-            let committed = try await grid.commit(using: runner)
+            let committed = try await grid.commit(using: runner, scope: scope)
             isInTransaction = await connection.isInTransaction
-            await grid.reload()
+            await grid.reload(keepingNewRows: scope == .loadedRowsOnly)
             result.message = Self.pageMessage(grid, exactTotal: result.exactTotal, duration: .zero)
             bumpRevision()
             return committed.statementCount == 0
@@ -882,7 +927,10 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
 
     // MARK: - DataGridDelegate
 
-    public func gridDidChangeSelection(_ selection: GridSelection) { self.selection = selection }
+    public func gridDidChangeSelection(_ selection: GridSelection) {
+        self.selection = selection
+        flushNewRowsIfLeft(focusRow: selection.focusRow)
+    }
     public func gridDidRequestLoad(range: Range<Int>) {}
     public func gridDidCommitEdit(row: Int, column: Int, text: String) {
         guard let grid = selectedResult?.grid, grid.columns.indices.contains(column) else { return }
@@ -908,6 +956,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         }
         grid.setValue(value, row: row, column: column)
         bumpRevision()
+        if !grid.isPendingInsertRow(row) { writeIfAutoCommit(.loadedRowsOnly) }
     }
     public func gridDidRequestInspector() { onRequestInspector?() }
     /// Set by the tab view; the grid asks for the inspector with the space bar.

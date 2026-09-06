@@ -89,6 +89,8 @@ extension SmokeTest {
             try await Task.sleep(for: .milliseconds(200))
 
             // MARK: Table tab: edit, insert, commit, delete
+            // Off, so the edits below stay pending until the explicit commit.
+            table.autoCommit = false
             let adaRow = (0 ..< 3).first { table.model?.value(row: $0, column: nameColumn) == .string("Ada") } ?? 0
             _ = table.model?.setValue(.string("Ada Lovelace"), row: adaRow, column: nameColumn)
             table.addRow()
@@ -115,6 +117,47 @@ extension SmokeTest {
             } else {
                 check("the inserted row is shown after commit", false)
             }
+            // MARK: Table tab: auto-commit writes each edit as it is made
+            table.autoCommit = true
+            let byronRow = (0 ..< (table.model?.displayRowCount ?? 0)).first {
+                table.model?.value(row: $0, column: nameColumn) == .string("Ada Lovelace")
+            }
+            if let byronRow {
+                table.gridDidCommitEdit(row: byronRow, column: nameColumn, text: "Ada Byron")
+                try await waitUntil(timeout: .seconds(20)) { !table.isWriting && table.pendingStatements().isEmpty }
+                let byrons = (try? await sql("SELECT name FROM \(scratchName) WHERE name = 'Ada Byron'"))??.rows.count
+                check(
+                    "auto-commit writes a cell edit when it ends (\(table.errorText ?? "no error"))",
+                    byrons == 1 && table.errorText == nil)
+            } else {
+                check("the renamed row is on the page", false)
+            }
+            table.addRow()
+            let graceRow = (table.model?.displayRowCount ?? 1) - 1
+            table.gridDidCommitEdit(row: graceRow, column: nameColumn, text: "Grace")
+            check(
+                "a new row waits while it is being filled in", table.pendingStatements().count == 1 && !table.isWriting)
+            table.gridDidChangeSelection(GridSelection(row: 0, column: 0, mode: .rows))
+            try await waitUntil(timeout: .seconds(20)) { !table.isWriting && table.pendingStatements().isEmpty }
+            let afterGrace = await count()
+            let graces = (try? await sql("SELECT name FROM \(scratchName) WHERE name = 'Grace'"))??.rows.count
+            check(
+                "leaving the new row writes it (\(table.errorText ?? "no error"))",
+                afterGrace == 4 && graces == 1 && table.errorText == nil)
+            let writtenGrace = (0 ..< (table.model?.displayRowCount ?? 0)).first {
+                table.model?.value(row: $0, column: nameColumn) == .string("Grace")
+            }
+            if let writtenGrace {
+                table.selection = GridSelection(row: writtenGrace, column: 0, mode: .rows)
+                table.deleteSelectedRows()
+                try await waitUntil(timeout: .seconds(20)) { !table.isWriting && table.pendingStatements().isEmpty }
+                let afterAutoDelete = await count()
+                check("auto-commit deletes at once (\(table.errorText ?? "no error"))", afterAutoDelete == 3)
+            } else {
+                check("the written row is shown after the write", false)
+            }
+            table.autoCommit = false
+
             table.selection = GridSelection(row: 0, column: 0, mode: .rows)
             let (copiedColumns, copiedRows) = table.selectedRowsAndColumns()
             let text = ClipboardFormatter.render(

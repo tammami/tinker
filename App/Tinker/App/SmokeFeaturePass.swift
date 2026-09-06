@@ -134,18 +134,19 @@ extension SmokeTest {
             }
             table.addRow()
             let graceRow = (table.model?.displayRowCount ?? 1) - 1
-            table.gridDidCommitEdit(row: graceRow, column: nameColumn, text: "Grace")
+            // The seed already holds a Grace; the new row gets a name of its own.
+            table.gridDidCommitEdit(row: graceRow, column: nameColumn, text: "Grace Hopper")
             check(
                 "a new row waits while it is being filled in", table.pendingStatements().count == 1 && !table.isWriting)
             table.gridDidChangeSelection(GridSelection(row: 0, column: 0, mode: .rows))
             try await waitUntil(timeout: .seconds(20)) { !table.isWriting && table.pendingStatements().isEmpty }
             let afterGrace = await count()
-            let graces = (try? await sql("SELECT name FROM \(scratchName) WHERE name = 'Grace'"))??.rows.count
+            let graces = (try? await sql("SELECT name FROM \(scratchName) WHERE name = 'Grace Hopper'"))??.rows.count
             check(
-                "leaving the new row writes it (\(table.errorText ?? "no error"))",
+                "leaving the new row writes it (\(table.errorText ?? "no error"); rows=\(afterGrace), new=\(graces ?? -1))",
                 afterGrace == 4 && graces == 1 && table.errorText == nil)
             let writtenGrace = (0 ..< (table.model?.displayRowCount ?? 0)).first {
-                table.model?.value(row: $0, column: nameColumn) == .string("Grace")
+                table.model?.value(row: $0, column: nameColumn) == .string("Grace Hopper")
             }
             if let writtenGrace {
                 table.selection = GridSelection(row: writtenGrace, column: 0, mode: .rows)

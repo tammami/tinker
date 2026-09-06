@@ -162,7 +162,7 @@ public enum Icon {
     public static let importData = "square.and.arrow.down"
     public static let history = "clock.arrow.circlepath"
     public static let snippet = "text.badge.plus"
-    public static let format = "text.justify.left"
+    public static let format = "wand.and.sparkles"
     public static let copy = "doc.on.doc"
     public static let paste = "doc.on.clipboard"
     public static let edit = "pencil"

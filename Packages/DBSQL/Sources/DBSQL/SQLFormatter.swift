@@ -141,24 +141,44 @@ public enum SQLTokenizer {
     ]
 }
 
-/// A conservative SQL formatter: upper-cases keywords, puts each clause on its own line
-/// and indents parenthesised sub-selects (SPEC §13.1).
+/// Lays SQL out the way people read it: each clause keyword on a line of its own, the
+/// clause's items indented beneath it one per line, joins and `AND`/`OR` each starting a
+/// line, sub-selects indented inside their parentheses (SPEC §13.1).
 ///
-/// It rewrites whitespace and keyword casing and nothing else. Strings, comments,
-/// quoted identifiers and the order of everything else survive untouched.
+///     SELECT
+///       c.id,
+///       c.name
+///     FROM
+///       customers c
+///       LEFT JOIN orders o ON o.customer_id = c.id
+///     WHERE
+///       c.active
+///       AND o.total > 0
+///     ORDER BY
+///       c.name DESC
+///     LIMIT
+///       10;
+///
+/// It rewrites whitespace and keyword casing and nothing else. Strings, comments, quoted
+/// identifiers and the order of everything else survive untouched.
 public enum SQLFormatter {
-    /// Keywords that begin a clause and therefore begin a line.
+    /// Keywords that head a clause: on their own line, with the clause body indented under them.
     static let clauseStarters: Set<String> = [
-        "SELECT", "FROM", "WHERE", "HAVING", "WINDOW", "LIMIT", "OFFSET", "FETCH",
-        "UNION", "INTERSECT", "EXCEPT", "VALUES", "SET", "RETURNING", "INTO",
-        "JOIN", "ON", "USING", "WITH",
+        "SELECT", "FROM", "WHERE", "HAVING", "WINDOW", "LIMIT", "OFFSET", "FETCH", "VALUES", "SET",
+        "RETURNING", "WITH", "UPDATE", "UNION", "INTERSECT", "EXCEPT",
     ]
-    /// Keywords that begin a clause only together with the word after them.
-    static let clausePairs: Set<String> = [
-        "GROUP", "ORDER", "INSERT", "DELETE", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "NATURAL",
+    /// Keywords that head a clause together with the word after them: `GROUP BY`, `INSERT INTO`.
+    static let clausePairs: [String: Set<String>] = [
+        "GROUP": ["BY"], "ORDER": ["BY"], "INSERT": ["INTO"], "DELETE": ["FROM"],
     ]
+    /// The words of a join, kept together on one line that starts fresh.
+    static let joinWords: Set<String> = ["JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "NATURAL"]
+    /// Keywords that bind to a following parenthesis like a function name does.
+    static let functionKeywords: Set<String> = ["CAST", "COALESCE", "REPLACE"]
+    /// Characters that make up operators, so `<=` and `||` stay whole.
+    static let operatorScalars = Set("<>=!|:&@#?~^*+-/%".unicodeScalars)
 
-    public static func format(_ sql: String, dialect: SQLDialect, indentWidth: Int = 4) -> String {
+    public static func format(_ sql: String, dialect: SQLDialect, indentWidth: Int = 2) -> String {
         let statements = StatementSplitter.split(sql, dialect: dialect)
         guard !statements.isEmpty else { return sql }
         let formatted = statements.map { statement -> String in
@@ -168,102 +188,186 @@ public enum SQLFormatter {
         return formatted.joined(separator: "\n\n")
     }
 
+    private enum Paren {
+        /// A sub-select: the clauses inside sit two levels in, the closing paren one level in.
+        case block(clauseIndent: Int)
+        /// A function call, an `IN` list, a column list: everything inside stays on the line.
+        case inline
+    }
+
     static func formatStatement(_ sql: String, dialect: SQLDialect, indentWidth: Int) -> String {
         let tokens = SQLTokenizer.tokenize(sql, dialect: dialect).filter { $0.kind != .whitespace }
         guard !tokens.isEmpty else { return sql }
 
         var output = ""
-        var depth = 0
-        /// One entry per open parenthesis: true when it opened an indented sub-select block.
-        var parenStack: [Bool] = []
+        /// Indent, in levels, of the clause keywords at the current nesting.
+        var clauseIndent = 0
+        var parens: [Paren] = []
+        /// The clause being written, so `INSERT INTO t (a, b)` keeps the space a call would not.
+        var clause = ""
+        /// Between `BETWEEN` and its `AND`, which must not start a line.
+        var inBetween = false
         var previous: SQLToken?
 
-        /// Starts a fresh line at the current indent. Calling it twice in a row is a no-op,
-        /// so an opening sub-select paren and the SELECT that follows share one line break.
-        func newline() {
+        var inlineParens: Bool { parens.last.map { if case .inline = $0 { true } else { false } } ?? false }
+        var bodyIndent: Int { clauseIndent + 1 }
+
+        /// Starts a fresh line at `level`. Repeated calls collapse into one line break, so
+        /// a clause keyword after a sub-select's `(` does not leave an empty line behind.
+        func newline(at level: Int) {
             while output.hasSuffix(" ") { output.removeLast() }
             guard !output.isEmpty else { return }
             if !output.hasSuffix("\n") { output += "\n" }
-            output += String(repeating: " ", count: depth * indentWidth)
+            output += String(repeating: " ", count: level * indentWidth)
         }
 
-        /// Appends `text`, inserting a separating space unless one would be wrong.
-        func append(_ text: String) {
+        /// Appends `text` after a space, unless what came before binds tightly to it.
+        func append(_ text: String, tight: Bool = false) {
             let needsSpace =
-                !output.isEmpty
+                !tight
+                && !output.isEmpty
                 && !output.hasSuffix(" ")
                 && !output.hasSuffix("\n")
                 && !output.hasSuffix("(")
+                && !output.hasSuffix(".")
+                && !output.hasSuffix("::")
             if needsSpace { output += " " }
             output += text
         }
 
-        for (position, token) in tokens.enumerated() {
-            let text = token.kind == .keyword ? token.text.uppercased() : token.text
-            let next = position + 1 < tokens.count ? tokens[position + 1] : nil
+        func isOperator(_ token: SQLToken?) -> Bool {
+            guard let token, token.kind == .punctuation else { return false }
+            return token.text.unicodeScalars.allSatisfy(operatorScalars.contains)
+        }
 
-            if token.kind == .punctuation {
-                switch text {
+        var position = 0
+        while position < tokens.count {
+            let token = tokens[position]
+            let next = position + 1 < tokens.count ? tokens[position + 1] : nil
+            let upper = token.text.uppercased()
+            defer {
+                previous = token
+                position += 1
+            }
+
+            switch token.kind {
+            case .comment:
+                append(token.text)
+                // A line comment owns the rest of its line; what follows must start a new one.
+                if !token.text.hasPrefix("/*") { newline(at: output.hasSuffix("\n") ? 0 : bodyIndent) }
+                continue
+
+            case .punctuation:
+                switch token.text {
                 case "(":
-                    let opensSubSelect =
-                        next?.kind == .keyword
-                        && ["SELECT", "WITH", "VALUES"].contains(next?.text.uppercased() ?? "")
-                    // A function call binds tightly to its name; a keyword takes a space.
-                    if previous?.kind == .keyword || previous == nil {
-                        append("(")
+                    let opensBlock =
+                        next?.kind == .keyword && ["SELECT", "WITH", "VALUES"].contains(next?.text.uppercased() ?? "")
+                    // A call binds to its name: `count(*)`. A keyword, or the table of an
+                    // INSERT or CREATE, takes a space: `IN (`, `INSERT INTO t (a, b)`.
+                    let afterName = previous?.kind == .identifier || previous?.kind == .quotedIdentifier
+                    let afterFunctionKeyword =
+                        previous?.kind == .keyword && functionKeywords.contains(previous?.text.uppercased() ?? "")
+                    let tight = (afterName && !["INSERT INTO", "CREATE"].contains(clause)) || afterFunctionKeyword
+                    append("(", tight: tight)
+                    if opensBlock {
+                        parens.append(.block(clauseIndent: clauseIndent))
+                        clauseIndent += 2
+                        newline(at: clauseIndent)
                     } else {
-                        output += "("
+                        parens.append(.inline)
                     }
-                    parenStack.append(opensSubSelect)
-                    if opensSubSelect {
-                        depth += 1
-                        newline()
-                    }
-                    previous = token
                     continue
                 case ")":
-                    if parenStack.popLast() == true {
-                        depth = max(0, depth - 1)
-                        newline()
+                    if case .block(let saved) = parens.popLast() {
+                        clauseIndent = saved
+                        newline(at: bodyIndent)
                     }
-                    while output.hasSuffix(" ") { output.removeLast() }
-                    output += ")"
-                    previous = token
+                    append(")", tight: true)
                     continue
                 case ",":
-                    while output.hasSuffix(" ") { output.removeLast() }
-                    output += ", "
-                    previous = token
+                    append(",", tight: true)
+                    if inlineParens {
+                        output += " "
+                    } else {
+                        newline(at: bodyIndent)
+                    }
                     continue
-                case ".", "::":
-                    while output.hasSuffix(" ") { output.removeLast() }
-                    output += text
-                    previous = token
+                case ";":
+                    append(";", tight: true)
                     continue
                 default:
-                    break
+                    // `.` and `::` bind both sides: `c.id`, `a::text`. The tokenizer hands
+                    // the cast over one colon at a time.
+                    let adjacentColon =
+                        token.text == ":"
+                        && ((previous?.text == ":" && previous?.utf16Range.upperBound == token.utf16Range.lowerBound)
+                            || (next?.text == ":" && next?.utf16Range.lowerBound == token.utf16Range.upperBound))
+                    if token.text == "." || adjacentColon {
+                        append(token.text, tight: true)
+                        continue
+                    }
+                    // Adjacent operator characters are one operator: `<=`, `||`, `->>`.
+                    let joinsPrevious =
+                        isOperator(token) && isOperator(previous)
+                        && previous?.utf16Range.upperBound == token.utf16Range.lowerBound
+                    append(token.text, tight: joinsPrevious)
+                    continue
                 }
-            }
 
-            if token.kind == .keyword {
-                let startsClause =
-                    clauseStarters.contains(text)
-                    || (clausePairs.contains(text) && next?.kind == .keyword)
-                    || text == "INSERT" || text == "DELETE"
-                if startsClause, !output.isEmpty {
-                    if text == "ON" || text == "USING" {
-                        // A join condition reads better indented under its JOIN.
-                        depth += 1
-                        newline()
-                        depth -= 1
+            case .keyword where !inlineParens:
+                if let second = clausePairs[upper], let next, next.kind == .keyword,
+                    second.contains(next.text.uppercased())
+                {
+                    newline(at: clauseIndent)
+                    append(upper)
+                    append(next.text.uppercased())
+                    clause = "\(upper) \(next.text.uppercased())"
+                    position += 1
+                    previous = next
+                    newline(at: bodyIndent)
+                    continue
+                }
+                if clauseStarters.contains(upper) {
+                    newline(at: clauseIndent)
+                    append(upper)
+                    clause = upper
+                    // `UNION ALL` is one line; the SELECT after it starts the next.
+                    if ["UNION", "INTERSECT", "EXCEPT"].contains(upper), let next, next.kind == .keyword,
+                        ["ALL", "DISTINCT"].contains(next.text.uppercased())
+                    {
+                        append(next.text.uppercased())
+                        position += 1
+                        previous = next
+                    }
+                    newline(at: bodyIndent)
+                    continue
+                }
+                if joinWords.contains(upper) {
+                    let continuesJoin = previous.map { joinWords.contains($0.text.uppercased()) } ?? false
+                    if !continuesJoin { newline(at: bodyIndent) }
+                    append(upper)
+                    continue
+                }
+                if upper == "BETWEEN" { inBetween = true }
+                if upper == "AND" || upper == "OR" {
+                    if inBetween, upper == "AND" {
+                        inBetween = false
                     } else {
-                        newline()
+                        newline(at: bodyIndent)
                     }
                 }
-            }
+                if upper == "CREATE" { clause = "CREATE" }
+                append(upper)
+                continue
 
-            append(text)
-            previous = token
+            case .keyword:
+                append(upper)
+                continue
+
+            default:
+                append(token.text)
+                continue
+            }
         }
 
         return output.trimmingCharacters(in: .whitespacesAndNewlines)

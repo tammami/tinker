@@ -137,7 +137,7 @@ struct TinkerCommands: Commands {
             Button("Explain") { workspace?.explain(analyze: false) }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
             Button("Explain Analyze") { workspace?.explain(analyze: true) }
-            Button("Format SQL") { workspace?.formatSQL() }
+            Button("Beautify SQL") { workspace?.formatSQL() }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
             Divider()
             Button("Snippets…") { workspace?.showSnippets() }

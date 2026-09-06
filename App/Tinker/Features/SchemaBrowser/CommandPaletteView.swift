@@ -170,7 +170,7 @@ public struct CommandPaletteView: View {
             ("Run Selected", Icon.run, "⌘⇧R", { controller.runSelection() }),
             ("Run All", Icon.runAll, "⌘⌥R", { controller.run(all: true) }),
             ("Explain Statement", Icon.explain, "⌘⇧E", { controller.explain(analyze: false) }),
-            ("Format SQL", Icon.format, "⌘⇧I", { controller.formatSQL() }),
+            ("Beautify SQL", Icon.format, "⌘⇧I", { controller.formatSQL() }),
             ("Commit", Icon.commit, "⌘⇧S", { controller.commit() }),
             ("Rollback", Icon.rollback, "⌘⇧⌫", { controller.rollback() }),
             ("Refresh", Icon.refresh, "F5", { controller.refresh() }),

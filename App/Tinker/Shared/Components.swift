@@ -444,3 +444,88 @@ extension View {
         }
     }
 }
+
+/// A pop-up of fixed width for a bar.
+///
+/// SwiftUI's menu picker takes the width of its widest item and sits centred in whatever
+/// frame it is given, so two pickers side by side get gaps that depend on the names in
+/// them. This one fills the width it is offered and truncates a long title instead, so
+/// the bar keeps its layout whatever the connection or database is called.
+struct BarPopUp<ID: Hashable>: NSViewRepresentable {
+    struct Item: Equatable {
+        let id: ID
+        let title: String
+        var icon: String? = nil
+    }
+
+    let items: [Item]
+    @Binding var selection: ID
+    @Environment(\.controlSize) private var controlSize
+
+    func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let popUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        popUp.target = context.coordinator
+        popUp.action = #selector(Coordinator.didSelect(_:))
+        popUp.cell?.lineBreakMode = .byTruncatingTail
+        popUp.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        popUp.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return popUp
+    }
+
+    func updateNSView(_ popUp: NSPopUpButton, context: Context) {
+        context.coordinator.selection = $selection
+        let size = Self.appKitSize(controlSize)
+        if popUp.controlSize != size {
+            popUp.controlSize = size
+            popUp.font = NSFont.systemFont(ofSize: NSFont.systemFontSize(for: size))
+        }
+        if context.coordinator.items != items {
+            context.coordinator.items = items
+            popUp.removeAllItems()
+            for item in items {
+                let menuItem = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
+                if let icon = item.icon {
+                    menuItem.image = NSImage(systemSymbolName: icon, accessibilityDescription: nil)?
+                        .withSymbolConfiguration(.init(pointSize: NSFont.systemFontSize(for: size), weight: .regular))
+                }
+                popUp.menu?.addItem(menuItem)
+            }
+        }
+        if let index = items.firstIndex(where: { $0.id == selection }) {
+            if popUp.indexOfSelectedItem != index { popUp.selectItem(at: index) }
+        } else {
+            popUp.select(nil)
+        }
+    }
+
+    private static func appKitSize(_ size: ControlSize) -> NSControl.ControlSize {
+        switch size {
+        case .mini: .mini
+        case .small: .small
+        case .large, .extraLarge: .large
+        default: .regular
+        }
+    }
+
+    /// The width is the bar's to decide; the height is the control's own.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSPopUpButton, context: Context) -> CGSize? {
+        let own = nsView.intrinsicContentSize
+        return CGSize(width: proposal.width ?? own.width, height: own.height)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var selection: Binding<ID>
+        var items: [Item] = []
+
+        init(selection: Binding<ID>) { self.selection = selection }
+
+        @objc func didSelect(_ sender: NSPopUpButton) {
+            let index = sender.indexOfSelectedItem
+            guard index >= 0, index < items.count else { return }
+            selection.wrappedValue = items[index].id
+        }
+    }
+}

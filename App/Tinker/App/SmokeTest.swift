@@ -29,7 +29,12 @@ enum SmokeTest {
         let environment = AppEnvironment()
         await environment.load()
         check("store opens", environment.startupError == nil)
-        guard let config = environment.connections.first else {
+        // The pass is written against PostgreSQL (pg_sleep, the public schema), so it takes
+        // the first PostgreSQL connection wherever it sits in the store.
+        guard
+            let config = environment.connections.first(where: { $0.dialect == .postgresql })
+                ?? environment.connections.first
+        else {
             FileHandle.standardError.write(
                 Data(
                     "no connection configured; add one in the app first\n".utf8

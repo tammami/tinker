@@ -289,24 +289,124 @@ final class PagePlannerTests: XCTestCase {
 }
 
 final class SQLFormatterTests: XCTestCase {
-    func testKeywordsAreUppercasedAndClausesGetTheirOwnLine() {
-        let formatted = SQLFormatter.format("select a, b from t where a = 1 order by b", dialect: .postgresql)
-        XCTAssertEqual(formatted, "SELECT a, b\nFROM t\nWHERE a = 1\nORDER BY b")
+    func testClausesHeadTheirOwnLinesAndItemsSitBeneathThem() {
+        let formatted = SQLFormatter.format(
+            "select id, name from nama_tabel order by id desc limit 10;", dialect: .postgresql)
+        XCTAssertEqual(
+            formatted,
+            """
+            SELECT
+              id,
+              name
+            FROM
+              nama_tabel
+            ORDER BY
+              id DESC
+            LIMIT
+              10;
+            """)
     }
 
-    func testSubSelectsAreIndented() {
+    func testQualifiedNamesAndCallsStayTight() {
+        let formatted = SQLFormatter.format(
+            "select c.id, c.name, count(o.id) as orders, sum(o.total) as revenue from customers c "
+                + "left join orders o on o.customer_id = c.id group by c.id, c.name order by revenue desc nulls last",
+            dialect: .postgresql)
+        XCTAssertEqual(
+            formatted,
+            """
+            SELECT
+              c.id,
+              c.name,
+              count(o.id) AS orders,
+              sum(o.total) AS revenue
+            FROM
+              customers c
+              LEFT JOIN orders o ON o.customer_id = c.id
+            GROUP BY
+              c.id,
+              c.name
+            ORDER BY
+              revenue DESC NULLS LAST
+            """)
+    }
+
+    func testConditionsStartLinesButNotInsideParentheses() {
+        let formatted = SQLFormatter.format(
+            "select * from t where a >= 1 and (b = 2 or c = 3) and d between 1 and 5 and e in (1, 2)",
+            dialect: .postgresql)
+        XCTAssertEqual(
+            formatted,
+            """
+            SELECT
+              *
+            FROM
+              t
+            WHERE
+              a >= 1
+              AND (b = 2 OR c = 3)
+              AND d BETWEEN 1 AND 5
+              AND e IN (1, 2)
+            """)
+    }
+
+    func testSubSelectsAreIndentedInsideTheirParentheses() {
         let formatted = SQLFormatter.format(
             "select * from t where id in (select id from u where x = 1)", dialect: .postgresql
         )
-        XCTAssertTrue(formatted.contains("(\n    SELECT id"), formatted)
-        XCTAssertTrue(formatted.contains("    WHERE x = 1"), formatted)
+        XCTAssertEqual(
+            formatted,
+            """
+            SELECT
+              *
+            FROM
+              t
+            WHERE
+              id IN (
+                SELECT
+                  id
+                FROM
+                  u
+                WHERE
+                  x = 1
+              )
+            """)
+    }
+
+    func testInsertKeepsItsColumnListApart() {
+        let formatted = SQLFormatter.format(
+            "insert into t (a, b) values (1, 'x'), (2, 'y') returning id", dialect: .postgresql)
+        XCTAssertEqual(
+            formatted,
+            """
+            INSERT INTO
+              t (a, b)
+            VALUES
+              (1, 'x'),
+              (2, 'y')
+            RETURNING
+              id
+            """)
+    }
+
+    func testUpdateAndDelete() {
+        XCTAssertEqual(
+            SQLFormatter.format("update t set a = 1, b = 2 where id = 3", dialect: .mysql),
+            "UPDATE\n  t\nSET\n  a = 1,\n  b = 2\nWHERE\n  id = 3")
+        XCTAssertEqual(
+            SQLFormatter.format("delete from t where id = 3", dialect: .mysql),
+            "DELETE FROM\n  t\nWHERE\n  id = 3")
     }
 
     func testStringsAndCommentsSurviveUntouched() {
         let sql = "select 'Select FROM keep' -- keep this comment\nfrom t"
         let formatted = SQLFormatter.format(sql, dialect: .postgresql)
-        XCTAssertTrue(formatted.contains("'Select FROM keep'"))
-        XCTAssertTrue(formatted.contains("-- keep this comment"))
+        XCTAssertEqual(formatted, "SELECT\n  'Select FROM keep' -- keep this comment\nFROM\n  t")
+    }
+
+    func testOperatorsStayWholeAndCastsStayTight() {
+        let formatted = SQLFormatter.format("select a::text, b->>'k' from t where a <> 1", dialect: .postgresql)
+        XCTAssertEqual(formatted, "SELECT\n  a::text,\n  b ->> 'k'\nFROM\n  t\nWHERE\n  a <> 1")
     }
 
     func testQuotedIdentifiersKeepTheirCase() {
@@ -317,11 +417,18 @@ final class SQLFormatterTests: XCTestCase {
 
     func testMultipleStatementsKeepTheirTerminators() {
         let formatted = SQLFormatter.format("select 1; select 2;", dialect: .postgresql)
-        XCTAssertEqual(formatted, "SELECT 1;\n\nSELECT 2;")
+        XCTAssertEqual(formatted, "SELECT\n  1;\n\nSELECT\n  2;")
+    }
+
+    func testUnionAllStaysOnOneLine() {
+        let formatted = SQLFormatter.format("select 1 union all select 2", dialect: .postgresql)
+        XCTAssertEqual(formatted, "SELECT\n  1\nUNION ALL\nSELECT\n  2")
     }
 
     func testFormattingIsIdempotent() {
-        let sql = "select a, b from t join u on t.id = u.id where a = 1 group by a order by b"
+        let sql =
+            "with x as (select a from t) select a, b from x join u on x.id = u.id where a = 1 and b in (select 1) "
+            + "group by a order by b"
         let once = SQLFormatter.format(sql, dialect: .postgresql)
         XCTAssertEqual(SQLFormatter.format(once, dialect: .postgresql), once)
     }

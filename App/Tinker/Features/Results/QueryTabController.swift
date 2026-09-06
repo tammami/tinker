@@ -652,6 +652,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         await loadSessionChoices()
     }
 
+    /// Turns auto-commit on or off. Turning it on while a transaction is open commits that
+    /// transaction, so nothing is left waiting for a commit that would never come.
     public func setAutoCommit(_ enabled: Bool) async {
         autoCommit = enabled
         if enabled, isInTransaction { await commitTransaction() }

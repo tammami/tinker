@@ -112,6 +112,13 @@ public struct QueryTabView: View {
                 Button("Explain Analyze (runs the statement)") { controller.explain(analyze: true) }
             }
 
+            Button {
+                controller.formatSQL()
+            } label: {
+                Label("Beautify", systemImage: Icon.format)
+            }
+            .help("Lay the SQL out one clause per line (⌘⇧I)")
+
             if controller.isRunning {
                 Button {
                     controller.cancel()
@@ -127,37 +134,28 @@ public struct QueryTabView: View {
 
             BarDivider()
 
-            // The tab's session: statements resolve unqualified names here.
-            Picker(
-                "Connection",
+            // The tab's session: statements resolve unqualified names here. Both pop-ups
+            // keep a fixed width, so the bar reads the same whatever they are called.
+            BarPopUp(
+                items: controller.availableConnections.map {
+                    BarPopUp.Item(id: $0.id, title: $0.name, icon: Icon.connection)
+                },
                 selection: Binding(
                     get: { controller.connectionID },
                     set: { id in Task { await controller.selectConnection(id) } }
                 )
-            ) {
-                ForEach(controller.availableConnections) { config in
-                    Label(config.name, systemImage: Icon.connection).tag(config.id)
-                }
-            }
-            .labelsHidden()
+            )
             .frame(width: 170)
             .help("The connection this tab runs on")
 
-            Picker(
-                "Database",
+            BarPopUp(
+                items: (controller.sessionDatabase == nil ? [BarPopUp.Item(id: "", title: "Choose…")] : [])
+                    + controller.availableDatabases.map { BarPopUp.Item(id: $0, title: $0) },
                 selection: Binding(
                     get: { controller.sessionDatabase ?? "" },
                     set: { name in Task { await controller.selectDatabase(name) } }
                 )
-            ) {
-                if controller.sessionDatabase == nil {
-                    Text("Choose…").tag("")
-                }
-                ForEach(controller.availableDatabases, id: \.self) { name in
-                    Text(name).tag(name)
-                }
-            }
-            .labelsHidden()
+            )
             .frame(width: 160)
             .help(
                 controller.dialect == .mysql
@@ -167,15 +165,15 @@ public struct QueryTabView: View {
 
             BarDivider()
 
-            Toggle(
-                "Auto-commit",
-                isOn: Binding(
-                    get: { controller.autoCommit },
-                    set: { value in Task { await controller.setAutoCommit(value) } }
-                )
-            )
-            .toggleStyle(.checkbox)
-            .help("Off holds a transaction open until you commit or roll back")
+            // Bound to the property itself: a checkbox whose binding only changes its value
+            // later, on another turn of the run loop, snaps back to what it read and never
+            // shows the click. The commit that turning it on may owe happens after.
+            Toggle("Auto-commit", isOn: $controller.autoCommit)
+                .toggleStyle(.checkbox)
+                .onChange(of: controller.autoCommit) { _, enabled in
+                    Task { await controller.setAutoCommit(enabled) }
+                }
+                .help("Off holds a transaction open until you commit or roll back")
 
             if controller.isInTransaction {
                 Badge(text: "TRANSACTION OPEN", color: .orange)
@@ -185,7 +183,6 @@ public struct QueryTabView: View {
 
             Spacer()
 
-            IconButton(icon: Icon.format, label: "Format SQL (⌘⇧I)") { controller.formatSQL() }
             IconButton(icon: Icon.snippet, label: "Snippets (⌘⇧K)") {
                 workspace.isSnippetsPresented = true
             }

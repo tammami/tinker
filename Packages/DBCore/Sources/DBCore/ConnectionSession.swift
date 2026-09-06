@@ -342,6 +342,27 @@ public actor ConnectionSession {
         return value
     }
 
+    /// What the cache holds for a key, without reading anything on a miss.
+    public func cachedIntrospection<Value: Sendable>(_ key: IntrospectionCache.Key) -> Value? {
+        cache.value(for: key)
+    }
+
+    /// The same cache, read through a connection the caller already holds.
+    ///
+    /// A run of reads for one table — columns, key, indexes, foreign keys, checks,
+    /// triggers — leases once and goes through here, so a cold cache costs one connection
+    /// rather than one per read; on a fresh session each miss would otherwise open its own.
+    public func introspection<Value: Sendable>(
+        _ key: IntrospectionCache.Key,
+        on connection: any SQLConnection,
+        load: @Sendable (any SchemaIntrospector) async throws -> Value
+    ) async throws -> Value {
+        if let cached: Value = cache.value(for: key) { return cached }
+        let value = try await load(connection.introspector)
+        cache.store(value, for: key)
+        return value
+    }
+
     /// Drops cached schema information. Called by the user's Refresh and after the app
     /// itself runs DDL.
     public func invalidateIntrospection(_ key: IntrospectionCache.Key? = nil) {
@@ -356,6 +377,7 @@ public struct IntrospectionCache: Sendable {
         case databases
         case schemas(database: String)
         case tables(SchemaRef)
+        case tableInfo(TableRef)
         case columns(TableRef)
         case indexes(TableRef)
         case foreignKeys(TableRef)
@@ -378,7 +400,7 @@ public struct IntrospectionCache: Sendable {
             case let .columns(table), let .indexes(table), let .foreignKeys(table),
                 let .primaryKey(table), let .ddl(table), let .rowCount(table),
                 let .checkConstraints(table), let .triggers(table), let .partitioning(table),
-                let .viewDefinition(table):
+                let .viewDefinition(table), let .tableInfo(table):
                 table
             default:
                 nil

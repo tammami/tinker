@@ -125,7 +125,29 @@ public struct PostgresIntrospector: SchemaIntrospector {
             WHERE n.nspname = $1 AND c.relkind IN ('r', 'v', 'm', 'f', 'p')
             ORDER BY c.relname
             """, [.string(schema.schema)])
-        return result.rows.compactMap { row in
+        return Self.tableInfos(result, schema: schema)
+    }
+
+    /// One relation's entry: the designer's comment and owner without sizing every
+    /// relation in the schema.
+    public func tableInfo(of table: TableRef) async throws -> TableInfo? {
+        let result = try await query(
+            """
+            SELECT c.relname,
+                   c.relkind::text,
+                   obj_description(c.oid, 'pg_class'),
+                   pg_get_userbyid(c.relowner),
+                   CASE WHEN c.relkind IN ('r', 'm', 'p') THEN pg_total_relation_size(c.oid) ELSE NULL END::int8,
+                   c.reltuples::int8
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'v', 'm', 'f', 'p')
+            """, [.string(table.schemaRef.schema), .string(table.name)])
+        return Self.tableInfos(result, schema: table.schemaRef).first
+    }
+
+    private static func tableInfos(_ result: QueryResult, schema: SchemaRef) -> [TableInfo] {
+        result.rows.compactMap { row in
             guard let name = row[0].text else { return nil }
             let estimate: Int64? = if case let .int(value) = row[5], value >= 0 { value } else { nil }
             let size: Int64? = if case let .int(value) = row[4] { value } else { nil }

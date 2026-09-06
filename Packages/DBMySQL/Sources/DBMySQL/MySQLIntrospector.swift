@@ -89,7 +89,25 @@ public struct MySQLIntrospector: SchemaIntrospector {
             WHERE t.TABLE_SCHEMA = ?
             ORDER BY t.TABLE_NAME
             """, [.string(schema.database)])
-        return result.rows.compactMap { row in
+        return Self.tableInfos(result, schema: schema)
+    }
+
+    /// One row of `information_schema.TABLES`, so the designer's comment and engine cost
+    /// one indexed lookup rather than the sizes of every table in the database.
+    public func tableInfo(of table: TableRef) async throws -> TableInfo? {
+        let result = try await query(
+            """
+            SELECT t.TABLE_NAME, t.TABLE_TYPE, t.TABLE_COMMENT,
+                   t.DATA_LENGTH + t.INDEX_LENGTH, t.TABLE_ROWS,
+                   t.ENGINE, t.TABLE_COLLATION
+            FROM information_schema.TABLES t
+            WHERE t.TABLE_SCHEMA = ? AND t.TABLE_NAME = ?
+            """, [.string(table.schemaRef.database), .string(table.name)])
+        return Self.tableInfos(result, schema: table.schemaRef).first
+    }
+
+    private static func tableInfos(_ result: QueryResult, schema: SchemaRef) -> [TableInfo] {
+        result.rows.compactMap { row in
             guard let name = row[0].text else { return nil }
             let kind: TableKind =
                 switch (row[1].text ?? "BASE TABLE").uppercased() {

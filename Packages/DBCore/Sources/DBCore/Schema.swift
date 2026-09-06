@@ -441,6 +441,9 @@ public protocol SchemaIntrospector: Sendable {
     func schemas(in database: String) async throws -> [SchemaInfo]
     /// Tables, views and materialized views, each tagged with its kind.
     func tables(in schema: SchemaRef) async throws -> [TableInfo]
+    /// One table's entry, read on its own: the designer wants a comment and an engine,
+    /// not the size of every relation in the schema.
+    func tableInfo(of table: TableRef) async throws -> TableInfo?
     func columns(of table: TableRef) async throws -> [ColumnInfo]
     func indexes(of table: TableRef) async throws -> [IndexInfo]
     func foreignKeys(of table: TableRef) async throws -> [ForeignKeyInfo]
@@ -462,6 +465,11 @@ public protocol SchemaIntrospector: Sendable {
 }
 
 extension SchemaIntrospector {
+    /// Filters the schema's list; a driver overrides this with a query for the one table.
+    public func tableInfo(of table: TableRef) async throws -> TableInfo? {
+        try await tables(in: table.schemaRef).first { $0.ref == table }
+    }
+
     /// The columns that identify a row for editing: the primary key, or failing that
     /// the first unique index whose columns are all `NOT NULL` (SPEC §12.3).
     /// `nil` when the table has no usable identity, which makes the grid read-only.

@@ -117,12 +117,23 @@ enum UIDemo {
                         query.selection = GridSelection(row: 0, column: 1)
                     }
                 }
-            case "completion":
-                let tab = controller.newQueryTab(connectionID: config.id, sql: "SELECT * FROM cus")
+            case "completion", "completion-columns":
+                // `completion` shows the tables offered after FROM with nothing typed;
+                // `completion-columns` the first table's columns after `t.`.
+                let sql =
+                    item == "completion"
+                    ? "SELECT * FROM "
+                    : "SELECT * FROM \(preferred?.name ?? "orders") t WHERE t."
+                let tab = controller.newQueryTab(connectionID: config.id, sql: sql)
                 if let query = controller.queryController(for: tab) {
+                    await query.loadSessionChoices()
+                    if config.dialect == .mysql, let name = demoSchemaRef(schema)?.schema {
+                        await query.selectDatabase(name)
+                    }
                     await query.loadCompletionSources()
-                    query.caretOffset = query.sql.utf16.count
-                    try? await Task.sleep(for: .milliseconds(800))
+                    query.editorDidChangeText(sql)
+                    query.caretOffset = sql.utf16.count
+                    try? await Task.sleep(for: .milliseconds(1200))
                     NSApp.activate(ignoringOtherApps: true)
                     NotificationCenter.default.post(name: .tinkerOfferCompletion, object: nil)
                 }

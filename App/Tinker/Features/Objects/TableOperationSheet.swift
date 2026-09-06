@@ -34,9 +34,9 @@ struct TableOperationSheet: View {
 @MainActor
 private enum OperationRunner {
     static func run(
-        _ statements: [String], connectionID: UUID, environment: AppEnvironment
+        _ statements: [String], connectionID: UUID, table: TableRef, environment: AppEnvironment
     ) async throws -> QueryResult? {
-        guard let session = environment.session(for: connectionID) else { throw DBError.notConnected }
+        guard let session = environment.session(for: connectionID, table: table) else { throw DBError.notConnected }
         if await session.isReadOnly {
             throw DBError.protocolError("This connection is read-only. Unlock it with ⌘⇧L first.")
         }
@@ -109,7 +109,8 @@ private struct RenameTableSheet: View {
         isRunning = true
         defer { isRunning = false }
         do {
-            _ = try await OperationRunner.run([statement], connectionID: request.connectionID, environment: environment)
+            _ = try await OperationRunner.run(
+                [statement], connectionID: request.connectionID, table: request.table, environment: environment)
             onFinished(
                 TableRef(
                     database: request.table.database, schema: request.table.schema,
@@ -175,7 +176,8 @@ private struct DuplicateTableSheet: View {
         isRunning = true
         defer { isRunning = false }
         do {
-            _ = try await OperationRunner.run(statements, connectionID: request.connectionID, environment: environment)
+            _ = try await OperationRunner.run(
+                statements, connectionID: request.connectionID, table: request.table, environment: environment)
             onFinished(
                 TableRef(
                     database: request.table.database, schema: request.table.schema,
@@ -244,7 +246,7 @@ private struct MaintenanceSheet: View {
         let start = ContinuousClock.now
         do {
             output = try await OperationRunner.run(
-                [statement], connectionID: request.connectionID, environment: environment)
+                [statement], connectionID: request.connectionID, table: request.table, environment: environment)
             elapsed = start.duration(to: .now)
         } catch {
             failure = (error as? DBError)?.errorDescription ?? String(describing: error)
@@ -498,14 +500,16 @@ private struct ImportCSVSheet: View {
     }
 
     private func loadColumns() async {
-        guard let session = environment.session(for: request.connectionID) else { return }
         let table = request.table
+        guard let session = environment.session(for: request.connectionID, table: table) else { return }
         columns = (try? await session.introspection(.columns(table)) { try await $0.columns(of: table) }) ?? []
         rebuildMapping()
     }
 
     private func run() async {
-        guard let data, let session = environment.session(for: request.connectionID) else { return }
+        guard let data, let session = environment.session(for: request.connectionID, table: request.table) else {
+            return
+        }
         isRunning = true
         progressCount = 0
         failure = nil

@@ -189,12 +189,19 @@ public final class AppEnvironment {
         return session
     }
 
+    /// The database each connection's main session sits on, as the server reported it
+    /// when the sidebar listed databases; what tells a name apart from "another database".
+    public var currentDatabases: [UUID: String] = [:]
+
     /// A session on the same server but another database — what PostgreSQL needs to
     /// read or write a database other than the one the connection opens. The main
-    /// session is returned when `database` is that one or nil.
+    /// session is returned when `database` is that one or nil, and always for MySQL,
+    /// whose databases are schemas of the one server session.
     public func session(for id: UUID, database: String?) -> ConnectionSession? {
         guard let config = connections.first(where: { $0.id == id }) else { return nil }
-        guard let database, !database.isEmpty, database != config.database else { return session(for: id) }
+        guard config.dialect == .postgresql, let database, !database.isEmpty,
+            database != config.database, database != currentDatabases[id]
+        else { return session(for: id) }
         let key = "\(id.uuidString)/\(database)"
         if let existing = databaseSessions[key] { return existing }
         var other = config
@@ -203,6 +210,29 @@ public final class AppEnvironment {
             config: other, registry: registry, secrets: secrets, tunnelProvider: tunnelProvider, logger: logger)
         databaseSessions[key] = session
         return session
+    }
+
+    /// The session a schema's objects are read and written through.
+    public func session(for id: UUID, schema: SchemaRef) -> ConnectionSession? {
+        session(for: id, database: schema.database)
+    }
+
+    /// The session a table's rows and definition are read and written through.
+    public func session(for id: UUID, table: TableRef) -> ConnectionSession? {
+        session(for: id, database: table.database)
+    }
+
+    /// Every open session of a connection: the main one and those on its other databases.
+    public func sessions(for id: UUID) -> [ConnectionSession] {
+        let prefix = id.uuidString + "/"
+        let others = databaseSessions.filter { $0.key.hasPrefix(prefix) }.map(\.value)
+        return (sessions[id].map { [$0] } ?? []) + others
+    }
+
+    /// Closes every connection of `id` while keeping the sessions, so a watcher of the
+    /// main session's state sees it go and come back.
+    public func disconnect(_ id: UUID) async {
+        for session in sessions(for: id) { await session.disconnect() }
     }
 
     /// Drops a cached session so the next use picks up an edited configuration.

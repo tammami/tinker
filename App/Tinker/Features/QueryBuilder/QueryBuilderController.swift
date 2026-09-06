@@ -61,7 +61,7 @@ public final class QueryBuilderController {
         preview = QueryTabController(connectionID: connectionID, dialect: dialect, environment: environment)
     }
 
-    private var session: ConnectionSession? { environment.session(for: connectionID) }
+    private var session: ConnectionSession? { environment.session(for: connectionID, schema: schema) }
 
     /// The statement the canvas describes right now.
     public var sql: String? { model.sql(dialect: dialect) }

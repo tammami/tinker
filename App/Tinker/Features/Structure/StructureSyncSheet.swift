@@ -145,7 +145,7 @@ struct StructureSyncSheet: View {
     private func readIfPresent(
         _ table: TableRef, on connectionID: UUID
     ) async throws -> TableDefinition? {
-        guard let session = environment.session(for: connectionID) else {
+        guard let session = environment.session(for: connectionID, table: table) else {
             throw DBError.notConnected
         }
         _ = try await session.connect()

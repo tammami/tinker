@@ -52,7 +52,7 @@ public final class ObjectsController {
     }
 
     public func load() async {
-        guard let session = environment.session(for: connectionID) else {
+        guard let session = environment.session(for: connectionID, schema: schema) else {
             errorText = "No session for this connection"
             return
         }

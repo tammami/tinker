@@ -223,7 +223,7 @@ public final class WorkspaceController {
         let unsaved = open.filter { hasUnsavedWork($0) }.count
         guard !open.isEmpty else {
             sidebar.collapseConnection(connectionID)
-            Task { await environment.session(for: connectionID)?.disconnect() }
+            Task { await environment.disconnect(connectionID) }
             return
         }
         var message = "\(open.count) open tab\(open.count == 1 ? "" : "s") on this connection will be closed."
@@ -239,7 +239,7 @@ public final class WorkspaceController {
                 guard let self else { return }
                 closeTabs(for: connectionID)
                 sidebar.collapseConnection(connectionID)
-                await environment.session(for: connectionID)?.disconnect()
+                await environment.disconnect(connectionID)
             }
         )
     }
@@ -447,8 +447,9 @@ public final class WorkspaceController {
             let session = environment.session(for: id)
         else { return }
         Task {
+            // Every session of the connection unlocks or locks together.
             let current = await session.isReadOnly
-            await session.setReadOnlyOverride(current)
+            for each in environment.sessions(for: id) { await each.setReadOnlyOverride(current) }
         }
     }
 

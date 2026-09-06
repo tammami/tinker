@@ -55,6 +55,7 @@ public struct QueryTabView: View {
         }
         .task(id: tab.id) {
             controller.sql = tab.sql
+            controller.autoCommit = tab.autoCommit
             await controller.loadSessionChoices()
             await controller.loadCompletionSources()
         }
@@ -171,6 +172,7 @@ public struct QueryTabView: View {
             Toggle("Auto-commit", isOn: $controller.autoCommit)
                 .toggleStyle(.checkbox)
                 .onChange(of: controller.autoCommit) { _, enabled in
+                    tab.autoCommit = enabled
                     Task { await controller.setAutoCommit(enabled) }
                 }
                 .help("Off holds a transaction open until you commit or roll back")

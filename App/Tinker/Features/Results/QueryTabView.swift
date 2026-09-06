@@ -488,7 +488,27 @@ public struct QueryTabView: View {
                 if let grid = result.grid, grid.isPaged, let reason = grid.readOnlyReason {
                     Text(reason).foregroundStyle(.secondary).lineLimit(1)
                 }
-                if let grid = result.grid, grid.edits.pendingStatementCount > 0 {
+                if let grid = result.grid, controller.autoCommit {
+                    // Nothing to confirm: a write in flight says so, a refused one offers a
+                    // retry, and a new row says when it will go.
+                    if controller.isWritingEdits {
+                        ProgressView().controlSize(.small)
+                        Text("Saving…")
+                    } else if grid.edits.pendingStatementCount(.loadedRowsOnly) > 0 {
+                        Button("Discard") { controller.discardEdits() }
+                            .controlSize(.small)
+                        Button {
+                            Task { await controller.commitEdits() }
+                        } label: {
+                            Label("Retry", systemImage: Icon.commit)
+                        }
+                        .controlSize(.small)
+                        .buttonStyle(.borderedProminent)
+                        .help("The last write was refused; the edit is still here")
+                    } else if !grid.edits.pendingInserts.isEmpty {
+                        Text("New row saves when you leave it")
+                    }
+                } else if let grid = result.grid, grid.edits.pendingStatementCount > 0 {
                     Button("Discard") { controller.discardEdits() }
                         .controlSize(.small)
                     Button {

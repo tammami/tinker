@@ -3,6 +3,7 @@ import DBCore
 import DBGrid
 import DBSQL
 import Foundation
+import Logging
 
 /// Opens a scene on launch when `--ui-demo <scene>` is passed, for screenshots and review.
 ///
@@ -17,6 +18,8 @@ enum UIDemo {
     }
 
     /// The schema a tree row stands for: a schema row's own, or a MySQL database's pseudo-schema.
+    static let logger = Logger(label: "tinker.demo")
+
     static func demoSchemaRef(_ item: SidebarItem) -> SchemaRef? {
         switch item.kind {
         case let .schema(_, ref): ref
@@ -82,9 +85,35 @@ enum UIDemo {
                         }
                     }
                 }
-            case "structure":
-                if let preferred { controller.openTable(preferred.ref, connectionID: config.id) }
+            case "structure", "structure-enum":
                 UserDefaults.standard.set(true, forKey: "uiDemo.structure")
+                // The enum scene wants a table that has one; `users` in the demo data does.
+                let chosen = item == "structure-enum" ? tables.first { $0.name == "users" } ?? preferred : preferred
+                if let chosen {
+                    let tab = controller.openTable(chosen.ref, connectionID: config.id)
+                    if let table = controller.tableController(for: tab) {
+                        let started = ContinuousClock.now
+                        await table.structure.load()
+                        let pooled = await environment.session(for: config.id)?.pooledConnectionCount ?? 0
+                        Self.logger.info(
+                            "structure switch",
+                            metadata: ["waited": "\(started.duration(to: .now))", "pooledConnections": "\(pooled)"])
+                        let columns = table.structure.edited?.columns ?? []
+                        // An enum column shows the member field; the sheet needs one.
+                        if let enumColumn = columns.first(where: {
+                            ColumnTypeSpec.parse($0.type).isEnumeration || $0.enumLabels != nil
+                        }) {
+                            table.structure.selectedColumnID = enumColumn.id
+                        }
+                        // Brought to the front, so a capture of the window finds it on screen.
+                        NSApp.activate(ignoringOtherApps: true)
+                        if item == "structure-enum" {
+                            table.structure.isEditing = true
+                            try? await Task.sleep(for: .milliseconds(600))
+                            table.structure.isEnumEditorPresented = true
+                        }
+                    }
+                }
             case "query":
                 let sql = """
                     SELECT c.id, c.name, count(o.id) AS orders, sum(o.total) AS revenue

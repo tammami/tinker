@@ -2,6 +2,7 @@ import DBCore
 import DBGrid
 import DBSQL
 import Foundation
+import Logging
 import Observation
 
 /// Drives the Structure tab: what the server has, what the user is editing, and the
@@ -27,8 +28,17 @@ public final class StructureController {
     public private(set) var statusText: String?
     /// Structure is read-only until this is turned on, so browsing cannot alter anything.
     public var isEditing = false
-    /// The collations the column editor offers.
+    /// The collations the column editor offers. Read only when the detail panel asks.
     public private(set) var collations: [CollationInfo] = []
+    /// The column the detail panel shows and the arrow keys move between.
+    public var selectedColumnID: UUID?
+    /// The enum member editor, opened from the detail panel's "…" button.
+    public var isEnumEditorPresented = false
+    /// How long the last catalog read took, for the smoke test and the log.
+    public private(set) var lastLoadDuration: Duration?
+    /// The read in flight, so a second caller waits for it instead of starting another.
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private let logger = Logger(label: "tinker.structure")
     /// Set once a `.create` tab has actually built its table, so the caller can close the
     /// sheet and open the table for real.
     public private(set) var didCreate = false
@@ -80,47 +90,75 @@ public final class StructureController {
 
     // MARK: - Loading
 
+    /// Reads the table's definition, once.
+    ///
+    /// The table tab starts this read as soon as its rows are on screen, and the Structure
+    /// view asks again when it appears; the second caller waits for the read in flight
+    /// rather than starting its own, so the switch costs nothing extra.
     public func load(force: Bool = false) async {
         // Nothing to read: the table does not exist yet.
         guard mode == .edit else { return }
+        if let loadTask, !force {
+            await loadTask.value
+            return
+        }
         // Already read: switching back to Structure shows it at once rather than re-reading.
-        if loaded != nil, !force, !isLoading { return }
+        if loaded != nil, !force { return }
+        let task = Task { await read() }
+        loadTask = task
+        await task.value
+        if loadTask == task { loadTask = nil }
+    }
+
+    /// One leased connection, the catalog reads one after another on it.
+    ///
+    /// Reads fired together each miss the cache at once, and on a fresh session every
+    /// miss leases — and opens — its own connection; seven handshakes cost more than
+    /// seven small queries in a row on one.
+    private func read() async {
         guard let session else {
             errorText = "No session for this connection"
             return
         }
         isLoading = true
         defer { isLoading = false }
+        let started = ContinuousClock.now
         do {
-            _ = try await session.connect()
             let table = table
-            // Eight catalog reads, in flight together: the tab opens as fast as the slowest
-            // of them rather than the sum of all of them.
-            async let infoRead = session.introspection(.tables(table.schemaRef)) {
-                try await $0.tables(in: table.schemaRef)
+            let (lease, connection) = try await session.lease()
+            defer { Task { await session.release(lease) } }
+
+            let columns = try await session.introspection(.columns(table), on: connection) {
+                try await $0.columns(of: table)
             }
-            async let columnsRead = session.introspection(.columns(table)) { try await $0.columns(of: table) }
-            async let primaryKeyRead = session.introspection(.primaryKey(table)) { try await $0.primaryKey(of: table) }
-            async let indexesRead = session.introspection(.indexes(table)) { try await $0.indexes(of: table) }
-            async let foreignKeysRead = session.introspection(.foreignKeys(table)) {
+            let primaryKey =
+                try await session.introspection(.primaryKey(table), on: connection) {
+                    try await $0.primaryKey(of: table)
+                } ?? []
+            let indexes = try await session.introspection(.indexes(table), on: connection) {
+                try await $0.indexes(of: table)
+            }
+            let foreignKeys = try await session.introspection(.foreignKeys(table), on: connection) {
                 try await $0.foreignKeys(of: table)
             }
-            async let checksRead = session.introspection(.checkConstraints(table)) {
+            let checks = try await session.introspection(.checkConstraints(table), on: connection) {
                 try await $0.checkConstraints(of: table)
             }
-            async let triggersRead = session.introspection(.triggers(table)) { try await $0.triggers(of: table) }
-            async let partitioningRead = session.introspection(.partitioning(table)) {
+            let triggers = try await session.introspection(.triggers(table), on: connection) {
+                try await $0.triggers(of: table)
+            }
+            let partitioning = try await session.introspection(.partitioning(table), on: connection) {
                 try await $0.partitioning(of: table)
             }
-
-            let info = try await infoRead.first { $0.ref == table }
-            let columns = try await columnsRead
-            let primaryKey = try await primaryKeyRead ?? []
-            let indexes = try await indexesRead
-            let foreignKeys = try await foreignKeysRead
-            let checks = try await checksRead
-            let triggers = try await triggersRead
-            let partitioning = try await partitioningRead
+            // The sidebar has usually listed the schema already; if not, one row is read,
+            // never the size of every table in it.
+            let listed: [TableInfo]? = await session.cachedIntrospection(.tables(table.schemaRef))
+            var info = listed?.first { $0.ref == table }
+            if info == nil {
+                info = try await session.introspection(.tableInfo(table), on: connection) {
+                    try await $0.tableInfo(of: table)
+                }
+            }
 
             let definition = TableDefinition(
                 table: table,
@@ -131,23 +169,53 @@ public final class StructureController {
                 foreignKeys: foreignKeys,
                 checks: checks,
                 triggers: triggers,
-                partitioning: partitioning
+                partitioning: partitioning,
+                options: TableOptions(engine: info?.engine, collation: info?.collation)
             )
             loaded = definition
             edited = definition
             errorText = nil
+            if selectedColumnID == nil || !definition.columns.contains(where: { $0.id == selectedColumnID }) {
+                selectedColumnID = definition.columns.first?.id
+            }
         } catch {
             errorText = (error as? DBError)?.errorDescription ?? String(describing: error)
         }
+        let duration = started.duration(to: .now)
+        lastLoadDuration = duration
+        logger.info("structure read", metadata: ["table": "\(table.name)", "took": "\(duration)"])
     }
 
-    /// Loaded lazily: the picker needs them, the rest of the tab does not.
+    /// Loaded lazily: the detail panel's pickers need them, the rest of the tab does not.
     public func loadCollationsIfNeeded() async {
         guard collations.isEmpty, let session else { return }
         collations =
             (try? await session.introspection(.collations(database: table.database)) {
                 try await $0.collations(in: table.database)
             }) ?? []
+    }
+
+    /// MySQL groups collations under character sets; the panel offers those sets.
+    public var characterSets: [String] {
+        var seen = Set<String>()
+        return collations.compactMap { collation in
+            guard let set = collation.characterSet, seen.insert(set).inserted else { return nil }
+            return set
+        }
+    }
+
+    /// The column the detail panel is showing, in the edited definition.
+    public var selectedColumnIndex: Int? {
+        guard let selectedColumnID else { return nil }
+        return edited?.columns.firstIndex { $0.id == selectedColumnID }
+    }
+
+    /// Moves the selection by `offset` rows, staying inside the list.
+    public func moveSelection(by offset: Int) {
+        guard let columns = edited?.columns, !columns.isEmpty else { return }
+        let current = selectedColumnIndex ?? (offset > 0 ? -1 : columns.count)
+        let next = min(max(current + offset, 0), columns.count - 1)
+        selectedColumnID = columns[next].id
     }
 
     // MARK: - The pending change

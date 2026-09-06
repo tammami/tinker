@@ -71,10 +71,8 @@ public struct StructureView: View {
         // Keyed on the table: SwiftUI reuses this view when the front tab changes, and an
         // unkeyed task would not run again, leaving the new tab reading "No structure
         // loaded" forever.
-        .task(id: controller.table.id) {
-            await controller.load()
-            await controller.loadCollationsIfNeeded()
-        }
+        // Collations are read by the column detail panel when it appears, not here.
+        .task(id: controller.table.id) { await controller.load() }
         .refreshable { await controller.load(force: true) }
         .sheet(isPresented: isPreviewPresented) {
             DDLPreviewView(
@@ -177,6 +175,8 @@ public struct StructureView: View {
 struct StructureGrid<Row: Identifiable, Content: View>: View {
     let headers: [(title: String, width: CGFloat?)]
     let rows: [Row]
+    /// The row drawn in the accent colour, for panes that select.
+    var selectedID: Row.ID? = nil
     let content: (Row, Int) -> Content
 
     var body: some View {
@@ -201,9 +201,11 @@ struct StructureGrid<Row: Identifiable, Content: View>: View {
                         content(row, index)
                             .padding(.vertical, 3)
                             .background(
-                                index.isMultiple(of: 2)
-                                    ? Color.clear
-                                    : Color(nsColor: .alternatingContentBackgroundColors[1])
+                                row.id == selectedID
+                                    ? Color.accentColor
+                                    : index.isMultiple(of: 2)
+                                        ? Color.clear
+                                        : Color(nsColor: .alternatingContentBackgroundColors[1])
                             )
                         Divider()
                     }
@@ -229,10 +231,10 @@ private struct Cell<Content: View>: View {
 struct ColumnsPane: View {
     @Bindable var controller: StructureController
 
-    /// Which column the move buttons act on. -1 when none is chosen.
-    @State private var selectedColumn = -1
+    /// Key, Name, Type, Length, Decimals, Not null, Auto, Default, Comment.
+    private let widths: [CGFloat?] = [30, 170, 140, 64, 68, 60, 46, 140, nil]
 
-    private let widths: [CGFloat?] = [34, 180, 150, 60, 140, 46, 130, nil]
+    private var selectedIndex: Int? { controller.selectedColumnIndex }
 
     private func move(_ index: Int, by offset: Int) {
         guard var columns = controller.edited?.columns,
@@ -241,105 +243,70 @@ struct ColumnsPane: View {
         else { return }
         columns.swapAt(index, index + offset)
         controller.edited?.columns = columns
-        selectedColumn = index + offset
     }
 
     var body: some View {
         VStack(spacing: 0) {
             StructureGrid(
                 headers: [
-                    ("PK", widths[0]), ("Name", widths[1]), ("Type", widths[2]),
-                    ("Not null", widths[3]), ("Default", widths[4]), ("Auto", widths[5]),
-                    ("Collation", widths[6]), ("Comment", widths[7]),
+                    ("Key", widths[0]), ("Name", widths[1]), ("Type", widths[2]),
+                    ("Length", widths[3]), ("Decimals", widths[4]), ("Not null", widths[5]),
+                    ("Auto", widths[6]), ("Default", widths[7]), ("Comment", widths[8]),
                 ],
-                rows: controller.edited?.columns ?? []
+                rows: controller.edited?.columns ?? [],
+                selectedID: controller.selectedColumnID
             ) { column, index in
-                HStack(spacing: 0) {
-                    Cell(width: widths[0]) {
-                        Toggle("", isOn: primaryKeyBinding(for: column.name))
-                            .labelsHidden()
-                            .disabled(!controller.isEditing)
-                            .accessibilityLabel("\(column.name) primary key")
-                    }
-                    Cell(width: widths[1]) {
-                        field(index, \.name, placeholder: "name")
-                    }
-                    Cell(width: widths[2]) {
-                        field(index, \.type, placeholder: "type")
-                    }
-                    Cell(width: widths[3]) {
-                        Toggle(
-                            "",
-                            isOn: Binding(
-                                get: { !(controller.edited?.columns[safe: index]?.isNullable ?? true) },
-                                set: { controller.edited?.columns[safe: index]?.isNullable = !$0 }
-                            )
-                        )
-                        .labelsHidden()
-                        .disabled(!controller.isEditing)
-                        .accessibilityLabel("\(column.name) not null")
-                    }
-                    Cell(width: widths[4]) {
-                        optionalField(index, \.defaultExpression, placeholder: "none")
-                    }
-                    Cell(width: widths[5]) {
-                        Toggle(
-                            "",
-                            isOn: Binding(
-                                get: { controller.edited?.columns[safe: index]?.isAutoIncrement ?? false },
-                                set: { controller.edited?.columns[safe: index]?.isAutoIncrement = $0 }
-                            )
-                        )
-                        .labelsHidden()
-                        .disabled(!controller.isEditing)
-                        .accessibilityLabel("\(column.name) auto increment")
-                    }
-                    Cell(width: widths[6]) {
-                        collationPicker(index)
-                    }
-                    Cell(width: widths[7]) {
-                        optionalField(index, \.comment, placeholder: "")
-                    }
+                row(column, index)
+            }
+            // Arrow keys walk the rows once the grid has focus; a click gives it focus.
+            .focusable()
+            .focusEffectDisabled()
+            .onMoveCommand { direction in
+                switch direction {
+                case .up: controller.moveSelection(by: -1)
+                case .down: controller.moveSelection(by: 1)
+                default: break
                 }
+            }
+
+            if let index = selectedIndex, let column = controller.edited?.columns[safe: index] {
+                Divider()
+                ColumnDetailPanel(controller: controller, index: index, column: column)
             }
 
             if controller.isEditing {
                 PaneFooter(
                     addTitle: "Add Column",
+                    removeTitle: "Remove the selected column",
                     onAdd: {
-                        controller.edited?.columns.append(
-                            ColumnDefinition(name: "new_column", type: defaultType)
-                        )
+                        let column = ColumnDefinition(name: "new_column", type: defaultType)
+                        controller.edited?.columns.append(column)
+                        controller.selectedColumnID = column.id
                     },
                     onRemove: {
-                        guard controller.edited?.columns.isEmpty == false else { return }
-                        controller.edited?.columns.removeLast()
+                        // The selected column goes; the one that takes its place is selected.
+                        guard let index = selectedIndex ?? controller.edited?.columns.indices.last else { return }
+                        controller.edited?.columns.remove(at: index)
+                        let remaining = controller.edited?.columns ?? []
+                        controller.selectedColumnID = remaining[safe: min(index, remaining.count - 1)]?.id
                     }
                 ) {
                     // PostgreSQL has no syntax for moving a column, so the control is
                     // absent there rather than present and disabled.
                     if controller.dialect == .mysql {
                         BarDivider()
-                        IconButton(icon: "arrow.up", label: "Move Up") { move(selectedColumn, by: -1) }
-                            .disabled(selectedColumn <= 0)
-
-                        IconButton(icon: "arrow.down", label: "Move Down") { move(selectedColumn, by: 1) }
-                            .disabled(
-                                selectedColumn < 0
-                                    || selectedColumn >= (controller.edited?.columns.count ?? 0) - 1
-                            )
-
-                        Picker("", selection: $selectedColumn) {
-                            Text("Select a column").tag(-1)
-                            ForEach(
-                                Array((controller.edited?.columns ?? []).enumerated()),
-                                id: \.offset
-                            ) { offset, column in
-                                Text(column.name).tag(offset)
-                            }
+                        IconButton(icon: Icon.moveUp, label: "Move Up") {
+                            if let index = selectedIndex { move(index, by: -1) }
                         }
-                        .labelsHidden()
-                        .frame(width: 160)
+                        .disabled((selectedIndex ?? 0) <= 0)
+
+                        IconButton(icon: Icon.moveDown, label: "Move Down") {
+                            if let index = selectedIndex { move(index, by: 1) }
+                        }
+                        .disabled(
+                            selectedIndex == nil
+                                || (selectedIndex ?? 0) >= (controller.edited?.columns.count ?? 0) - 1
+                        )
                     }
                 }
             }
@@ -350,29 +317,145 @@ struct ColumnsPane: View {
         controller.dialect == .postgresql ? "text" : "varchar(255)"
     }
 
-    /// The collations the server actually offers. A free-text field here is a typo waiting
-    /// to become a failed statement, so the list is the control.
-    @ViewBuilder
-    private func collationPicker(_ index: Int) -> some View {
-        if controller.collations.isEmpty {
-            optionalField(index, \.collation, placeholder: "default")
-        } else {
-            Picker(
-                "",
-                selection: Binding(
-                    get: { controller.edited?.columns[safe: index]?.collation ?? "" },
-                    set: { controller.edited?.columns[safe: index]?.collation = $0.isEmpty ? nil : $0 }
-                )
-            ) {
-                Text("default").tag("")
-                ForEach(controller.collations) { collation in
-                    Text(collation.name).tag(collation.name)
+    private func row(_ column: ColumnDefinition, _ index: Int) -> some View {
+        let isSelected = column.id == controller.selectedColumnID
+        let spec = ColumnTypeSpec.parse(column.type)
+        let choice = ColumnTypeCatalog.choice(named: spec.base, dialect: controller.dialect)
+        return HStack(spacing: 0) {
+            Cell(width: widths[0]) {
+                Button {
+                    primaryKeyBinding(for: column.name).wrappedValue.toggle()
+                } label: {
+                    Image(systemName: Icon.key)
+                        .foregroundStyle(
+                            controller.edited?.primaryKey.contains(column.name) == true
+                                ? (isSelected ? Color.white : Color.yellow)
+                                : Color.clear
+                        )
+                        .frame(width: DesignTokens.Metrics.iconWidth)
                 }
+                .buttonStyle(.plain)
+                .disabled(!controller.isEditing)
+                .accessibilityLabel("\(column.name) primary key")
             }
-            .labelsHidden()
-            .disabled(!controller.isEditing)
-            .accessibilityLabel("collation")
+            Cell(width: widths[1]) {
+                field(index, \.name, placeholder: "name")
+            }
+            Cell(width: widths[2]) {
+                typePicker(index, spec: spec)
+            }
+            Cell(width: widths[3]) {
+                numberField(
+                    index,
+                    value: spec.length,
+                    enabled: choice?.takesLength ?? true,
+                    label: "\(column.name) length"
+                ) { spec, value in spec.length = value }
+            }
+            Cell(width: widths[4]) {
+                numberField(
+                    index,
+                    value: spec.decimals,
+                    enabled: choice?.takesDecimals ?? (spec.length != nil),
+                    label: "\(column.name) decimals"
+                ) { spec, value in spec.decimals = value }
+            }
+            Cell(width: widths[5]) {
+                Toggle(
+                    "",
+                    isOn: Binding(
+                        get: { !(controller.edited?.columns[safe: index]?.isNullable ?? true) },
+                        set: { controller.edited?.columns[safe: index]?.isNullable = !$0 }
+                    )
+                )
+                .labelsHidden()
+                .disabled(!controller.isEditing)
+                .accessibilityLabel("\(column.name) not null")
+            }
+            Cell(width: widths[6]) {
+                Toggle(
+                    "",
+                    isOn: Binding(
+                        get: { controller.edited?.columns[safe: index]?.isAutoIncrement ?? false },
+                        set: { controller.edited?.columns[safe: index]?.isAutoIncrement = $0 }
+                    )
+                )
+                .labelsHidden()
+                .disabled(!controller.isEditing)
+                .accessibilityLabel("\(column.name) auto increment")
+            }
+            Cell(width: widths[7]) {
+                optionalField(index, \.defaultExpression, placeholder: "none")
+            }
+            Cell(width: widths[8]) {
+                optionalField(index, \.comment, placeholder: "")
+            }
         }
+        .foregroundStyle(isSelected ? Color.white : Color.primary)
+        .contentShape(Rectangle())
+        // Simultaneous, so a click inside a field both focuses it and selects its row.
+        .simultaneousGesture(TapGesture().onEnded { controller.selectedColumnID = column.id })
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    /// The base type from the dialect's list; a type the list does not carry stays as
+    /// itself at the top, so nothing is ever rewritten just by being shown.
+    @ViewBuilder
+    private func typePicker(_ index: Int, spec: ColumnTypeSpec) -> some View {
+        let choices = ColumnTypeCatalog.choices(for: controller.dialect)
+        let base = spec.base.lowercased()
+        let known = choices.contains { $0.name == base }
+        BarPopUp(
+            items: (known ? [] : [BarPopUp.Item(id: spec.base, title: spec.base)])
+                + choices.map { BarPopUp.Item(id: $0.name, title: $0.name) },
+            selection: Binding(
+                get: { known ? base : spec.base },
+                set: { newBase in
+                    updateType(index) { spec in
+                        spec.base = newBase
+                        let choice = ColumnTypeCatalog.choice(named: newBase, dialect: controller.dialect)
+                        if let choice {
+                            if !choice.takesLength { spec.length = nil }
+                            if !choice.takesDecimals { spec.decimals = nil }
+                        }
+                        if !spec.isEnumeration { spec.values = [] }
+                    }
+                }
+            )
+        )
+        .disabled(!controller.isEditing)
+        .accessibilityLabel("type")
+    }
+
+    private func numberField(
+        _ index: Int, value: Int?, enabled: Bool, label: String,
+        apply: @escaping (inout ColumnTypeSpec, Int?) -> Void
+    ) -> some View {
+        TextField(
+            "",
+            text: Binding(
+                get: { value.map(String.init) ?? "" },
+                set: { text in
+                    let trimmed = text.trimmingCharacters(in: .whitespaces)
+                    guard trimmed.isEmpty || Int(trimmed) != nil else { return }
+                    updateType(index) { spec in apply(&spec, Int(trimmed)) }
+                }
+            )
+        )
+        .textFieldStyle(.plain)
+        .multilineTextAlignment(.trailing)
+        .monospacedDigit()
+        .disabled(!controller.isEditing || !enabled)
+        .accessibilityLabel(label)
+    }
+
+    /// Rewrites one column's type through its parts.
+    private func updateType(_ index: Int, _ change: (inout ColumnTypeSpec) -> Void) {
+        guard let column = controller.edited?.columns[safe: index] else { return }
+        var spec = ColumnTypeSpec.parse(column.type)
+        change(&spec)
+        controller.edited?.columns[safe: index]?.type = spec.render(dialect: controller.dialect)
     }
 
     private func field(
@@ -418,6 +501,250 @@ struct ColumnsPane: View {
                 controller.edited = definition
             }
         )
+    }
+}
+
+// MARK: - Column detail
+
+/// The selected column's settings that do not fit a grid cell: enum members, the default,
+/// the character set and collation.
+struct ColumnDetailPanel: View {
+    @Bindable var controller: StructureController
+    let index: Int
+    let column: ColumnDefinition
+
+    private var spec: ColumnTypeSpec { ColumnTypeSpec.parse(column.type) }
+    private var isEditing: Bool { controller.isEditing }
+    private var dialect: SQLDialect { controller.dialect }
+
+    /// PostgreSQL enum columns name a type whose members live in the catalog.
+    private var isPostgresEnum: Bool { dialect == .postgresql && column.enumLabels != nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            if spec.isEnumeration || isPostgresEnum {
+                FieldRow(label: "Enum Value") {
+                    HStack(spacing: DesignTokens.Spacing.xs) {
+                        TextField(
+                            "'a','b'",
+                            text: Binding(
+                                get: { membersText },
+                                set: { text in
+                                    updateType { $0.values = ColumnTypeSpec.parseMembers(text) }
+                                }
+                            )
+                        )
+                        .disabled(!isEditing || isPostgresEnum)
+                        .accessibilityLabel("enum values")
+                        Button("…") { controller.isEnumEditorPresented = true }
+                            .help("Edit the members one per row")
+                            .accessibilityLabel("Edit enum values")
+                    }
+                }
+                if isPostgresEnum {
+                    FieldRow(label: "") {
+                        Text("Members belong to the type \(spec.base); change them with ALTER TYPE.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            FieldRow(label: "Default Value") {
+                HStack(spacing: DesignTokens.Spacing.xs) {
+                    TextField(
+                        "none",
+                        text: Binding(
+                            get: { column.defaultExpression ?? "" },
+                            set: { controller.edited?.columns[safe: index]?.defaultExpression = $0.isEmpty ? nil : $0 }
+                        )
+                    )
+                    .disabled(!isEditing)
+                    .accessibilityLabel("default value")
+                    Menu {
+                        Button("No default") { setDefault(nil) }
+                        Button("NULL") { setDefault("NULL") }
+                        Button("Empty string") { setDefault("''") }
+                        Button("CURRENT_TIMESTAMP") { setDefault("CURRENT_TIMESTAMP") }
+                    } label: {
+                        Image(systemName: Icon.chevronDown)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .disabled(!isEditing)
+                    .accessibilityLabel("default value choices")
+                }
+            }
+
+            if dialect == .mysql {
+                FieldRow(label: "Character Set") {
+                    BarPopUp(
+                        items: [BarPopUp.Item(id: "", title: "default")]
+                            + controller.characterSets.map { BarPopUp.Item(id: $0, title: $0) },
+                        selection: Binding(
+                            get: { column.characterSet ?? "" },
+                            set: { value in
+                                controller.edited?.columns[safe: index]?.characterSet = value.isEmpty ? nil : value
+                                // A collation of another character set cannot stay.
+                                if let collation = column.collation,
+                                    !collation.hasPrefix(value), !value.isEmpty
+                                {
+                                    controller.edited?.columns[safe: index]?.collation = nil
+                                }
+                            }
+                        )
+                    )
+                    .frame(maxWidth: .infinity)
+                    .disabled(!isEditing)
+                    .accessibilityLabel("character set")
+                }
+            }
+
+            FieldRow(label: "Collation") {
+                BarPopUp(
+                    items: [BarPopUp.Item(id: "", title: "default")]
+                        + collationChoices.map { BarPopUp.Item(id: $0.name, title: $0.name) },
+                    selection: Binding(
+                        get: { column.collation ?? "" },
+                        set: { controller.edited?.columns[safe: index]?.collation = $0.isEmpty ? nil : $0 }
+                    )
+                )
+                .frame(maxWidth: .infinity)
+                .disabled(!isEditing)
+                .accessibilityLabel("collation")
+            }
+        }
+        .controlSize(.small)
+        .padding(DesignTokens.Spacing.lg)
+        .frame(maxWidth: 560)
+        .frame(maxWidth: .infinity)
+        .task(id: controller.table.id) { await controller.loadCollationsIfNeeded() }
+        .sheet(isPresented: $controller.isEnumEditorPresented) {
+            EnumValuesSheet(
+                values: isPostgresEnum ? (column.enumLabels ?? []) : spec.values,
+                typeName: spec.base,
+                readOnlyNote: isPostgresEnum
+                    ? "Members of a PostgreSQL type are changed with ALTER TYPE, not here."
+                    : isEditing ? nil : "Press Edit on the Structure tab to change the members.",
+                onSave: { values in updateType { $0.values = values } }
+            )
+        }
+    }
+
+    private var membersText: String {
+        if isPostgresEnum {
+            return (column.enumLabels ?? []).map { SQLLiteral.quoteString($0, dialect: dialect) }.joined(separator: ",")
+        }
+        return spec.membersText(dialect: dialect)
+    }
+
+    /// The collations of the chosen character set, or all of them when none is chosen.
+    private var collationChoices: [CollationInfo] {
+        guard let set = column.characterSet, !set.isEmpty else { return controller.collations }
+        return controller.collations.filter { $0.characterSet == set }
+    }
+
+    private func setDefault(_ value: String?) {
+        controller.edited?.columns[safe: index]?.defaultExpression = value
+    }
+
+    private func updateType(_ change: (inout ColumnTypeSpec) -> Void) {
+        var spec = spec
+        change(&spec)
+        controller.edited?.columns[safe: index]?.type = spec.render(dialect: dialect)
+    }
+}
+
+/// The members of an enum or set, one per row, the way Navicat edits them.
+struct EnumValuesSheet: View {
+    @State var values: [String]
+    let typeName: String
+    /// Why the members cannot be changed here, or nil when they can.
+    let readOnlyNote: String?
+    let onSave: ([String]) -> Void
+
+    private var isReadOnly: Bool { readOnlyNote != nil }
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var selected: Int?
+    @FocusState private var focusedRow: Int?
+
+    var body: some View {
+        SheetFrame(
+            title: "\(typeName.capitalized) Values",
+            icon: Icon.column,
+            subtitle: readOnlyNote ?? "One member per row, in the order they are stored.",
+            width: DesignTokens.Metrics.sheetWidth,
+            contentInset: 0
+        ) {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Values")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .frame(height: DesignTokens.Metrics.gridHeaderHeight)
+                .background(.bar)
+                Divider()
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(values.indices, id: \.self) { index in
+                            let isSelected = selected == index
+                            TextField(
+                                "value",
+                                text: Binding(
+                                    get: { values[safe: index] ?? "" },
+                                    set: { if values.indices.contains(index) { values[index] = $0 } }
+                                )
+                            )
+                            .textFieldStyle(.plain)
+                            .focused($focusedRow, equals: index)
+                            .disabled(isReadOnly)
+                            .padding(.horizontal, DesignTokens.Spacing.md)
+                            .padding(.vertical, DesignTokens.Spacing.xs)
+                            .foregroundStyle(isSelected ? Color.white : Color.primary)
+                            .background(isSelected ? Color.accentColor : Color.clear)
+                            .contentShape(Rectangle())
+                            .simultaneousGesture(TapGesture().onEnded { selected = index })
+                            Divider()
+                        }
+                    }
+                }
+                .frame(minHeight: 220, maxHeight: 320)
+                Divider()
+                HStack(spacing: DesignTokens.Spacing.xs) {
+                    IconButton(icon: Icon.add, label: "Add value") {
+                        values.append("")
+                        selected = values.count - 1
+                        focusedRow = selected
+                    }
+                    IconButton(icon: Icon.remove, label: "Remove value") {
+                        guard let selected, values.indices.contains(selected) else { return }
+                        values.remove(at: selected)
+                        self.selected = values.isEmpty ? nil : min(selected, values.count - 1)
+                    }
+                    .disabled(selected == nil)
+                    Spacer()
+                }
+                .disabled(isReadOnly)
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .padding(.vertical, DesignTokens.Spacing.xs)
+            }
+        } footer: {
+            Spacer()
+            Button("Cancel") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+            Button("OK") {
+                onSave(values.filter { !$0.isEmpty })
+                dismiss()
+            }
+            .keyboardShortcut(.defaultAction)
+            .buttonStyle(.borderedProminent)
+            .disabled(isReadOnly)
+        }
     }
 }
 
@@ -1094,6 +1421,7 @@ struct TablePane: View {
 /// Add and remove, the two buttons every pane needs.
 struct PaneFooter<Extra: View>: View {
     let addTitle: String
+    var removeTitle = "Remove the last row"
     let onAdd: () -> Void
     let onRemove: () -> Void
     @ViewBuilder var extra: Extra
@@ -1103,7 +1431,7 @@ struct PaneFooter<Extra: View>: View {
             Divider()
             PaneBar {
                 Button(action: onAdd) { Label(addTitle, systemImage: Icon.add) }
-                IconButton(icon: Icon.remove, label: "Remove the last row", action: onRemove)
+                IconButton(icon: Icon.remove, label: removeTitle, action: onRemove)
                 extra
                 Spacer()
             }

@@ -186,7 +186,7 @@ public final class SidebarModel {
 
     /// Drops every cached level for a connection and reloads what is expanded.
     public func refresh(connectionID: UUID) async {
-        await environment.session(for: connectionID)?.invalidateIntrospection()
+        for session in environment.sessions(for: connectionID) { await session.invalidateIntrospection() }
         childCache = childCache.filter { !$0.key.contains(connectionID.uuidString) }
         rebuildRoots()
         for id in expanded where id.contains(connectionID.uuidString) {
@@ -255,6 +255,8 @@ public final class SidebarModel {
             watchState(of: id)
             _ = try await session.connect()
             let databases = try await session.introspection(.databases) { try await $0.databases() }
+            // Which one the main session sits on decides whether another needs its own session.
+            environment.currentDatabases[id] = databases.first { $0.isCurrent }?.name
             return databases.map { database in
                 SidebarItem(
                     id: "\(id.uuidString)/db/\(database.name)",
@@ -267,7 +269,9 @@ public final class SidebarModel {
             }
 
         case let .database(id, name):
-            guard let session = environment.session(for: id) else { return [] }
+            // PostgreSQL reads another database only through a session opened on it.
+            guard let session = environment.session(for: id, database: name) else { return [] }
+            _ = try await session.connect()
             // MySQL has no schema layer: a database holds its tables directly, so the
             // folders hang off the database row rather than off a schema of the same name.
             if session.config.dialect == .mysql {
@@ -296,7 +300,7 @@ public final class SidebarModel {
             }
 
         case let .schema(id, ref):
-            guard let session = environment.session(for: id) else { return [] }
+            guard let session = environment.session(for: id, schema: ref) else { return [] }
             let tables = try await session.introspection(.tables(ref)) { try await $0.tables(in: ref) }
             var folders: [SidebarItem] = []
             for kind in [TableKind.table, .partitionedTable, .view, .materializedView, .foreignTable] {
@@ -331,7 +335,7 @@ public final class SidebarModel {
             return folders
 
         case let .routineFolder(id, ref):
-            guard let session = environment.session(for: id) else { return [] }
+            guard let session = environment.session(for: id, schema: ref) else { return [] }
             let routines = try await session.introspection(.routines(ref)) { try await $0.routines(in: ref) }
             return routines.map { routine in
                 SidebarItem(

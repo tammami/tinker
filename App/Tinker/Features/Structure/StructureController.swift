@@ -86,7 +86,7 @@ public final class StructureController {
         }
     }
 
-    private var session: ConnectionSession? { environment.session(for: connectionID) }
+    private var session: ConnectionSession? { environment.session(for: connectionID, table: table) }
 
     // MARK: - Loading
 

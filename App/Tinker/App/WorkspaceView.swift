@@ -613,15 +613,17 @@ public struct WorkspaceView: View {
         grid: GridModel,
         write: @escaping @MainActor ([[DBValue]]) -> Void
     ) async {
-        guard let session = environment.session(for: tab.connectionID) else { return }
         let sql: String
+        let owner: ConnectionSession?
         switch grid.source {
         case let .table(table):
             sql = "SELECT * FROM \(Identifier.qualified(table, dialect: grid.dialect))"
+            owner = environment.session(for: tab.connectionID, table: table)
         case let .query(statement):
             sql = statement
+            owner = environment.session(for: tab.connectionID)
         }
-        guard let (lease, connection) = try? await session.lease() else { return }
+        guard let session = owner, let (lease, connection) = try? await session.lease() else { return }
         defer { Task { await session.release(lease) } }
         do {
             for try await event in connection.execute(sql, parameters: []) {

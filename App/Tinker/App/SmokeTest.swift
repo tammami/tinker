@@ -104,20 +104,36 @@ enum SmokeTest {
             // A table tab: introspect, page and read a value.
             let databases = try await session.introspection(.databases) { try await $0.databases() }
             let database = databases.first { $0.isCurrent }?.name ?? config.database ?? ""
-            let schemas = try await session.introspection(.schemas(database: database)) {
-                try await $0.schemas(in: database)
+            environment.currentDatabases[config.id] = database
+            // The current database first; on PostgreSQL, when it holds no table (a
+            // connection with no database set sits on `postgres`), the seeded one or any
+            // other with tables, read through its own session as the sidebar does.
+            let candidates =
+                [database]
+                + (config.dialect == .postgresql
+                    ? (["tinker_test"] + databases.map(\.name)).filter { $0 != database } : [])
+            var found: (schema: SchemaInfo, table: TableInfo)?
+            for name in candidates where found == nil {
+                guard let owner = environment.session(for: config.id, database: name) else { continue }
+                guard
+                    let schemas = try? await owner.introspection(
+                        .schemas(database: name),
+                        load: {
+                            try await $0.schemas(in: name)
+                        })
+                else { continue }
+                for schema in schemas where !schema.isSystem && found == nil {
+                    let tables = try await owner.introspection(.tables(schema.ref)) {
+                        try await $0.tables(in: schema.ref)
+                    }
+                    if let table = tables.first(where: { $0.kind == .table }) { found = (schema, table) }
+                }
             }
-            guard let schema = schemas.first(where: { !$0.isSystem }) else {
-                check("a non-system schema exists", false)
-                exit(1)
-            }
-            let tables = try await session.introspection(.tables(schema.ref)) {
-                try await $0.tables(in: schema.ref)
-            }
-            guard let table = tables.first(where: { $0.kind == .table }) else {
+            guard let (schema, table) = found else {
                 check("a table exists", false)
                 exit(1)
             }
+            check("a table exists (\(table.ref.database).\(schema.name).\(table.name))", true)
             let tab = TableTabController(
                 table: table.ref, connectionID: config.id,
                 dialect: config.dialect, environment: environment
@@ -150,7 +166,7 @@ enum SmokeTest {
             check("connection expands to \(databaseItems.count) database(s)", !databaseItems.isEmpty)
 
             guard
-                let databaseItem = databaseItems.first(where: { $0.title == database })
+                let databaseItem = databaseItems.first(where: { $0.title == table.ref.database })
                     ?? databaseItems.first
             else {
                 check("a database row exists", false)
@@ -198,6 +214,31 @@ enum SmokeTest {
                 "close database folds the branch",
                 !sidebar.isExpanded(databaseItem.id) && !sidebar.isExpanded(schemaItem.id))
             check("quick open forgets a closed database's tables", sidebar.knownTables.isEmpty)
+
+            // PostgreSQL reads another database only through a session on it: a database
+            // that is not the current one must show its own schemas and tables, not the
+            // current database's.
+            if config.dialect == .postgresql,
+                let other = databaseItems.first(where: { $0.subtitle != "current" && $0.title == "tinker_test" })
+                    ?? databaseItems.first(where: { $0.subtitle != "current" })
+            {
+                await sidebar.expand(other)
+                let otherSchemas = sidebar.find(id: other.id)?.children ?? []
+                var otherTables = 0
+                if let publicSchema = otherSchemas.first(where: { $0.title == "public" }) ?? otherSchemas.first {
+                    await sidebar.expand(publicSchema)
+                    otherTables = (sidebar.find(id: publicSchema.id)?.children ?? [])
+                        .flatMap { $0.children ?? [] }.count { $0.tableRef != nil }
+                }
+                let ownSession = environment.session(for: config.id, database: other.title)
+                check(
+                    "another database (\(other.title)) reads through its own session",
+                    ownSession != nil && ownSession !== session)
+                check(
+                    "another database (\(other.title)) lists its own \(otherTables) table(s)",
+                    other.title != "tinker_test" || otherTables > 0)
+                sidebar.collapseSubtree(other.id)
+            }
             check("close database keeps the connection open", sidebar.isExpanded(connectionItem.id))
             check("a closed branch holds nothing", (sidebar.find(id: databaseItem.id)?.children ?? []).isEmpty)
             sidebar.collapseConnection(config.id)

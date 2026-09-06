@@ -54,7 +54,8 @@ public final class TableTabController: DataGridDelegate {
         self.environment = environment
     }
 
-    var session: ConnectionSession? { environment.session(for: connectionID) }
+    /// The session on the table's own database (PostgreSQL) or the connection's (MySQL).
+    var session: ConnectionSession? { environment.session(for: connectionID, table: table) }
 
     @ObservationIgnored private var structureController: StructureController?
 

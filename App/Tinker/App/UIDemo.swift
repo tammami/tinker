@@ -46,8 +46,12 @@ enum UIDemo {
         guard let root = sidebar.find(id: config.id.uuidString) else { return }
         await sidebar.expand(root)
         let databases = sidebar.find(id: root.id)?.children ?? []
-        // The map scene wants the seeded test database whatever the connection defaults to.
-        let preferredDatabase = wanted.contains { $0.hasPrefix("map") } ? "tinker_test" : (config.database ?? "")
+        // The map scene wants the seeded test database whatever the connection defaults to;
+        // `--ui-demo-database <name>` picks any other.
+        var preferredDatabase = wanted.contains { $0.hasPrefix("map") } ? "tinker_test" : (config.database ?? "")
+        if let index = arguments.firstIndex(of: "--ui-demo-database"), index + 1 < arguments.count {
+            preferredDatabase = arguments[index + 1]
+        }
         guard let database = databases.first(where: { $0.title == preferredDatabase }) ?? databases.first else {
             return
         }

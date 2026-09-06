@@ -25,7 +25,12 @@ public final class SourceController {
     }
 
     public func load(force: Bool = false) async {
-        guard let session = environment.session(for: connectionID) else {
+        let database =
+            switch object.kind {
+            case let .view(ref): ref.database
+            case let .routine(schema, _, _, _): schema.database
+            }
+        guard let session = environment.session(for: connectionID, database: database) else {
             errorText = "No session for this connection"
             return
         }

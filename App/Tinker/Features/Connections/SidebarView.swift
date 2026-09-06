@@ -732,8 +732,8 @@ struct SidebarRow: View {
         }
         Button {
             Task { @MainActor in
-                guard let session = workspace.environment.session(for: connectionID) else { return }
                 let ref = info.ref
+                guard let session = workspace.environment.session(for: connectionID, table: ref) else { return }
                 if let ddl = try? await session.introspection(.ddl(ref), load: { try await $0.tableDDL(ref) }) {
                     copy(ddl)
                 }
@@ -826,7 +826,7 @@ struct SidebarRow: View {
 
     @MainActor
     func runDDL(_ verb: String, info: TableInfo, connectionID: UUID) async {
-        guard let session = workspace.environment.session(for: connectionID) else { return }
+        guard let session = workspace.environment.session(for: connectionID, table: info.ref) else { return }
         do {
             let (lease, connection) = try await session.lease()
             defer { Task { await session.release(lease) } }

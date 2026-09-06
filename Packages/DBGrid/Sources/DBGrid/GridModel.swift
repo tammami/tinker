@@ -367,11 +367,13 @@ public final class GridModel {
         }
     }
 
-    /// Throws away every loaded row and starts again from page 0. Pending edits are
-    /// discarded too, because their row indices no longer mean anything.
-    public func reload() async {
+    /// Throws away every loaded row and re-reads the page. Pending edits to loaded rows
+    /// are discarded too, because their row indices no longer mean anything; new rows
+    /// have no index and can stay when the caller asks (`keepingNewRows`), as an
+    /// auto-commit write does while the user is still filling one in.
+    public func reload(keepingNewRows: Bool = false) async {
         buffer.removeAll()
-        edits.discardAll()
+        edits.discard(keepingNewRows ? .loadedRowsOnly : .everything)
         rowCount = 0
         totalCount = nil
         isExhausted = false
@@ -449,20 +451,22 @@ public final class GridModel {
         return edits.addInsert()
     }
 
-    /// The statements a commit would run, for the preview sheet.
-    public func pendingStatements() throws -> [GeneratedStatement] {
+    /// The statements a commit of `scope` would run, for the preview sheet.
+    public func pendingStatements(_ scope: CommitScope = .everything) throws -> [GeneratedStatement] {
         guard let table = writableTable else { return [] }
         let generator = DMLGenerator(dialect: dialect, table: table, identityColumns: identityColumns)
-        return try edits.statements(using: generator)
+        return try edits.statements(using: generator, scope: scope)
     }
 
-    /// Runs the pending statements and, on success, clears the buffer and refreshes the
-    /// rows that changed. On any failure nothing is written and the edits stay put.
+    /// Runs the pending statements of `scope` and, on success, clears them from the
+    /// buffer. On any failure nothing is written and the edits stay put.
     @discardableResult
-    public func commit(using runner: any GridStatementRunner) async throws -> CommitResult {
-        let statements = try pendingStatements()
+    public func commit(
+        using runner: any GridStatementRunner, scope: CommitScope = .everything
+    ) async throws -> CommitResult {
+        let statements = try pendingStatements(scope)
         let result = try await GridCommitter().commit(statements, using: runner)
-        edits.discardAll()
+        edits.discard(scope)
         return result
     }
 }

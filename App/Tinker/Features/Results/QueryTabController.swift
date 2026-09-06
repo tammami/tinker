@@ -46,7 +46,23 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     /// The connection held while a transaction is open, so `COMMIT` reaches the same one.
     private var heldLease: ConnectionSession.Lease?
     private var heldConnection: (any SQLConnection)?
-    private var schemaNames: [CompletionCandidate] = []
+    /// Tables of the schema or database the tab resolves names against, for autocomplete.
+    private var completionTables: [CompletionCandidate] = []
+    /// The other schemas (PostgreSQL) or databases (MySQL), offered as `name.` prefixes.
+    private var completionSchemas: [CompletionCandidate] = []
+    /// Tables of other schemas, read the first time `schema.` is typed.
+    private var tablesBySchema: [String: [CompletionCandidate]] = [:]
+    /// Columns per table, keyed by connection, schema and table so a switch leaves nothing stale.
+    private var cachedColumns: [ColumnCacheKey: [ColumnInfo]] = [:]
+    /// Bumped when the connection or schema changes, so a load for the old one is dropped.
+    private var completionGeneration = 0
+    private var warmTask: Task<Void, Never>?
+
+    struct ColumnCacheKey: Hashable {
+        let connection: UUID
+        let schema: String
+        let table: String
+    }
 
     public init(connectionID: UUID, dialect: SQLDialect, environment: AppEnvironment) {
         self.connectionID = connectionID
@@ -62,35 +78,60 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
 
     public func bumpRevision() { revision &+= 1 }
 
-    /// Loads the schema names autocomplete offers.
+    /// The schema (PostgreSQL) or database (MySQL) unqualified names resolve against: the
+    /// tab's choice in the toolbar, else the connection's own.
+    private var completionSchema: String? {
+        if let sessionDatabase, !sessionDatabase.isEmpty { return sessionDatabase }
+        switch dialect {
+        case .mysql: return session?.config.database
+        case .postgresql: return "public"
+        }
+    }
+
+    private func schemaRef(_ schema: String) -> SchemaRef {
+        switch dialect {
+        case .mysql: SchemaRef.mysql(schema)
+        case .postgresql: SchemaRef(database: session?.config.database ?? "", schema: schema)
+        }
+    }
+
+    /// Loads what autocomplete offers: the tables of the tab's schema or database, and the
+    /// other schemas as prefixes. Called again whenever the tab points elsewhere.
     public func loadCompletionSources() async {
         guard let session else { return }
-        var candidates: [CompletionCandidate] = []
+        completionGeneration &+= 1
+        let generation = completionGeneration
+        tablesBySchema = [:]
         let database = session.config.database ?? ""
-        if let schemas = try? await session.introspection(
-            .schemas(database: database),
-            load: {
-                try await $0.schemas(in: database)
-            })
-        {
-            for schema in schemas where !schema.isSystem {
-                candidates.append(CompletionCandidate(text: schema.name, kind: .schema))
-                if let tables = try? await session.introspection(
-                    .tables(schema.ref),
-                    load: {
-                        try await $0.tables(in: schema.ref)
-                    })
-                {
-                    for table in tables {
-                        candidates.append(
-                            CompletionCandidate(
-                                text: table.name, detail: table.kind.rawValue, kind: .table
-                            ))
-                    }
-                }
+        var schemas: [String] = []
+        switch dialect {
+        case .mysql:
+            if let databases = try? await session.introspection(.databases, load: { try await $0.databases() }) {
+                schemas = databases.map(\.name)
+            }
+        case .postgresql:
+            if let found = try? await session.introspection(
+                .schemas(database: database), load: { try await $0.schemas(in: database) })
+            {
+                schemas = found.filter { !$0.isSystem }.map(\.name)
             }
         }
-        schemaNames = candidates
+        var tables: [CompletionCandidate] = []
+        if let current = completionSchema {
+            tables = await tableCandidates(inSchema: current)
+        }
+        // A later load for another schema or connection wins over this one.
+        guard generation == completionGeneration else { return }
+        completionSchemas = schemas.map { CompletionCandidate(text: $0, kind: .schema) }
+        completionTables = tables
+    }
+
+    private func tableCandidates(inSchema schema: String) async -> [CompletionCandidate] {
+        guard let session else { return [] }
+        let ref = schemaRef(schema)
+        guard let tables = try? await session.introspection(.tables(ref), load: { try await $0.tables(in: ref) })
+        else { return [] }
+        return tables.map { CompletionCandidate(text: $0.name, detail: $0.kind.rawValue, kind: .table) }
     }
 
     // MARK: - Running
@@ -678,6 +719,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             sessionDatabase = previous
             statusText = (error as? DBError)?.errorDescription ?? String(describing: error)
         }
+        // Names now resolve elsewhere, so the list offers that schema's tables.
+        await loadCompletionSources()
     }
 
     /// Points the tab at another connection, which is a different server and therefore a
@@ -694,7 +737,9 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         results.removeAll()
         selectedResultID = nil
         statusText = "Connected to \(config.name)"
+        cachedColumns = [:]
         await loadSessionChoices()
+        await loadCompletionSources()
     }
 
     /// Turns auto-commit on or off. Turning it on while a transaction is open commits that
@@ -791,6 +836,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     public func editorDidChangeText(_ text: String) {
         sql = text
         errorBanner = nil
+        scheduleColumnWarm()
     }
 
     public func editorDidChangeSelection(offset: Int, length: Int) {
@@ -831,98 +877,136 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
 
     public var hasSelection: Bool { !(selectedRange?.isEmpty ?? true) }
 
-    /// Keywords, then tables, then the columns of tables the statement mentions.
+    /// What the list offers for the word at `caretOffset` (UTF-16, within `statement`).
     ///
-    /// Alias-aware: `FROM users u` makes `u.` offer users' columns (SPEC §13.1).
-    public func editorCompletionCandidates(prefix: String, statement: String) -> [CompletionCandidate] {
-        let lowered = prefix.lowercased()
+    /// After `FROM` the tables of the tab's schema; in a select list or a condition the
+    /// columns of the tables the statement names; after `u.` only that alias's columns;
+    /// elsewhere keywords and tables (SPEC §13.1). With nothing typed yet the list still
+    /// shows where the context makes it unambiguous, so `FROM ` alone offers the tables.
+    public func editorCompletionCandidates(
+        prefix: String, statement: String, caretOffset: Int
+    )
+        -> [CompletionCandidate]
+    {
+        let context = SQLCompletionContext.detect(statement: statement, caretOffset: caretOffset, dialect: dialect)
+        let lowered = context.prefix.lowercased()
+        func matches(_ candidate: CompletionCandidate) -> Bool {
+            lowered.isEmpty || candidate.text.lowercased().hasPrefix(lowered)
+        }
+        let keywords =
+            lowered.isEmpty
+            ? []
+            : SQLTokenizer.keywords
+                .filter { $0.lowercased().hasPrefix(lowered) }
+                .sorted()
+                .map { CompletionCandidate(text: $0, kind: .keyword) }
+
+        var ranked: [CompletionCandidate]
+        switch context.expecting {
+        case .tables:
+            ranked = completionTables.filter(matches) + completionSchemas.filter(matches)
+            if ranked.isEmpty { ranked = keywords }
+        case .columns:
+            ranked = columnCandidates(for: context.tables, matching: lowered) + keywords
+        case let .qualified(qualifier):
+            if let mention = context.table(for: qualifier) {
+                ranked = columnCandidates(for: [mention], matching: lowered)
+            } else if let tables = tablesBySchema[qualifier] {
+                ranked = tables.filter(matches)
+            } else if completionSchemas.contains(where: { $0.text.caseInsensitiveCompare(qualifier) == .orderedSame }) {
+                loadTables(inSchema: qualifier)
+                ranked = []
+            } else {
+                // A table named without a FROM: its columns, once they are read.
+                ranked = columnCandidates(for: [SQLTableMention(name: qualifier)], matching: lowered)
+            }
+        case .any:
+            ranked = lowered.isEmpty ? [] : keywords + completionTables.filter(matches)
+        }
+        // Tables and columns come before keywords, so the cap never hides what the context asked for.
+        return Array(ranked.prefix(60))
+    }
+
+    /// Columns of `mentions` that are already read; the rest are read now and the list
+    /// refreshed when they arrive.
+    private func columnCandidates(for mentions: [SQLTableMention], matching lowered: String) -> [CompletionCandidate] {
         var candidates: [CompletionCandidate] = []
-
-        if let dotIndex = prefix.lastIndex(of: ".") {
-            let qualifier = String(prefix[prefix.startIndex ..< dotIndex])
-            let tail = String(prefix[prefix.index(after: dotIndex)...]).lowercased()
-            let tableName = Self.resolveAlias(qualifier, in: statement, dialect: dialect) ?? qualifier
-            return columnCandidates(forTable: tableName)
-                .filter { tail.isEmpty || $0.text.lowercased().hasPrefix(tail) }
+        var missing: [SQLTableMention] = []
+        for mention in mentions {
+            guard let columns = cachedColumns[cacheKey(for: mention)] else {
+                missing.append(mention)
+                continue
+            }
+            for column in columns where lowered.isEmpty || column.name.lowercased().hasPrefix(lowered) {
+                let detail = mentions.count > 1 ? "\(mention.name) · \(column.nativeType)" : column.nativeType
+                candidates.append(CompletionCandidate(text: column.name, detail: detail, kind: .column))
+            }
         }
-
-        candidates += SQLTokenizer.keywords
-            .filter { $0.lowercased().hasPrefix(lowered) }
-            .sorted()
-            .map { CompletionCandidate(text: $0, kind: .keyword) }
-        candidates += schemaNames.filter { $0.text.lowercased().hasPrefix(lowered) }
-        for table in Self.tablesMentioned(in: statement, dialect: dialect) {
-            candidates += columnCandidates(forTable: table)
-                .filter { lowered.isEmpty || $0.text.lowercased().hasPrefix(lowered) }
-        }
-        // Prefix matches first, then everything else, as the spec's ranking requires.
-        return Array(candidates.prefix(60))
+        if !missing.isEmpty { scheduleColumnWarm(missing) }
+        return candidates
     }
 
-    private func columnCandidates(forTable name: String) -> [CompletionCandidate] {
-        cachedColumns[name]?.map {
-            CompletionCandidate(text: $0.name, detail: $0.nativeType, kind: .column)
-        } ?? []
+    private func cacheKey(for mention: SQLTableMention) -> ColumnCacheKey {
+        ColumnCacheKey(
+            connection: connectionID, schema: mention.schema ?? completionSchema ?? "", table: mention.name)
     }
-
-    /// Columns per table, filled in as statements name tables.
-    private var cachedColumns: [String: [ColumnInfo]] = [:]
 
     /// Reads the columns of every table the statement mentions, for autocomplete.
     public func warmColumnCache(for statement: String) async {
-        guard let session else { return }
-        let database = session.config.database ?? ""
-        for name in Self.tablesMentioned(in: statement, dialect: dialect) where cachedColumns[name] == nil {
-            let ref = TableRef(database: database, schema: dialect == .mysql ? database : "public", name: name)
-            if let columns = try? await session.introspection(
-                .columns(ref),
-                load: {
-                    try await $0.columns(of: ref)
-                })
-            {
-                cachedColumns[name] = columns
+        let mentions = SQLCompletionContext.detect(
+            statement: statement, caretOffset: statement.utf16.count, dialect: dialect
+        ).tables
+        _ = await warmColumns(of: mentions)
+    }
+
+    /// Reads the columns of the tables the statement under the caret names, a moment after
+    /// typing pauses, so the list has them by the time a column is wanted.
+    private func scheduleColumnWarm(_ mentions: [SQLTableMention]? = nil) {
+        warmTask?.cancel()
+        warmTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled, let self else { return }
+            let wanted =
+                mentions
+                ?? {
+                    let statement = StatementSplitter.statement(at: caretOffset, in: sql, dialect: dialect)?.text ?? sql
+                    return SQLCompletionContext.detect(
+                        statement: statement, caretOffset: statement.utf16.count, dialect: dialect
+                    ).tables
+                }()
+            if await warmColumns(of: wanted) {
+                NotificationCenter.default.post(name: .tinkerRefreshCompletion, object: nil)
             }
         }
     }
 
-    /// Table names appearing after FROM, JOIN, INTO or UPDATE.
-    static func tablesMentioned(in statement: String, dialect: SQLDialect) -> [String] {
-        let tokens = SQLTokenizer.tokenize(statement, dialect: dialect).filter { $0.kind != .whitespace }
-        var names: [String] = []
-        for (index, token) in tokens.enumerated() where token.kind == .keyword {
-            let keyword = token.text.uppercased()
-            guard ["FROM", "JOIN", "INTO", "UPDATE", "TABLE"].contains(keyword),
-                index + 1 < tokens.count
-            else { continue }
-            let next = tokens[index + 1]
-            guard next.kind == .identifier || next.kind == .quotedIdentifier else { continue }
-            names.append(Identifier.unquote(next.text, dialect: dialect))
+    /// Returns true when a table's columns were not cached before.
+    private func warmColumns(of mentions: [SQLTableMention]) async -> Bool {
+        guard let session else { return false }
+        var loaded = false
+        for mention in mentions {
+            let key = cacheKey(for: mention)
+            guard cachedColumns[key] == nil else { continue }
+            let ref = TableRef(schema: schemaRef(key.schema), name: mention.name)
+            if let columns = try? await session.introspection(.columns(ref), load: { try await $0.columns(of: ref) }) {
+                cachedColumns[key] = columns
+                loaded = true
+            }
         }
-        return names
+        return loaded
     }
 
-    /// The table an alias refers to: `FROM users u` maps `u` to `users`.
-    static func resolveAlias(_ alias: String, in statement: String, dialect: SQLDialect) -> String? {
-        let tokens = SQLTokenizer.tokenize(statement, dialect: dialect).filter { $0.kind != .whitespace }
-        for (index, token) in tokens.enumerated() where token.kind == .keyword {
-            guard ["FROM", "JOIN", "UPDATE"].contains(token.text.uppercased()), index + 1 < tokens.count else {
-                continue
-            }
-            let table = tokens[index + 1]
-            guard table.kind == .identifier || table.kind == .quotedIdentifier else { continue }
-            // `FROM users u` or `FROM users AS u`.
-            var aliasIndex = index + 2
-            if aliasIndex < tokens.count, tokens[aliasIndex].text.uppercased() == "AS" { aliasIndex += 1 }
-            guard aliasIndex < tokens.count else { continue }
-            let candidate = tokens[aliasIndex]
-            if candidate.kind == .identifier, candidate.text.caseInsensitiveCompare(alias) == .orderedSame {
-                return Identifier.unquote(table.text, dialect: dialect)
-            }
-            if table.text.caseInsensitiveCompare(alias) == .orderedSame {
-                return Identifier.unquote(table.text, dialect: dialect)
-            }
+    /// Reads another schema's tables for `schema.` and refreshes the list when they arrive.
+    private func loadTables(inSchema schema: String) {
+        tablesBySchema[schema] = []
+        let generation = completionGeneration
+        Task { [weak self] in
+            guard let self else { return }
+            let tables = await tableCandidates(inSchema: schema)
+            guard generation == completionGeneration else { return }
+            tablesBySchema[schema] = tables
+            NotificationCenter.default.post(name: .tinkerRefreshCompletion, object: nil)
         }
-        return nil
     }
 
     // MARK: - DataGridDelegate

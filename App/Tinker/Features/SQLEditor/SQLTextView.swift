@@ -12,7 +12,9 @@ public protocol SQLEditorDelegate: AnyObject {
     /// `.current` is Run: the highlighted text when there is some, else the statement under
     /// the cursor. `.selection` is only the highlighted text; `.all` the whole page.
     func editorDidRequestRun(_ scope: SQLRunScope, selection: Range<Int>?)
-    func editorCompletionCandidates(prefix: String, statement: String) -> [CompletionCandidate]
+    /// Suggestions for the word at `caretOffset` (UTF-16, within `statement`); `prefix`
+    /// is what is typed of it so far, and may be empty right after a space.
+    func editorCompletionCandidates(prefix: String, statement: String, caretOffset: Int) -> [CompletionCandidate]
 }
 
 /// What a run command covers.
@@ -238,6 +240,9 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
 
     private var caretObserver: (any NSObjectProtocol)?
     private var offerObserver: (any NSObjectProtocol)?
+    private var refreshObserver: (any NSObjectProtocol)?
+    /// Where the word the list is about starts, so a caret that leaves it closes the list.
+    private var offeredLocation: Int?
 
     /// Watches for the tab telling every editor to put its list away, and for a request
     /// to move the caret after text was inserted programmatically.
@@ -255,6 +260,17 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
                 guard let self, let textView = self.textView, textView.window != nil else { return }
                 textView.window?.makeFirstResponder(textView)
                 textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+                self.offerCompletions()
+            }
+        }
+        refreshObserver = NotificationCenter.default.addObserver(
+            forName: .tinkerRefreshCompletion, object: nil, queue: .main
+        ) { [weak self] _ in
+            // Columns or tables arrived for the statement being typed: the list, if it is
+            // up or was wanted here, now has them.
+            MainActor.assumeIsolated {
+                guard let self, let textView = self.textView, textView.window?.firstResponder === textView
+                else { return }
                 self.offerCompletions()
             }
         }
@@ -310,20 +326,29 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
     }
 
     /// Shows the list, or hides it when there is nothing worth offering.
+    ///
+    /// Nothing typed yet is still worth asking about: after `FROM ` the tables are the
+    /// answer, after `SELECT ` the columns; the tab decides from the statement.
     func offerCompletions() {
         guard let textView, let delegate else { return completion.dismiss() }
-        guard let range = completionPrefixRange(), range.length > 0 else {
-            return completion.dismiss()
-        }
+        guard let range = completionPrefixRange() else { return completion.dismiss() }
         let text = textView.string as NSString
         let prefix = text.substring(with: range)
         // The statement under the cursor is what makes the columns alias-aware.
-        let statement =
-            StatementSplitter.split(textView.string, dialect: dialect)
-            .first { $0.utf16Range.contains(range.location) }?.text ?? textView.string
+        let statements = StatementSplitter.split(textView.string, dialect: dialect)
+        let statement = statements.first {
+            $0.utf16Range.contains(range.location) || $0.utf16Range.upperBound == range.location
+        }
+        let statementText = statement?.text ?? textView.string
+        let caretOffset = range.location + range.length - (statement?.utf16Range.lowerBound ?? 0)
 
-        let candidates = delegate.editorCompletionCandidates(prefix: prefix, statement: statement)
-        guard !candidates.isEmpty else { return completion.dismiss() }
+        let candidates = delegate.editorCompletionCandidates(
+            prefix: prefix, statement: statementText, caretOffset: caretOffset)
+        // The word is already complete: nothing to add.
+        guard !candidates.isEmpty,
+            !(candidates.count == 1 && candidates[0].text.caseInsensitiveCompare(prefix) == .orderedSame)
+        else { return completion.dismiss() }
+        offeredLocation = range.location
 
         let caretRect = textView.firstRect(forCharacterRange: range, actualRange: nil)
         let local = textView.convert(
@@ -361,7 +386,7 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         gutter?.needsDisplay = true
         highlightMatchingBracket()
         // Moving the caret off the word being completed makes the list about nothing.
-        if completion.isVisible, (completionPrefixRange()?.length ?? 0) == 0 {
+        if completion.isVisible, completionPrefixRange()?.location != offeredLocation {
             completion.dismiss()
         }
     }
@@ -489,6 +514,8 @@ public extension Notification.Name {
     static let tinkerMoveCaret = Notification.Name("TinkerMoveCaret")
     /// Asks the front editor to show its suggestion list, as ⌥Esc does.
     static let tinkerOfferCompletion = Notification.Name("TinkerOfferCompletion")
+    /// Posted when tables or columns for the statement being typed have been read.
+    static let tinkerRefreshCompletion = Notification.Name("TinkerRefreshCompletion")
     /// ⌘F outside the editor: whichever search field is on screen takes focus.
     static let tinkerFocusSearch = Notification.Name("TinkerFocusSearch")
 }

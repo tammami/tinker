@@ -261,14 +261,34 @@ extension SmokeTest {
             await query.setAutoCommit(true)
             let history = await environment.history(connectionID: config.id)
             check("history records what ran", history.contains { $0.sql.contains("smoke_features") })
-            let keywords = query.editorCompletionCandidates(prefix: "sel", statement: "sel")
+            let keywords = query.editorCompletionCandidates(prefix: "sel", statement: "sel", caretOffset: 3)
             check("completion offers SELECT for sel", keywords.contains { $0.text == "SELECT" })
-            let tables = query.editorCompletionCandidates(prefix: "smoke_f", statement: "SELECT * FROM smoke_f")
+            let fromTables = query.editorCompletionCandidates(
+                prefix: "", statement: "SELECT * FROM ", caretOffset: "SELECT * FROM ".utf16.count)
+            check(
+                "FROM with nothing typed offers the schema's tables",
+                fromTables.contains { $0.text == "smoke_features" } && !fromTables.contains { $0.kind == .keyword })
+            let tables = query.editorCompletionCandidates(
+                prefix: "smoke_f", statement: "SELECT * FROM smoke_f", caretOffset: "SELECT * FROM smoke_f".utf16.count)
             check("completion offers the scratch table", tables.contains { $0.text == "smoke_features" })
-            await query.warmColumnCache(for: "SELECT * FROM smoke_features s")
+            // The editor path: typing names the table, the columns are read on their own.
+            query.editorDidChangeText("SELECT  FROM smoke_features s")
+            query.editorDidChangeSelection(offset: 7, length: 0)
+            try await waitUntil(timeout: .seconds(10)) {
+                query.editorCompletionCandidates(prefix: "", statement: query.sql, caretOffset: 7)
+                    .contains { $0.text == "name" }
+            }
+            let selectList = query.editorCompletionCandidates(prefix: "", statement: query.sql, caretOffset: 7)
+            check(
+                "SELECT with nothing typed offers the FROM table's columns",
+                selectList.first?.kind == .column && selectList.contains { $0.text == "name" })
             let aliased = query.editorCompletionCandidates(
-                prefix: "s.na", statement: "SELECT s.na FROM smoke_features s")
+                prefix: "s.na", statement: "SELECT s.na FROM smoke_features s", caretOffset: 11)
             check("completion resolves an alias to its columns", aliased.contains { $0.text == "name" })
+            let whereList = query.editorCompletionCandidates(
+                prefix: "", statement: "SELECT * FROM smoke_features WHERE ",
+                caretOffset: "SELECT * FROM smoke_features WHERE ".utf16.count)
+            check("WHERE offers the table's columns first", whereList.first?.kind == .column)
             query.sql = "select id,name from smoke_features where id=1"
             query.formatSQL()
             check("format SQL upper-cases keywords", query.sql.contains("SELECT") && query.sql.contains("WHERE"))

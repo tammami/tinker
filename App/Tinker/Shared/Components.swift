@@ -529,3 +529,48 @@ struct BarPopUp<ID: Hashable>: NSViewRepresentable {
         }
     }
 }
+
+/// Runs `action` each time the window holding this view becomes the key window.
+///
+/// SwiftUI has no notion of which window a view sits in; this borrows AppKit's, through
+/// a view that learns its window and listens for it alone.
+struct WindowKeyObserver: NSViewRepresentable {
+    let onBecomeKey: () -> Void
+
+    func makeNSView(context: Context) -> ObservingView {
+        let view = ObservingView()
+        view.onBecomeKey = onBecomeKey
+        return view
+    }
+
+    func updateNSView(_ view: ObservingView, context: Context) {
+        view.onBecomeKey = onBecomeKey
+    }
+
+    final class ObservingView: NSView {
+        var onBecomeKey: (() -> Void)?
+        private var observer: (any NSObjectProtocol)?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            observer = nil
+            guard let window else { return }
+            observer = NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onBecomeKey?() }
+            }
+        }
+
+        // The observer is removed when the view leaves its window (`viewDidMoveToWindow`
+        // with no window) rather than in deinit, which Swift 6 keeps nonisolated.
+    }
+}
+
+extension View {
+    /// Calls `action` whenever the window this view is in becomes key.
+    func onWindowBecomeKey(_ action: @escaping () -> Void) -> some View {
+        background(WindowKeyObserver(onBecomeKey: action).frame(width: 0, height: 0))
+    }
+}

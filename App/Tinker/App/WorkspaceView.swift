@@ -75,6 +75,9 @@ public struct WorkspaceView: View {
         .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }
         .onAppear { CommandCenter.shared.activate(controller) }
+        // A sheet or another window taking key status must not leave the menus pointing
+        // at nothing: whichever workspace window is key again is the one the menus act on.
+        .onWindowBecomeKey { CommandCenter.shared.activate(controller) }
         .onChange(of: controller.isSidebarVisible) { _, visible in
             columnVisibility = visible ? .all : .detailOnly
         }

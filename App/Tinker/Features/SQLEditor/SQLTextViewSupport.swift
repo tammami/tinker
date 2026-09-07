@@ -51,28 +51,38 @@ public final class SQLTextView: NSTextView {
     /// may swallow a key on its way past. Handling it here is what makes the shortcut work at
     /// all while the editor has focus.
     public override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        Self.keyLog.info("performKeyEquivalent keyCode=\(event.keyCode) flags=\(event.modifierFlags.rawValue)")
-        guard event.modifierFlags.contains(.command) else {
-            return super.performKeyEquivalent(with: event)
-        }
+        if handleCommandKey(event, via: "performKeyEquivalent") { return true }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    /// The editor's own ⌘ shortcuts. Answered wherever the event arrives: normally as a
+    /// key equivalent, but a system that hands the chord to `keyDown` instead (seen on
+    /// macOS 26 with a production connection) gets the same answer there. Returns false
+    /// for anything that is not one of ours, so the menu and the text system keep theirs.
+    private func handleCommandKey(_ event: NSEvent, via route: String) -> Bool {
+        guard event.modifierFlags.contains(.command), !event.modifierFlags.contains(.control) else { return false }
+        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
         // ⌘R runs the statement at the cursor (or the highlighted block), ⌘⇧R only the
-        // selection, ⌘⌥R the whole page. Answered here because the editor sees key
-        // equivalents before the menu does; the menu carries the same three.
-        if event.charactersIgnoringModifiers?.lowercased() == "r" {
+        // selection, ⌘⌥R the whole page. The menu carries the same three.
+        if key == "r" {
             let scope: SQLRunScope =
                 event.modifierFlags.contains(.option)
                 ? .all : event.modifierFlags.contains(.shift) ? .selection : .current
             let selected = selectedRange()
             let selection: Range<Int>? = selected.length > 0 ? selected.location ..< NSMaxRange(selected) : nil
-            MainActor.assumeIsolated {
-                self.coordinator?.delegate?.editorDidRequestRun(scope, selection: selection)
+            let delivered = MainActor.assumeIsolated { () -> Bool in
+                guard let delegate = self.coordinator?.delegate else { return false }
+                delegate.editorDidRequestRun(scope, selection: selection)
+                return true
             }
-            return true
+            // Kept in the log (not just in memory) so a shortcut that seems dead can be
+            // traced with `log show --predicate 'category == "editor-keys"'`.
+            Self.keyLog.notice(
+                "⌘R via \(route, privacy: .public): delegate \(delivered ? "reached" : "missing", privacy: .public)")
+            return delivered
         }
-        guard !event.modifierFlags.contains(.shift), !event.modifierFlags.contains(.option) else {
-            return super.performKeyEquivalent(with: event)
-        }
-        switch event.charactersIgnoringModifiers ?? "" {
+        guard !event.modifierFlags.contains(.shift), !event.modifierFlags.contains(.option) else { return false }
+        switch key {
         case "/":
             toggleLineComment()
             return true
@@ -80,7 +90,7 @@ public final class SQLTextView: NSTextView {
             duplicateLine()
             return true
         default:
-            return super.performKeyEquivalent(with: event)
+            return false
         }
     }
 
@@ -107,6 +117,7 @@ public final class SQLTextView: NSTextView {
 
     public override func keyDown(with event: NSEvent) {
         Self.keyLog.info("keyDown keyCode=\(event.keyCode) flags=\(event.modifierFlags.rawValue)")
+        if handleCommandKey(event, via: "keyDown") { return }
 
         // While the autocomplete list is up it takes the arrows, Return, Tab and Escape.
         // It never becomes key, so the keys arrive here and are forwarded by hand.

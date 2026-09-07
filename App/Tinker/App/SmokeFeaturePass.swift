@@ -300,6 +300,31 @@ extension SmokeTest {
             await query.selectDatabase("public")
             check("switching the search path reports it", query.statusText == "Using public")
 
+            // MARK: Production: no auto-commit, and a write asks before it runs
+            var production = config
+            production.isProduction = true
+            await environment.save(production)
+            check("a production connection never auto-commits grid edits", !table.autoCommitsEdits)
+            var asked: DestructiveConfirmation?
+            query.onConfirmProduction = { asked = $0 }
+            query.sql = "DELETE FROM smoke_features WHERE id = -1"
+            query.caretOffset = 0
+            query.run(all: true)
+            try? await Task.sleep(for: .milliseconds(200))
+            check(
+                "a destructive statement on production asks for the connection's name",
+                asked?.requiredTypedName == config.name && !query.isRunning)
+            query.sql = "SELECT 1"
+            asked = nil
+            query.run(all: true)
+            try await waitUntil(timeout: .seconds(20)) {
+                !query.isRunning && query.results.first?.statement == "SELECT 1"
+            }
+            check("a read on production runs without asking", asked == nil)
+            query.onConfirmProduction = nil
+            await environment.save(config)
+            check("the connection is back off production", !table.isProduction)
+
             // MARK: Query results page and edit like a table
             query.sql = "SELECT id, name, amount FROM smoke_features ORDER BY id"
             query.caretOffset = 0

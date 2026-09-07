@@ -186,17 +186,21 @@ public struct TableTabView: View {
 
                 BarDivider()
 
-                // Bound to the property itself, so the click shows at once; the write it
-                // may owe happens after.
-                Toggle("Auto-commit", isOn: $controller.autoCommit)
-                    .toggleStyle(.checkbox)
-                    .onChange(of: controller.autoCommit) { _, enabled in
-                        tab.autoCommit = enabled
-                        controller.autoCommitDidChange()
-                    }
-                    .help("On writes each edit as you make it; off keeps edits pending until Commit")
+                // A production connection has no auto-commit: every write goes through the
+                // commit sheet, so the checkbox would only mislead and is not shown.
+                if !controller.isProduction {
+                    // Bound to the property itself, so the click shows at once; the write it
+                    // may owe happens after.
+                    Toggle("Auto-commit", isOn: $controller.autoCommit)
+                        .toggleStyle(.checkbox)
+                        .onChange(of: controller.autoCommit) { _, enabled in
+                            tab.autoCommit = enabled
+                            controller.autoCommitDidChange()
+                        }
+                        .help("On writes each edit as you make it; off keeps edits pending until Commit")
 
-                BarDivider()
+                    BarDivider()
+                }
 
                 IconButton(icon: Icon.add, label: "Add row (⌘⌥A)") { controller.addRow() }
                     .disabled(!(controller.model?.isEditable ?? false))
@@ -349,7 +353,7 @@ public struct TableTabView: View {
                 }
             }
             if let model = controller.model {
-                if controller.autoCommit {
+                if controller.autoCommitsEdits {
                     autoCommitStatus(model)
                 } else if model.edits.pendingStatementCount > 0 {
                     Button("Discard") { controller.discardEdits() }

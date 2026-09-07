@@ -77,11 +77,14 @@ public struct StoredFilterRule: Sendable, Hashable, Codable {
     public var column: String
     public var op: String
     public var values: [DBValue]
+    /// `and` or `or`: how the row joins the one above. Absent in rows saved before it existed.
+    public var conjunction: String?
 
-    public init(column: String, op: String, values: [DBValue]) {
+    public init(column: String, op: String, values: [DBValue], conjunction: String? = nil) {
         self.column = column
         self.op = op
         self.values = values
+        self.conjunction = conjunction
     }
 }
 

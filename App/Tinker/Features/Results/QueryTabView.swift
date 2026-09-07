@@ -79,7 +79,10 @@ public struct QueryTabView: View {
     /// right: what to do, where it goes, and what state it leaves behind.
     var editorToolbar: some View {
         toolbarContent
-            .onAppear { controller.onRequestInspector = { workspace.isInspectorVisible = true } }
+            .onAppear {
+                controller.onRequestInspector = { workspace.isInspectorVisible = true }
+                controller.onConfirmProduction = { workspace.confirmation = $0 }
+            }
     }
 
     var toolbarContent: some View {
@@ -500,7 +503,7 @@ public struct QueryTabView: View {
                 if let grid = result.grid, grid.isPaged, let reason = grid.readOnlyReason {
                     Text(reason).foregroundStyle(.secondary).lineLimit(1)
                 }
-                if let grid = result.grid, controller.autoCommit {
+                if let grid = result.grid, controller.autoCommitsEdits {
                     // Nothing to confirm: a write in flight says so, a refused one offers a
                     // retry, and a new row says when it will go.
                     if controller.isWritingEdits {

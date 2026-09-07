@@ -41,6 +41,19 @@ public enum FilterOperator: String, Sendable, Hashable, Codable, CaseIterable {
     }
 }
 
+/// How a filter row joins the row above it.
+public enum FilterConjunction: String, Sendable, Hashable, Codable, CaseIterable {
+    case and, or
+
+    /// The keyword as SQL spells it.
+    public var keyword: String {
+        switch self {
+        case .and: "AND"
+        case .or: "OR"
+        }
+    }
+}
+
 /// One row of the filter bar.
 public struct FilterRule: Sendable, Hashable, Codable, Identifiable {
     public let id: UUID
@@ -50,19 +63,34 @@ public struct FilterRule: Sendable, Hashable, Codable, Identifiable {
     public var values: [DBValue]
     /// For `.anyContains`, the columns searched. Other operators use `column` alone.
     public var targets: [String]?
+    /// How this row joins the one before it; the first row's is not used.
+    public var conjunction: FilterConjunction
 
     public init(
         id: UUID = UUID(),
         column: String,
         op: FilterOperator,
         values: [DBValue] = [],
-        targets: [String]? = nil
+        targets: [String]? = nil,
+        conjunction: FilterConjunction = .and
     ) {
         self.id = id
         self.column = column
         self.op = op
         self.values = values
         self.targets = targets
+        self.conjunction = conjunction
+    }
+
+    // Rules saved before conjunctions existed have none; they were all AND.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        column = try container.decode(String.self, forKey: .column)
+        op = try container.decode(FilterOperator.self, forKey: .op)
+        values = try container.decodeIfPresent([DBValue].self, forKey: .values) ?? []
+        targets = try container.decodeIfPresent([String].self, forKey: .targets)
+        conjunction = try container.decodeIfPresent(FilterConjunction.self, forKey: .conjunction) ?? .and
     }
 
     /// The quick-search rule: `text` anywhere in any of `columns`.
@@ -87,7 +115,12 @@ public enum FilterCompiler {
         }
     }
 
-    /// Compiles `rules`, combined with `AND`.
+    /// Compiles `rules` into one clause.
+    ///
+    /// Each row joins the one before it with its own `AND` or `OR`. `OR` starts a new
+    /// group and the groups are parenthesised, so `a AND b OR c` means `(a AND b) OR (c)`
+    /// and never depends on the reader knowing SQL's precedence. The quick search
+    /// (`.anyContains`) always narrows the whole result: `(…) AND (search)`.
     ///
     /// - Parameter startingParameterIndex: one-based index of the first placeholder, so a
     ///   caller that already bound values can continue the numbering.
@@ -97,8 +130,21 @@ public enum FilterCompiler {
         startingParameterIndex: Int = 1
     ) -> Compiled {
         var parameters: [DBValue] = []
-        var clauses: [String] = []
+        /// The user's rows, grouped: a new group starts at every `OR`.
+        var groups: [[String]] = []
+        /// Quick-search clauses, applied over every group.
+        var searches: [String] = []
         var nextIndex = startingParameterIndex
+
+        func add(_ clause: String, rule: FilterRule) {
+            if rule.op == .anyContains {
+                searches.append(clause)
+            } else if groups.isEmpty || rule.conjunction == .or {
+                groups.append([clause])
+            } else {
+                groups[groups.count - 1].append(clause)
+            }
+        }
 
         func placeholder(_ value: DBValue) -> String {
             parameters.append(value)
@@ -110,9 +156,9 @@ public enum FilterCompiler {
             let column = Identifier.quote(rule.column, dialect: dialect)
             switch rule.op {
             case .isNull:
-                clauses.append("\(column) IS NULL")
+                add("\(column) IS NULL", rule: rule)
             case .isNotNull:
-                clauses.append("\(column) IS NOT NULL")
+                add("\(column) IS NOT NULL", rule: rule)
             case .equal, .notEqual, .lessThan, .lessOrEqual, .greaterThan, .greaterOrEqual:
                 guard let value = rule.values.first else { continue }
                 let comparison =
@@ -124,7 +170,7 @@ public enum FilterCompiler {
                     case .greaterThan: ">"
                     default: ">="
                     }
-                clauses.append("\(column) \(comparison) \(placeholder(value))")
+                add("\(column) \(comparison) \(placeholder(value))", rule: rule)
             case .contains, .startsWith, .endsWith:
                 guard let value = rule.values.first, let text = value.text else { continue }
                 let escaped = escapeLikePattern(text)
@@ -136,16 +182,16 @@ public enum FilterCompiler {
                     }
                 // Casting to text lets the same filter work on numeric and date columns.
                 let lhs = dialect == .postgresql ? "\(column)::text" : "CAST(\(column) AS CHAR)"
-                clauses.append("\(lhs) LIKE \(placeholder(.string(pattern))) ESCAPE '!'")
+                add("\(lhs) LIKE \(placeholder(.string(pattern))) ESCAPE '!'", rule: rule)
             case .inList:
                 guard !rule.values.isEmpty else { continue }
                 let items = rule.values.map { placeholder($0) }.joined(separator: ", ")
-                clauses.append("\(column) IN (\(items))")
+                add("\(column) IN (\(items))", rule: rule)
             case .between:
                 guard rule.values.count >= 2 else { continue }
                 let low = placeholder(rule.values[0])
                 let high = placeholder(rule.values[1])
-                clauses.append("\(column) BETWEEN \(low) AND \(high)")
+                add("\(column) BETWEEN \(low) AND \(high)", rule: rule)
             case .anyContains:
                 guard let value = rule.values.first, let text = value.text, !text.isEmpty else { continue }
                 let targets = (rule.targets ?? [rule.column]).filter { !$0.isEmpty }
@@ -159,12 +205,20 @@ public enum FilterCompiler {
                     let op = dialect == .postgresql ? "ILIKE" : "LIKE"
                     return "\(lhs) \(op) \(placeholder(.string(pattern))) ESCAPE '!'"
                 }
-                clauses.append("(" + parts.joined(separator: " OR ") + ")")
+                add("(" + parts.joined(separator: " OR ") + ")", rule: rule)
             }
         }
 
+        var parts: [String] = []
+        if groups.count == 1, let only = groups.first {
+            parts.append(only.joined(separator: " AND "))
+        } else if groups.count > 1 {
+            let joined = groups.map { "(" + $0.joined(separator: " AND ") + ")" }.joined(separator: " OR ")
+            parts.append(searches.isEmpty ? joined : "(\(joined))")
+        }
+        parts.append(contentsOf: searches)
         return Compiled(
-            whereClause: clauses.isEmpty ? nil : clauses.joined(separator: " AND "),
+            whereClause: parts.isEmpty ? nil : parts.joined(separator: " AND "),
             parameters: parameters
         )
     }

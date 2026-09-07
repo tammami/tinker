@@ -72,6 +72,51 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
 
     var session: ConnectionSession? { environment.session(for: connectionID) }
 
+    /// The connection's configuration as stored now; nil once it has been deleted.
+    private var config: ConnectionConfig? { environment.connections.first { $0.id == connectionID } }
+
+    /// True when the connection is marked as production.
+    public var isProduction: Bool { config?.isProduction ?? false }
+
+    /// Whether result edits write as they are made. Never on a production connection:
+    /// there every write goes through the commit sheet, whatever the checkbox says.
+    public var autoCommitsEdits: Bool { autoCommit && !isProduction }
+
+    /// Set by the tab view: shows a confirmation sheet before statements run on production.
+    @ObservationIgnored public var onConfirmProduction: ((DestructiveConfirmation) -> Void)?
+
+    /// Statements whose leading keyword takes data or objects away; on production these
+    /// need the connection's name typed, as the connection editor promises.
+    static let destructiveKeywords: Set<String> = ["DELETE", "DROP", "TRUNCATE", "ALTER", "UPDATE"]
+
+    /// Starts the statements, after asking on a production connection when any of them
+    /// writes. Reads run without a question; nothing else does.
+    private func start(_ statements: [SQLStatement]) {
+        let writes = statements.filter { !$0.isProbablyReadOnly }
+        guard isProduction, !writes.isEmpty, let config, let onConfirmProduction else {
+            runTask = Task { await execute(statements) }
+            return
+        }
+        let destructive = writes.contains { Self.destructiveKeywords.contains($0.leadingKeyword) }
+        let listed = writes.prefix(5).map { "• " + $0.text.split(whereSeparator: \.isNewline).joined(separator: " ") }
+        var message =
+            "\(writes.count) of \(statements.count) statement\(statements.count == 1 ? "" : "s") "
+            + "will change data on the production connection “\(config.name)”:\n\n" + listed.joined(separator: "\n")
+        if writes.count > listed.count { message += "\n• … and \(writes.count - listed.count) more" }
+        if destructive { message += "\n\nType the connection's name to run them." }
+        onConfirmProduction(
+            DestructiveConfirmation(
+                title: "Run on “\(config.name)”?",
+                message: message,
+                requiredTypedName: destructive ? config.name : nil,
+                confirmTitle: "Run on \(config.name)",
+                action: { [weak self] in
+                    guard let self else { return }
+                    await execute(statements)
+                }
+            ))
+    }
+
     public var selectedResult: QueryResultTab? {
         results.first { $0.id == selectedResultID } ?? results.first
     }
@@ -158,7 +203,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             statusText = "Nothing to run"
             return
         }
-        runTask = Task { await execute(statements) }
+        start(statements)
     }
 
     /// Runs `EXPLAIN` for the statement under the cursor and shows the plan as a result.
@@ -178,7 +223,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             text: text, utf16Range: statement.utf16Range,
             startLine: statement.startLine, terminator: statement.terminator
         )
-        runTask = Task { await execute([explained]) }
+        start([explained])
     }
 
     /// Puts text at the caret, replacing the selection if there is one.
@@ -419,7 +464,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     /// With auto-commit on, an edit to a result is written as it is made, one write at a
     /// time; an edit made during a write follows it. Off, edits wait for Commit.
     private func writeIfAutoCommit(_ scope: CommitScope) {
-        guard autoCommit, let grid = selectedResult?.grid, grid.edits.pendingStatementCount(scope) > 0 else {
+        guard autoCommitsEdits, let grid = selectedResult?.grid, grid.edits.pendingStatementCount(scope) > 0 else {
             return
         }
         if writeTask != nil {
@@ -442,7 +487,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
 
     /// A new row goes when the user leaves it; one left untouched holds nothing and is dropped.
     private func flushNewRowsIfLeft(focusRow: Int) {
-        guard autoCommit, let grid = selectedResult?.grid, !grid.edits.pendingInserts.isEmpty,
+        guard autoCommitsEdits, let grid = selectedResult?.grid, !grid.edits.pendingInserts.isEmpty,
             !grid.isPendingInsertRow(focusRow)
         else { return }
         for insert in grid.edits.pendingInserts where insert.values.isEmpty {

@@ -3,7 +3,8 @@ import DBSQL
 import SwiftUI
 
 /// The grid's filter bar: a quick search across every column, and rows of
-/// column/operator/value combined with AND, plus the generated clause on request.
+/// column/operator/value each joined to the row above with AND or OR, plus the generated
+/// clause on request.
 public struct FilterBarView: View {
     let columns: [ColumnMeta]
     let dialect: SQLDialect
@@ -55,7 +56,7 @@ public struct FilterBarView: View {
                     Label("Add Condition", systemImage: Icon.add)
                 }
                 .buttonStyle(.borderless)
-                .help("Add a column condition; conditions are combined with AND")
+                .help("Add a column condition; each row chooses AND or OR against the row above")
 
                 if !rules.isEmpty {
                     Button("Apply") { onApply(rules) }
@@ -84,8 +85,26 @@ public struct FilterBarView: View {
             if !rules.isEmpty {
                 Divider()
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                    ForEach($rules) { $rule in
+                    ForEach(Array($rules.enumerated()), id: \.element.id) { index, $rule in
                         HStack(spacing: DesignTokens.Spacing.sm) {
+                            // The first row is the WHERE; every other row says how it joins.
+                            if index == 0 {
+                                Text("WHERE")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 64, alignment: .trailing)
+                            } else {
+                                Picker("Join", selection: $rule.conjunction) {
+                                    ForEach(FilterConjunction.allCases, id: \.self) { conjunction in
+                                        Text(conjunction.keyword).tag(conjunction)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(width: 64)
+                                .help("Whether this condition narrows (AND) or widens (OR) the rows above it")
+                                .onChange(of: rule.conjunction) { _, _ in onApply(rules) }
+                            }
+
                             Picker("Column", selection: $rule.column) {
                                 ForEach(columns, id: \.name) { column in
                                     Text(column.name).tag(column.name)

@@ -76,6 +76,10 @@ public final class TableTabController: DataGridDelegate {
         environment.connections.first { $0.id == connectionID }?.isProduction ?? false
     }
 
+    /// Whether edits write as they are made. Never on a production connection: there
+    /// every write goes through the commit sheet, whatever the checkbox says.
+    public var autoCommitsEdits: Bool { autoCommit && !isProduction }
+
     /// Re-reads the grid after the designer changed the table underneath it, so a new
     /// primary key makes the grid editable without the tab being reopened.
     public func reloadAfterStructureChange() async {
@@ -116,7 +120,8 @@ public final class TableTabController: DataGridDelegate {
             hiddenColumns = Set(preferences.hiddenColumns)
             filterRules = preferences.filter.compactMap { stored in
                 guard let op = FilterOperator(rawValue: stored.op) else { return nil }
-                return FilterRule(column: stored.column, op: op, values: stored.values)
+                let conjunction = stored.conjunction.flatMap(FilterConjunction.init(rawValue:)) ?? .and
+                return FilterRule(column: stored.column, op: op, values: stored.values, conjunction: conjunction)
             }
 
             let identityKind =
@@ -374,7 +379,7 @@ public final class TableTabController: DataGridDelegate {
     /// while a write is on the server waits for it and then goes as the next write, so
     /// two commits never run at once and no edit is lost between them.
     private func writeIfAutoCommit(_ scope: CommitScope) {
-        guard autoCommit, let model, model.edits.pendingStatementCount(scope) > 0 else { return }
+        guard autoCommitsEdits, let model, model.edits.pendingStatementCount(scope) > 0 else { return }
         if writeTask != nil {
             queuedWrite = (queuedWrite == .everything || scope == .everything) ? .everything : .loadedRowsOnly
             return
@@ -396,7 +401,7 @@ public final class TableTabController: DataGridDelegate {
     /// A new row is written when the user leaves it, not while it is being filled in. A
     /// row the user added and then left untouched holds nothing, so it goes away.
     private func flushNewRowsIfLeft(focusRow: Int) {
-        guard autoCommit, let model, !model.edits.pendingInserts.isEmpty,
+        guard autoCommitsEdits, let model, !model.edits.pendingInserts.isEmpty,
             !model.isPendingInsertRow(focusRow)
         else { return }
         for insert in model.edits.pendingInserts where insert.values.isEmpty {
@@ -410,7 +415,7 @@ public final class TableTabController: DataGridDelegate {
     /// Turning auto-commit on writes what was waiting, the way the query tab commits its
     /// open transaction.
     public func autoCommitDidChange() {
-        guard autoCommit else { return }
+        guard autoCommitsEdits else { return }
         writeIfAutoCommit(.loadedRowsOnly)
         flushNewRowsIfLeft(focusRow: selection.focusRow)
     }
@@ -528,7 +533,10 @@ public final class TableTabController: DataGridDelegate {
         let preferences = GridPreferences(
             columnWidths: columnWidths,
             sort: model.sort.map { GridSortTerm(column: $0.column, ascending: $0.ascending) },
-            filter: filterRules.map { StoredFilterRule(column: $0.column, op: $0.op.rawValue, values: $0.values) },
+            filter: filterRules.map {
+                StoredFilterRule(
+                    column: $0.column, op: $0.op.rawValue, values: $0.values, conjunction: $0.conjunction.rawValue)
+            },
             hiddenColumns: hiddenColumns.sorted()
         )
         await environment.saveGridPreferences(

@@ -47,6 +47,44 @@ final class QuickSearchAndSnippetTests: XCTestCase {
         XCTAssertEqual(compiled.parameters.count, 3)
     }
 
+    func testOrStartsAGroupAndGroupsAreParenthesised() {
+        let rules = [
+            FilterRule(column: "a", op: .equal, values: [.int(1)]),
+            FilterRule(column: "b", op: .equal, values: [.int(2)]),
+            FilterRule(column: "c", op: .equal, values: [.int(3)], conjunction: .or),
+            FilterRule(column: "d", op: .isNull),
+        ]
+        let compiled = FilterCompiler.compile(rules, dialect: .postgresql)
+        XCTAssertEqual(compiled.whereClause, #"("a" = $1 AND "b" = $2) OR ("c" = $3 AND "d" IS NULL)"#)
+        XCTAssertEqual(compiled.parameters.count, 3)
+    }
+
+    func testAllAndRulesStayFlat() {
+        let rules = [
+            FilterRule(column: "a", op: .equal, values: [.int(1)]),
+            FilterRule(column: "b", op: .equal, values: [.int(2)]),
+        ]
+        XCTAssertEqual(FilterCompiler.compile(rules, dialect: .mysql).whereClause, "`a` = ? AND `b` = ?")
+    }
+
+    func testQuickSearchNarrowsEveryOrGroup() {
+        let rules = [
+            FilterRule(column: "a", op: .equal, values: [.int(1)]),
+            FilterRule(column: "b", op: .equal, values: [.int(2)], conjunction: .or),
+            FilterRule.search("x", in: ["a"]),
+        ]
+        let compiled = FilterCompiler.compile(rules, dialect: .mysql)
+        XCTAssertEqual(
+            compiled.whereClause,
+            "((`a` = ?) OR (`b` = ?)) AND (CAST(`a` AS CHAR) LIKE ? ESCAPE '!')")
+    }
+
+    func testRulesSavedWithoutAConjunctionDecodeAsAnd() throws {
+        let json = #"{"id":"6B7C1C9E-1A9E-4E8E-9A4B-2A1B8C9D0E1F","column":"a","op":"equal","values":[]}"#
+        let rule = try JSONDecoder().decode(FilterRule.self, from: Data(json.utf8))
+        XCTAssertEqual(rule.conjunction, .and)
+    }
+
     func testSnippetExpansionSelectsTheFirstPlaceholder() {
         let expansion = SnippetTemplate.expand("SELECT * FROM ${1:table} WHERE ${2:id} = $3;$0")
         XCTAssertEqual(expansion.text, "SELECT * FROM table WHERE id = ;")

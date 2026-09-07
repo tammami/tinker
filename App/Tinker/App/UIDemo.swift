@@ -295,9 +295,10 @@ enum UIDemo {
                     let tab = controller.openTable(preferred.ref, connectionID: config.id)
                     if let table = controller.tableController(for: tab) {
                         try? await Task.sleep(for: .milliseconds(600))
+                        let first = table.columnsInfo.first?.name ?? "id"
                         table.filterRules = [
-                            FilterRule(
-                                column: table.columnsInfo.first?.name ?? "id", op: .greaterThan, values: [.string("2")])
+                            FilterRule(column: first, op: .greaterThan, values: [.string("2")]),
+                            FilterRule(column: first, op: .equal, values: [.string("1")], conjunction: .or),
                         ]
                         await table.applyFilter(table.filterRules)
                     }

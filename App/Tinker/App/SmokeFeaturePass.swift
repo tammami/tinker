@@ -210,7 +210,7 @@ extension SmokeTest {
                 options.dialect = dialect
                 options.table = scratch
                 let exporter = try RowExporter(url: exportURL, options: options)
-                exporter.begin(columns: grid.columns)
+                try exporter.begin(columns: grid.columns)
                 exporter.write(rows: (0 ..< grid.rowCount).compactMap { grid.loadedRow($0) })
                 try exporter.finish()
                 let exported = try String(contentsOf: exportURL, encoding: .utf8)

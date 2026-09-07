@@ -40,6 +40,15 @@ public struct ExportView: View {
     @State private var progress = ""
     @State private var failure: String?
     @State private var exportTask: Task<Void, Never>?
+    @State private var datesFileName = false
+    @State private var outcome: Outcome?
+
+    /// What a finished export shows.
+    struct Outcome {
+        let url: URL
+        let rows: Int64
+        let seconds: String
+    }
 
     public var body: some View {
         SheetFrame(
@@ -81,6 +90,12 @@ public struct ExportView: View {
                             Toggle("Include header row", isOn: $options.includeHeader)
                             TextField("NULL as", text: $options.nullText, prompt: Text("empty"))
                             Toggle("UTF-8 byte-order mark (for Excel)", isOn: $options.writeByteOrderMark)
+                        case .xlsx:
+                            Toggle("Include header row", isOn: $options.includeHeader)
+                            Text(
+                                "One worksheet, numbers as numbers, the header in bold. Excel holds 1,048,576 rows per sheet."
+                            )
+                            .font(.caption).foregroundStyle(.secondary)
                         case .sqlInsert:
                             TextField("Rows per statement", value: $options.batchSize, format: .number)
                             Toggle("Include CREATE TABLE", isOn: $options.includeCreateTable)
@@ -88,12 +103,32 @@ public struct ExportView: View {
                             Text("One JSON value per row, with column names as keys.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
+                        Toggle("Add today's date to the file name", isOn: $datesFileName)
                     } header: {
                         Text("Options")
                     }
                 }
                 .formStyle(.grouped)
-                .frame(height: 300)
+                .frame(height: 370)
+
+                if let outcome {
+                    // The receipt: what was written, where, and a way to it.
+                    HStack(spacing: DesignTokens.Spacing.sm) {
+                        Image(systemName: Icon.success).foregroundStyle(.green)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Wrote \(outcome.rows) row\(outcome.rows == 1 ? "" : "s") in \(outcome.seconds)")
+                                .font(.callout.weight(.semibold))
+                            Text(outcome.url.path).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer()
+                        Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([outcome.url]) }
+                        Button("Open") { NSWorkspace.shared.open(outcome.url) }
+                    }
+                    .controlSize(.small)
+                    .padding(.horizontal, DesignTokens.Spacing.lg)
+                    .padding(.bottom, DesignTokens.Spacing.md)
+                }
 
                 if isRunning {
                     HStack(spacing: DesignTokens.Spacing.sm) {
@@ -110,7 +145,7 @@ public struct ExportView: View {
             }
         } footer: {
             Spacer()
-            Button("Cancel", role: .cancel) {
+            Button(outcome == nil ? "Cancel" : "Done", role: .cancel) {
                 exportTask?.cancel()
                 onDismiss()
             }
@@ -128,20 +163,29 @@ public struct ExportView: View {
 
     func chooseDestination() {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "\(table?.name ?? "export").\(options.format.fileExtension)"
+        var name = table?.name ?? "result"
+        if datesFileName {
+            let stamp = Date().formatted(.iso8601.year().month().day().dateSeparator(.dash))
+            name += " \(stamp)"
+        }
+        panel.nameFieldStringValue = "\(name).\(options.format.fileExtension)"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         var resolved = options
         resolved.dialect = dialect
         resolved.table = table
+        resolved.sheetTitle = table?.name ?? "Result"
         isRunning = true
+        outcome = nil
+        failure = nil
         exportTask = Task { await run(to: url, options: resolved) }
     }
 
     func run(to url: URL, options: ExportOptions) async {
+        let started = ContinuousClock.now
         do {
             let exporter = try RowExporter(url: url, options: options)
-            exporter.begin(columns: columns)
+            try exporter.begin(columns: columns)
             switch scope {
             case .selection:
                 exporter.write(rows: selectionRows())
@@ -155,9 +199,12 @@ public struct ExportView: View {
                 }
             }
             try exporter.finish()
-            progress = "Wrote \(exporter.writtenRowCount) rows"
+            progress = ""
             isRunning = false
-            onDismiss()
+            outcome = Outcome(
+                url: url, rows: exporter.writtenRowCount,
+                seconds: started.duration(to: .now).formatted(
+                    .units(allowed: [.seconds, .milliseconds], width: .narrow)))
         } catch {
             failure = (error as? DBError)?.errorDescription ?? String(describing: error)
             isRunning = false

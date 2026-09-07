@@ -195,6 +195,15 @@ public struct QueryTabView: View {
 
             Spacer()
 
+            // Export sits where the eye lands after a query: the result's rows to a file.
+            Button {
+                workspace.isExportPresented = true
+            } label: {
+                Label("Export", systemImage: Icon.export)
+            }
+            .disabled(controller.selectedResult?.grid == nil)
+            .help("Write the selected result to CSV, Excel, JSON or SQL (⌘⌥E)")
+
             IconButton(icon: Icon.snippet, label: "Snippets (⌘⇧K)") {
                 workspace.isSnippetsPresented = true
             }

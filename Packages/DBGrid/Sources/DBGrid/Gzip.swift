@@ -18,11 +18,13 @@ public final class GzipDeflater {
     private var isOpen = false
     private static let outputChunk = 256 * 1_024
 
-    /// - Parameter level: zlib's 1 (fastest) to 9 (smallest); 6 is the usual balance.
-    public init(level: Int32 = 6) throws {
-        // Window bits 15 + 16 ask for the gzip wrapper rather than zlib's own.
+    /// - Parameters:
+    ///   - level: zlib's 1 (fastest) to 9 (smallest); 6 is the usual balance.
+    ///   - raw: a bare deflate stream with no wrapper, which is what a zip entry holds.
+    public init(level: Int32 = 6, raw: Bool = false) throws {
+        // Window bits 15 + 16 ask for the gzip wrapper rather than zlib's own; -15 for none.
         let status = deflateInit2_(
-            &stream, level, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY, ZLIB_VERSION,
+            &stream, level, Z_DEFLATED, raw ? -15 : 15 + 16, 8, Z_DEFAULT_STRATEGY, ZLIB_VERSION,
             Int32(MemoryLayout<z_stream>.size))
         guard status == Z_OK else { throw GzipError(code: status, stage: "deflateInit") }
         isOpen = true

@@ -5,6 +5,7 @@ import Foundation
 /// The file formats v0.1 exports (SPEC §14).
 public enum ExportFormat: String, Sendable, Hashable, CaseIterable, Identifiable {
     case csv
+    case xlsx
     case json
     case ndjson
     case sqlInsert
@@ -14,6 +15,7 @@ public enum ExportFormat: String, Sendable, Hashable, CaseIterable, Identifiable
     public var displayName: String {
         switch self {
         case .csv: "CSV"
+        case .xlsx: "Excel (.xlsx)"
         case .json: "JSON"
         case .ndjson: "JSON Lines"
         case .sqlInsert: "SQL INSERT"
@@ -23,6 +25,7 @@ public enum ExportFormat: String, Sendable, Hashable, CaseIterable, Identifiable
     public var fileExtension: String {
         switch self {
         case .csv: "csv"
+        case .xlsx: "xlsx"
         case .json: "json"
         case .ndjson: "ndjson"
         case .sqlInsert: "sql"
@@ -44,6 +47,8 @@ public struct ExportOptions: Sendable, Hashable {
     public var includeCreateTable = false
     public var dialect: SQLDialect = .postgresql
     public var table: TableRef?
+    /// The worksheet's tab name for Excel; the table's name when there is one.
+    public var sheetTitle = "Result"
 
     public init() {}
 }
@@ -54,19 +59,29 @@ public struct ExportOptions: Sendable, Hashable {
 /// buffered file handle, so exporting a million rows costs a constant amount of memory
 /// (SPEC §14).
 public final class RowExporter {
-    private let handle: FileHandle
+    /// The text formats write here; Excel goes through `workbook` instead.
+    private let handle: FileHandle?
+    private let workbook: XLSXWorkbookWriter?
     private let options: ExportOptions
     private var buffer = Data()
     private var wroteHeader = false
     private var rowsWritten: Int64 = 0
     private var batchOpen = false
     private var columns: [ColumnMeta] = []
+    /// A failure met while writing a row, reported by `finish`, since `write` cannot throw.
+    private var deferredError: (any Error)?
 
     /// Flush threshold. Large enough that a write per row never reaches the file system.
     private static let flushThreshold = 256 * 1_024
 
     public init(url: URL, options: ExportOptions) throws {
         self.options = options
+        if options.format == .xlsx {
+            workbook = try XLSXWorkbookWriter(url: url)
+            handle = nil
+            return
+        }
+        workbook = nil
         FileManager.default.createFile(atPath: url.path, contents: nil)
         handle = try FileHandle(forWritingTo: url)
         if options.writeByteOrderMark, options.format != .sqlInsert {
@@ -76,9 +91,11 @@ public final class RowExporter {
 
     public var writtenRowCount: Int64 { rowsWritten }
 
-    public func begin(columns: [ColumnMeta]) {
+    public func begin(columns: [ColumnMeta]) throws {
         self.columns = columns
         switch options.format {
+        case .xlsx:
+            try workbook?.begin(columns: columns, includeHeader: options.includeHeader, title: options.sheetTitle)
         case .csv:
             if options.includeHeader {
                 append(
@@ -105,6 +122,14 @@ public final class RowExporter {
 
     public func write(row: [DBValue]) {
         switch options.format {
+        case .xlsx:
+            guard deferredError == nil else { return }
+            do {
+                try workbook?.write(row: row)
+            } catch {
+                deferredError = error
+            }
+
         case .csv:
             append(
                 row.map { value in
@@ -170,7 +195,11 @@ public final class RowExporter {
 
     /// Finishes the file and closes it. Safe to call twice.
     public func finish() throws {
+        if let deferredError { throw deferredError }
         switch options.format {
+        case .xlsx:
+            try workbook?.finish()
+            return
         case .json:
             append(rowsWritten == 0 ? "]\n" : "\n]\n")
         case .sqlInsert:
@@ -179,7 +208,7 @@ public final class RowExporter {
             break
         }
         try flush()
-        try handle.close()
+        try handle?.close()
     }
 
     private func append(_ text: String) {
@@ -192,7 +221,7 @@ public final class RowExporter {
     }
 
     private func flush() throws {
-        guard !buffer.isEmpty else { return }
+        guard !buffer.isEmpty, let handle else { return }
         try handle.write(contentsOf: buffer)
         buffer.removeAll(keepingCapacity: true)
     }

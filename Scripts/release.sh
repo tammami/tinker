@@ -248,6 +248,22 @@ rm -rf "$STAGING"
 mkdir -p "$STAGING"
 cp -R "$APP" "$STAGING/"
 if [[ "$MODE" == "share" ]]; then cp "$SHARE_DIR/Read me first.txt" "$STAGING/"; fi
+# A file saved by a sandboxed App Store app (WhatsApp, Telegram, Mail) carries a
+# quarantine mark that macOS 15 and later refuses to run, however good the signature:
+# spctl reports "File created by an AppSandbox, exec/open not allowed" (seen 2026-09-07
+# on two Macs). The note in the image says what to do about it.
+cat > "$STAGING/If Tinker won't open.txt" <<NOTE
+If double-clicking Tinker shows only "The application 'Tinker' can't be opened":
+
+  The file reached this Mac through WhatsApp, Telegram, Mail or another App Store
+  app. macOS marks anything those apps save as not runnable, whatever its signature.
+  Either of these fixes it:
+
+    - Terminal:  xattr -dr com.apple.quarantine /Applications/Tinker.app
+    - Or fetch the file again over AirDrop or a download link opened in Safari/Chrome.
+
+  Needs macOS 14 or later. Runs on Apple silicon and Intel Macs.
+NOTE
 ln -s /Applications "$STAGING/Applications"
 hdiutil create -volname "Tinker $VERSION" -srcfolder "$STAGING" \
     -ov -format UDZO -fs HFS+ "$DMG" >/dev/null

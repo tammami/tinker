@@ -8,6 +8,7 @@
 ![UI](https://img.shields.io/badge/UI-SwiftUI%20%2B%20AppKit-0A84FF?style=flat-square)
 ![Engines](https://img.shields.io/badge/engines-PostgreSQL%20%C2%B7%20MySQL%20%C2%B7%20MariaDB-336791?style=flat-square)
 ![Tests](https://img.shields.io/badge/tests-300%2B%20%C2%B7%20integration%20against%20real%20servers-2ea44f?style=flat-square)
+![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-8250df?style=flat-square)
 
 Tinker is built for the developer who lives in a database all day: dev in the morning, staging after lunch, production over SSH at 5 p.m. It is fast enough to page through a million rows without flinching, honest enough to show you the server's exact words when something goes wrong, and careful enough that every write is a transaction you previewed first.
 
@@ -192,3 +193,17 @@ Signed and notarized distribution is implemented in `Scripts/release.sh` but req
 | Updates | [sparkle-project/Sparkle](https://github.com/sparkle-project/Sparkle) |
 
 Nothing else is added without an ADR.
+
+---
+
+## License
+
+Tinker is released under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+
+You may use, study, modify and share it for any **noncommercial purpose**: personal projects, research, education, hobby work and the like. You may not sell it, sell access to it, or use it in a product or service that is offered for money. If you need a commercial license, open an issue and ask.
+
+The license requires that this notice travel with every copy:
+
+```
+Required Notice: Copyright (c) 2026 ThinkFree (https://github.com/tammami/Tinker)
+```

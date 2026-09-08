@@ -85,6 +85,22 @@ final class SQLLiteralTests: XCTestCase {
         XCTAssertEqual(value.sqlLiteral(dialect: .postgresql), "ARRAY[1, NULL, 'a''b']")
     }
 
+    /// The cast's type name comes from the server's catalogue; one that is not type
+    /// spelling is quoted rather than pasted into the statement.
+    func testRawCastQuotesATypeNameThatIsNotAType() {
+        XCTAssertEqual(
+            DBValue.raw(typeName: "mood", text: "happy", bytes: nil).sqlLiteral(dialect: .postgresql),
+            "'happy'::mood")
+        XCTAssertEqual(
+            DBValue.raw(typeName: "my schema.Mood", text: "x", bytes: nil).sqlLiteral(dialect: .postgresql),
+            "'x'::my schema.Mood")
+        XCTAssertEqual(
+            DBValue.raw(typeName: "text; DROP TABLE t; --", text: "x", bytes: nil).sqlLiteral(dialect: .postgresql),
+            #"'x'::"text; DROP TABLE t; --""#)
+        XCTAssertEqual(
+            DBValue.raw(typeName: "mood", text: "x", bytes: nil).sqlLiteral(dialect: .mysql), "'x'")
+    }
+
     func testRenderForDisplaySubstitutesPlaceholders() {
         let sql = "UPDATE t SET a = $1, b = $2 WHERE id = $3"
         let rendered = SQLLiteral.renderForDisplay(

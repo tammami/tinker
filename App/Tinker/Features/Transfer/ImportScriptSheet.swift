@@ -61,6 +61,7 @@ struct ImportScriptSheet: View {
     private var config: ConnectionConfig? { environment.connections.first { $0.id == connectionID } }
     private var dialect: SQLDialect { config?.dialect ?? .postgresql }
     private var isProduction: Bool { config?.isProduction ?? false }
+    @State private var typedName = ""
 
     private var targetLine: String {
         let name = config?.name ?? "connection"
@@ -114,8 +115,9 @@ struct ImportScriptSheet: View {
                 }
             }
         } footer: {
-            if isProduction {
-                Label("Production", systemImage: Icon.production).foregroundStyle(.red).font(.callout.weight(.semibold))
+            if isProduction, let config {
+                // A script can hold anything, DROP included: the name is typed first.
+                ProductionGate(connectionName: config.name, requiresTypedName: true, typed: $typedName)
             }
             Spacer()
             if controller.isRunning {
@@ -131,7 +133,12 @@ struct ImportScriptSheet: View {
                     }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
-                    .disabled(fileURL == nil)
+                    .disabled(
+                        fileURL == nil
+                            || !ProductionGate.passes(
+                                productionName: isProduction ? config?.name : nil, requiresTypedName: true,
+                                typed: typedName)
+                    )
                 }
             }
         }

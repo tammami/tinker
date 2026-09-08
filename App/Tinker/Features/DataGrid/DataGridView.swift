@@ -133,10 +133,13 @@ public struct DataGridView: NSViewRepresentable {
         coordinator.hiddenColumns = hiddenColumns
         if coordinator.revision != revision {
             coordinator.revision = revision
-            coordinator.rebuildColumnsIfNeeded()
-            coordinator.updateGutterWidth()
-            coordinator.updateSortIndicators()
-            coordinator.tableView?.reloadData()
+            // A reload tears down the cell an inline editor sits in, which would end the
+            // edit and commit half-typed text; it waits until the editor is done.
+            if coordinator.inlineEditor != nil {
+                coordinator.reloadWaitsForEditor = true
+            } else {
+                coordinator.reloadAfterRevision()
+            }
         } else {
             coordinator.redrawVisibleCells()
         }
@@ -144,6 +147,10 @@ public struct DataGridView: NSViewRepresentable {
 
     public func makeCoordinator() -> GridCoordinator {
         GridCoordinator(model: model, selection: selection, delegate: delegate)
+    }
+
+    public static func dismantleNSView(_ nsView: NSScrollView, coordinator: GridCoordinator) {
+        coordinator.stopObservingPeekRequests()
     }
 }
 
@@ -161,7 +168,9 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
     var revision = -1
     private var peekObserver: (any NSObjectProtocol)?
 
-    /// The UI demo cannot right-click, so it asks for the map popover this way.
+    /// The UI demo cannot right-click, so it asks for the map popover this way. The
+    /// notification names the tab's controller, so only that tab's grid answers; hidden
+    /// tabs keep their grids in the window and would otherwise answer too.
     private func observePeekRequests() {
         guard peekObserver == nil else { return }
         peekObserver = NotificationCenter.default.addObserver(
@@ -170,11 +179,22 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
             // Read the cell out of the notification before hopping to the main actor.
             let row = note.userInfo?["row"] as? Int
             let column = note.userInfo?["column"] as? Int
+            let target = (note.object as AnyObject?).map(ObjectIdentifier.init)
             MainActor.assumeIsolated {
-                guard let self, self.tableView?.window != nil, let row, let column else { return }
+                guard let self, let window = self.tableView?.window, window.isKeyWindow, let row, let column,
+                    let delegate = self.delegate, target == ObjectIdentifier(delegate as AnyObject)
+                else { return }
                 self.peekOnMap(row: row, column: column)
             }
         }
+    }
+
+    /// Removes the observer; the grid's view is going away.
+    func stopObservingPeekRequests() {
+        if let peekObserver { NotificationCenter.default.removeObserver(peekObserver) }
+        peekObserver = nil
+        mapPopover?.close()
+        mapPopover = nil
     }
     var storedColumnWidths: [String: Double] = [:]
     var hiddenColumns: Set<String> = []
@@ -567,8 +587,19 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
 
     // MARK: - Editing
 
+    /// The cell editor on screen, if any; a reload waits for it.
+    weak var inlineEditor: GridInlineEditor?
+    var reloadWaitsForEditor = false
+
+    func reloadAfterRevision() {
+        rebuildColumnsIfNeeded()
+        updateGutterWidth()
+        updateSortIndicators()
+        tableView?.reloadData()
+    }
+
     func beginEditingFocusedCell() {
-        guard model.isEditable, let tableView else { return }
+        guard model.isEditable, let tableView, inlineEditor == nil else { return }
         let row = selection.focusRow
         let column = selection.focusColumn
         guard model.columns.indices.contains(column), row < model.displayRowCount else { return }
@@ -585,6 +616,15 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         editor.onCommit = { [weak self] text in
             self?.delegate?.gridDidCommitEdit(row: row, column: column, text: text)
         }
+        editor.onFinish = { [weak self] in
+            guard let self else { return }
+            inlineEditor = nil
+            if reloadWaitsForEditor {
+                reloadWaitsForEditor = false
+                reloadAfterRevision()
+            }
+        }
+        inlineEditor = editor
         cell.addSubview(editor)
         editor.frame = cell.bounds
         editor.autoresizingMask = [.width, .height]
@@ -905,6 +945,8 @@ public final class GridTableView: NSTableView {
 /// The text field shown while a cell is being edited.
 final class GridInlineEditor: NSTextField {
     var onCommit: ((String) -> Void)?
+    /// Called after the editor is gone, committed or not.
+    var onFinish: (() -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -935,6 +977,7 @@ final class GridInlineEditor: NSTextField {
         let window = window
         removeFromSuperview()
         if committing { onCommit?(text) }
+        onFinish?()
         window?.makeFirstResponder(window?.contentView)
     }
 }

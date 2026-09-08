@@ -28,6 +28,7 @@ struct PasteSheet: View {
     @State private var replaceExisting = false
     @State private var selected: Set<String>
     @State private var isLoadingTargets = false
+    @State private var typedName = ""
     @State private var loadError: String?
     @State private var existingTables: Set<String> = []
 
@@ -150,8 +151,8 @@ struct PasteSheet: View {
                 }
             }
         } footer: {
-            if targetConfig?.isProduction == true {
-                Label("Production", systemImage: Icon.production).foregroundStyle(.red).font(.callout.weight(.semibold))
+            if let targetConfig, targetConfig.isProduction {
+                ProductionGate(connectionName: targetConfig.name, requiresTypedName: true, typed: $typedName)
             }
             Spacer()
             if controller.isRunning {
@@ -167,7 +168,12 @@ struct PasteSheet: View {
                     }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
-                    .disabled(!canPaste || isLoadingTargets)
+                    .disabled(
+                        !canPaste || isLoadingTargets
+                            || !ProductionGate.passes(
+                                productionName: targetConfig?.isProduction == true ? targetConfig?.name : nil,
+                                requiresTypedName: true, typed: typedName)
+                    )
                 }
             }
         }

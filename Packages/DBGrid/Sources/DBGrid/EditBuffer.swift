@@ -160,6 +160,48 @@ public struct EditBuffer: Sendable {
         }
     }
 
+    /// What a commit is about to write, taken before it runs so that only these changes
+    /// are cleared afterwards and an edit made while the write was on the wire survives.
+    public struct Snapshot: Sendable {
+        let edits: [Int: RowEdit]
+        let deletions: Set<Int>
+        let deletionIdentities: [Int: [String: DBValue]]
+        let insertions: [PendingInsert]
+
+        public var isEmpty: Bool { edits.isEmpty && deletions.isEmpty && insertions.isEmpty }
+    }
+
+    /// The changes a commit of `scope` would write right now.
+    public func snapshot(_ scope: CommitScope) -> Snapshot {
+        Snapshot(
+            edits: edits.filter { !$0.value.changes.isEmpty },
+            deletions: deletions,
+            deletionIdentities: deletionIdentities,
+            insertions: scope == .everything ? insertions : [])
+    }
+
+    /// Clears exactly what `snapshot` wrote. A cell changed again since the snapshot was
+    /// taken keeps its newer value pending; a new row filled in since stays pending.
+    public mutating func remove(committed snapshot: Snapshot) {
+        for (row, written) in snapshot.edits {
+            guard var current = edits[row] else { continue }
+            for (column, value) in written.changes where current.changes[column] == value {
+                current.changes.removeValue(forKey: column)
+            }
+            if current.changes.isEmpty {
+                edits.removeValue(forKey: row)
+            } else {
+                edits[row] = current
+            }
+        }
+        for row in snapshot.deletions {
+            deletions.remove(row)
+            deletionIdentities.removeValue(forKey: row)
+        }
+        let writtenIDs = Set(snapshot.insertions.map(\.id))
+        insertions.removeAll { writtenIDs.contains($0.id) }
+    }
+
     /// How many statements a commit of `scope` would run.
     public func pendingStatementCount(_ scope: CommitScope) -> Int {
         switch scope {
@@ -179,22 +221,26 @@ public struct EditBuffer: Sendable {
     public func statements(
         using generator: DMLGenerator, scope: CommitScope = .everything
     ) throws -> [GeneratedStatement] {
+        try statements(using: generator, snapshot: snapshot(scope))
+    }
+
+    /// The statements that write exactly `snapshot`.
+    public func statements(using generator: DMLGenerator, snapshot: Snapshot) throws -> [GeneratedStatement] {
         var statements: [GeneratedStatement] = []
-        for row in edits.keys.sorted() {
-            guard let edit = edits[row], !edit.changes.isEmpty else { continue }
+        for row in snapshot.edits.keys.sorted() {
+            guard let edit = snapshot.edits[row], !edit.changes.isEmpty else { continue }
             statements.append(
                 try generator.update(
                     changes: edit.changes, originalIdentity: edit.originalIdentity
                 ))
         }
-        for row in deletions.sorted() {
-            guard let identity = deletionIdentities[row] else {
+        for row in snapshot.deletions.sorted() {
+            guard let identity = snapshot.deletionIdentities[row] else {
                 throw DMLGeneratorError.noRowIdentity(generator.table)
             }
             statements.append(try generator.delete(originalIdentity: identity))
         }
-        guard scope == .everything else { return statements }
-        for insert in insertions {
+        for insert in snapshot.insertions {
             statements.append(try generator.insert(values: insert.values))
         }
         return statements

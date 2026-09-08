@@ -88,6 +88,13 @@ public struct TableTabView: View {
         .onChange(of: mode) { _, new in
             if new == .structure { hasVisitedStructure = true }
         }
+        // The rows on the map belong to one page of one grid: a new grid, page, filter or
+        // sort puts every row back on the map.
+        .onChange(of: controller.model.map(ObjectIdentifier.init)) { _, _ in mapRows = nil }
+        .onChange(of: controller.model?.pageOffset) { _, _ in mapRows = nil }
+        .onChange(of: controller.model?.sort) { _, _ in mapRows = nil }
+        .onChange(of: controller.filterRules) { _, _ in mapRows = nil }
+        .onChange(of: controller.quickSearch) { _, _ in mapRows = nil }
         // "Show on Map" from a cell: that one row, from that column.
         .onChange(of: controller.mapRequest) { _, request in
             guard let request else { return }
@@ -122,7 +129,7 @@ public struct TableTabView: View {
                     try? await Task.sleep(for: .milliseconds(1_200))
                     guard let column = geometryColumns.first else { return }
                     NotificationCenter.default.post(
-                        name: .tinkerPeekOnMap, object: nil, userInfo: ["row": 2, "column": column])
+                        name: .tinkerPeekOnMap, object: controller, userInfo: ["row": 2, "column": column])
                 }
             }
             controller.onRequestInspector = { workspace.isInspectorVisible = true }
@@ -130,6 +137,38 @@ public struct TableTabView: View {
                 workspace.followReference(to: table, connectionID: tab.connectionID, filter: rules)
             }
         }
+    }
+
+    /// What an empty grid shows: a filter that matched nothing offers to clear itself; an
+    /// empty table offers a first row when it can take one.
+    @ViewBuilder
+    private func emptyRowsState(_ model: GridModel) -> some View {
+        let filtered =
+            !controller.filterRules.isEmpty || !controller.quickSearch.trimmingCharacters(in: .whitespaces).isEmpty
+        VStack {
+            Spacer(minLength: DesignTokens.Spacing.xl)
+            EmptyStateView(
+                icon: filtered ? Icon.filter : Icon.table,
+                title: filtered ? "No rows match these conditions" : "This table has no rows",
+                message: filtered
+                    ? "Loosen the filter or the search to see rows again."
+                    : (model.isEditable ? "Add a row to start filling it in." : nil),
+                fills: false
+            ) {
+                if filtered {
+                    Button("Clear Filter") {
+                        controller.quickSearch = ""
+                        controller.applyFilterLive([])
+                        Task { await controller.applyQuickSearch("") }
+                    }
+                } else if model.isEditable {
+                    Button("Add Row") { controller.addRow() }
+                }
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(true)
     }
 
     /// The tab's own header: what this is, Data or Structure, and the grid's tools.
@@ -255,6 +294,15 @@ public struct TableTabView: View {
                         revision: controller.revision,
                         delegate: controller
                     )
+                    // An empty grid says why it is empty and what to do about it, rather
+                    // than leaving striped rows to be read as "still loading".
+                    .overlay {
+                        if !controller.isLoading, controller.errorText == nil, model.displayRowCount == 0,
+                            model.isExhausted || model.totalCount == 0
+                        {
+                            emptyRowsState(model)
+                        }
+                    }
                 } else if controller.isLoading {
                     VStack(spacing: DesignTokens.Spacing.md) {
                         ProgressView()
@@ -358,6 +406,7 @@ public struct TableTabView: View {
                 } else if model.edits.pendingStatementCount > 0 {
                     Button("Discard") { controller.discardEdits() }
                         .controlSize(.small)
+                        .disabled(controller.isWriting)
                     Button {
                         presentCommitPreview()
                     } label: {
@@ -366,6 +415,7 @@ public struct TableTabView: View {
                     .controlSize(.small)
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut("s", modifiers: [.command, .shift])
+                    .disabled(controller.isWriting)
                 }
             }
         }
@@ -379,10 +429,13 @@ public struct TableTabView: View {
             ProgressView().controlSize(.small)
             Text("Saving…")
         } else if model.edits.pendingStatementCount(.loadedRowsOnly) > 0 {
+            if let reason = controller.errorText {
+                Text(reason).foregroundStyle(.red).lineLimit(1).truncationMode(.middle)
+            }
             Button("Discard") { controller.discardEdits() }
                 .controlSize(.small)
             Button {
-                Task { await controller.commit() }
+                Task { await controller.commit(.loadedRowsOnly) }
             } label: {
                 Label("Retry", systemImage: Icon.commit)
             }

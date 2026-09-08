@@ -16,9 +16,13 @@ public actor MySQLSQLConnection: SQLConnection {
     public nonisolated let backendID: String
     public nonisolated let serverVersion: ServerVersion
     public nonisolated let introspector: any SchemaIntrospector
+    public nonisolated let transport: TransportInfo
 
     private var transactionOpen = false
     private var closed = false
+    /// Set when a statement changed session state (`USE`, `SET`), so the reset on release
+    /// only pays its round trip when there is something to put back.
+    private var sessionMutated = false
     /// Kept open so a cancel does not have to wait for a fresh handshake (SPEC §7.3).
     private var killConnection: MySQLConnection?
 
@@ -44,6 +48,21 @@ public actor MySQLSQLConnection: SQLConnection {
             major: numbers.major, minor: numbers.minor, patch: numbers.patch,
             flavor: Self.flavor(from: versionText), rawString: versionText
         )
+        // What the wire actually is. mysql-nio negotiates TLS only when the server greeting
+        // offers it, and otherwise carries on in the clear; a mode that requires TLS must
+        // not be satisfied by that (an on-path attacker can strip the capability bit).
+        let transport = try await Self.readTransport(on: underlying, logger: logger)
+        if config.tls.mode.requiresTLS, !transport.isEncrypted {
+            throw DBError.connectionFailed(
+                underlying:
+                    "TLS mode '\(config.tls.mode.rawValue)' requires an encrypted connection, but the server "
+                    + "connection to \(config.host):\(config.port) is not encrypted",
+                hint:
+                    "The server did not offer TLS. Enable it on the server, or lower the mode only if plaintext is acceptable"
+            )
+        }
+        self.transport = transport
+
         let tinyint1IsBool = config.options[ConnectionConfig.OptionKey.tinyint1IsBool] != "false"
         decoder = MySQLValueDecoder(
             settings: MySQLSessionSettings(
@@ -68,6 +87,45 @@ public actor MySQLSQLConnection: SQLConnection {
                 "SET SESSION max_execution_time = \(milliseconds)",
                 on: underlying, logger: logger, decoder: decoder
             )
+        }
+    }
+
+    /// The negotiated cipher and protocol, from the session's own status variables. An
+    /// empty `Ssl_cipher` is what an unencrypted session reports.
+    static func readTransport(on connection: MySQLConnection, logger: Logger) async throws -> TransportInfo {
+        let status = try await rawQuery(
+            "SHOW SESSION STATUS WHERE Variable_name IN ('Ssl_cipher', 'Ssl_version')",
+            on: connection, logger: logger, decoder: MySQLValueDecoder()
+        )
+        var cipher: String?
+        var version: String?
+        for row in status.rows where row.count >= 2 {
+            let value = row[1].text?.trimmingCharacters(in: .whitespaces) ?? ""
+            switch row[0].text?.lowercased() {
+            case "ssl_cipher": cipher = value.isEmpty ? nil : value
+            case "ssl_version": version = value.isEmpty ? nil : value
+            default: break
+            }
+        }
+        return TransportInfo(isEncrypted: cipher != nil, protocolVersion: version, cipher: cipher)
+    }
+
+    /// Puts the session back the way the connection started: the configured database,
+    /// the server's default SQL mode and checks, no profiling. Skipped when nothing ran
+    /// that could have changed them.
+    public func resetSessionState() async throws {
+        guard sessionMutated, !closed else { return }
+        sessionMutated = false
+        if let database = config.database, !database.isEmpty {
+            _ = try await Self.rawQuery(
+                "USE \(Identifier.quote(database, dialect: .mysql))", on: underlying, logger: logger, decoder: decoder)
+        }
+        for statement in [
+            "SET SESSION sql_mode = DEFAULT", "SET SESSION foreign_key_checks = 1", "SET SESSION autocommit = 1",
+            "SET SESSION time_zone = DEFAULT", "SET SESSION profiling = 0",
+        ] {
+            // Not every server has every variable; the ones it has are what matter.
+            _ = try? await Self.rawQuery(statement, on: underlying, logger: logger, decoder: decoder)
         }
     }
 
@@ -103,10 +161,11 @@ public actor MySQLSQLConnection: SQLConnection {
                 onRow: collect,
                 onMetadata: { metadata in metadataBox.withLockedValue { $0 = metadata } }
             ).get()
-        } catch let error where isUnsupportedByPreparedProtocol(error) {
+        } catch let error where isUnsupportedByPreparedProtocol(error) && parameters.isEmpty {
             // Some statements — SHOW GRANTS, ANALYZE, several administrative commands —
             // can only run over the text protocol. It reports no affected-row count, which
-            // none of those statements has anyway.
+            // none of those statements has anyway. A statement with parameters cannot take
+            // this path: the text protocol would run it with the placeholders unbound.
             collected.withLockedValue { $0 = ([], []) }
             try await connection.simpleQuery(sql, onRow: collect).get()
         }
@@ -216,7 +275,7 @@ public actor MySQLSQLConnection: SQLConnection {
                     onRow: { row in batcher.append(row) },
                     onMetadata: { metadata in metadataBox.withLockedValue { $0 = metadata } }
                 ).get()
-            } catch let error where Self.isUnsupportedByPreparedProtocol(error) {
+            } catch let error where Self.isUnsupportedByPreparedProtocol(error) && parameters.isEmpty {
                 try await underlying.simpleQuery(sql, onRow: { row in batcher.append(row) }).get()
             }
 
@@ -239,7 +298,8 @@ public actor MySQLSQLConnection: SQLConnection {
         }
     }
 
-    /// Keeps ``isInTransaction`` honest when the user types the keywords themselves.
+    /// Keeps ``isInTransaction`` honest when the user types the keywords themselves, and
+    /// notes a statement that changed session state for the reset on release.
     private func noteTransactionKeyword(in sql: String) {
         let keyword = SQLStatement(
             text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil
@@ -247,6 +307,7 @@ public actor MySQLSQLConnection: SQLConnection {
         switch keyword {
         case "BEGIN", "START": transactionOpen = true
         case "COMMIT", "ROLLBACK": transactionOpen = false
+        case "USE", "SET": sessionMutated = true
         default: break
         }
     }

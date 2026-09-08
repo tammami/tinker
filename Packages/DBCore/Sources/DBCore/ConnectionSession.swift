@@ -13,6 +13,29 @@ public enum ConnectionState: Sendable, Hashable {
     public var isUsable: Bool { if case .connected = self { true } else { false } }
 }
 
+/// How a session reaches its server: the wire's encryption and whether an SSH tunnel
+/// carries it.
+public struct TransportSummary: Sendable, Hashable {
+    public let transport: TransportInfo
+    public let isTunnelled: Bool
+
+    public init(transport: TransportInfo, isTunnelled: Bool) {
+        self.transport = transport
+        self.isTunnelled = isTunnelled
+    }
+
+    /// True when every hop is protected: TLS on the wire, or an SSH tunnel around it.
+    public var isProtected: Bool { transport.isEncrypted || isTunnelled }
+
+    /// One line for the status bar tooltip.
+    public var summary: String {
+        var parts: [String] = []
+        if isTunnelled { parts.append("SSH tunnel") }
+        parts.append(transport.summary)
+        return parts.joined(separator: " · ")
+    }
+}
+
 /// One live connection to one configured server, shared by every window and tab that uses
 /// that configuration.
 ///
@@ -46,13 +69,21 @@ public actor ConnectionSession {
         let connection: any SQLConnection
         var leasedTo: UUID?
         var lastUsed: ContinuousClock.Instant
+        /// The read-only state last told to the server on this connection; nil when it
+        /// has to be told again (never yet, or the lock changed while it was leased).
+        var readOnlyApplied: Bool?
     }
+
+    /// The session whose SSH tunnel this one rides on, for a session opened on another
+    /// database of the same server. Nil for the connection's own session.
+    private let tunnelSource: ConnectionSession?
 
     public init(
         config: ConnectionConfig,
         registry: DriverRegistry,
         secrets: any SecretStore,
         tunnelProvider: (any TunnelProvider)? = nil,
+        tunnelSource: ConnectionSession? = nil,
         logger: Logger = Logger(label: "tinker.session"),
         clock: any Clock<Duration> = ContinuousClock()
     ) {
@@ -60,6 +91,7 @@ public actor ConnectionSession {
         self.registry = registry
         self.secrets = secrets
         self.tunnelProvider = tunnelProvider
+        self.tunnelSource = tunnelSource
         self.logger = logger
         self.clock = clock
     }
@@ -100,8 +132,42 @@ public actor ConnectionSession {
     public var isReadOnly: Bool { config.readOnly && !readOnlyOverridden }
 
     /// Unlocks or re-locks writes for the lifetime of this session only. Never persisted.
-    public func setReadOnlyOverride(_ overridden: Bool) {
+    ///
+    /// The server is told as well: every idle connection gets the new setting now, and
+    /// a leased one gets it the next time it is handed out.
+    public func setReadOnlyOverride(_ overridden: Bool) async {
         readOnlyOverridden = overridden
+        for index in pool.indices {
+            if pool[index].leasedTo == nil {
+                await applyReadOnlyGuard(to: pool[index].connection)
+                pool[index].readOnlyApplied = isReadOnly
+            } else {
+                pool[index].readOnlyApplied = nil
+            }
+        }
+    }
+
+    /// Tells the server whether this connection may write, so the guard holds for every
+    /// statement whatever it looks like — `EXPLAIN ANALYZE DELETE`, `SELECT … INTO`, a
+    /// function with side effects — and not only for what the client recognises as a
+    /// write. A connection that was never read-only is left alone.
+    ///
+    /// Held connections (a query tab keeps one) are not in the pool's hands, so their
+    /// owner calls this before each run.
+    public func applyReadOnlyGuard(to connection: any SQLConnection) async {
+        guard config.readOnly else { return }
+        let sql =
+            switch config.dialect {
+            case .postgresql: "SET default_transaction_read_only = \(isReadOnly ? "on" : "off")"
+            case .mysql: "SET SESSION TRANSACTION READ \(isReadOnly ? "ONLY" : "WRITE")"
+            }
+        do {
+            _ = try await connection.executeCollecting(sql)
+        } catch {
+            logger.warning(
+                "read-only guard not applied",
+                metadata: ["error": "\((error as? DBError)?.errorDescription ?? "\(error)")"])
+        }
     }
 
     // MARK: - Connecting
@@ -142,6 +208,24 @@ public actor ConnectionSession {
         }
     }
 
+    /// The SSH tunnel for this session's configuration, opened if it is not up. Sessions
+    /// on the server's other databases borrow it, so a server reached over SSH costs one
+    /// SSH connection however many of its databases are open.
+    public func openTunnelIfNeeded() async throws -> (any Tunnel)? {
+        guard let ssh = config.ssh else { return nil }
+        guard let provider = tunnelProvider else {
+            throw DBError.tunnelFailed(stage: .ssh, underlying: "This build has no SSH support registered")
+        }
+        var needsNewTunnel = true
+        if let existing = tunnel { needsNewTunnel = !(await existing.isOpen) }
+        if needsNewTunnel {
+            tunnel = try await provider.openTunnel(
+                ssh, to: config.host, port: config.port, secrets: secrets, logger: logger
+            )
+        }
+        return tunnel
+    }
+
     /// Resolves secrets and, when configured, opens the tunnel, returning a config that
     /// points at whichever endpoint the driver should dial.
     private func resolveConfig(
@@ -158,19 +242,13 @@ public actor ConnectionSession {
         var port = config.port
 
         if let ssh = config.ssh {
-            guard let provider = tunnelProvider else {
-                throw DBError.tunnelFailed(
-                    stage: .ssh, underlying: "This build has no SSH support registered"
-                )
-            }
             setState(.connecting(stage: .ssh))
             report?(.ssh, "Opening SSH connection to \(ssh.user)@\(ssh.host):\(ssh.port)…")
-            var needsNewTunnel = true
-            if let existing = tunnel { needsNewTunnel = !(await existing.isOpen) }
-            if needsNewTunnel {
-                tunnel = try await provider.openTunnel(
-                    ssh, to: config.host, port: config.port, secrets: secrets, logger: logger
-                )
+            if let tunnelSource {
+                // Another database of the same server: one SSH connection serves them all.
+                tunnel = try await tunnelSource.openTunnelIfNeeded()
+            } else {
+                _ = try await openTunnelIfNeeded()
             }
             guard let tunnel else {
                 throw DBError.tunnelFailed(stage: .portForward, underlying: "The tunnel closed immediately")
@@ -245,6 +323,10 @@ public actor ConnectionSession {
                 let newLease = Lease(id: UUID(), connectionID: pool[index].id)
                 pool[index].leasedTo = newLease.id
                 pool[index].lastUsed = .now
+                if config.readOnly, pool[index].readOnlyApplied != isReadOnly {
+                    await applyReadOnlyGuard(to: pool[index].connection)
+                    pool[index].readOnlyApplied = isReadOnly
+                }
                 setState(.connected)
                 return (newLease, pool[index].connection)
             }
@@ -259,9 +341,14 @@ public actor ConnectionSession {
             let connection = try await makeConnection()
             let id = nextConnectionID()
             let newLease = Lease(id: UUID(), connectionID: id)
+            var applied: Bool?
+            if config.readOnly {
+                await applyReadOnlyGuard(to: connection)
+                applied = isReadOnly
+            }
             pool.append(
                 PooledConnection(
-                    id: id, connection: connection, leasedTo: newLease.id, lastUsed: .now
+                    id: id, connection: connection, leasedTo: newLease.id, lastUsed: .now, readOnlyApplied: applied
                 ))
             setState(.connected)
             return (newLease, connection)
@@ -269,7 +356,9 @@ public actor ConnectionSession {
     }
 
     /// Returns a connection to the pool. A connection left inside a transaction is rolled
-    /// back first, so the next tab never inherits someone else's uncommitted work.
+    /// back first, so the next tab never inherits someone else's uncommitted work, and
+    /// session state (`USE`, `search_path`, `SET ROLE`, variables) is put back so the
+    /// next tab starts where a fresh connection would.
     public func release(_ lease: Lease) async {
         guard let index = pool.firstIndex(where: { $0.id == lease.connectionID }) else { return }
         pool[index].leasedTo = nil
@@ -278,6 +367,29 @@ public actor ConnectionSession {
         if await connection.isInTransaction {
             try? await connection.rollback()
         }
+        do {
+            try await connection.resetSessionState()
+            // The reset also clears the server-side read-only guard; the next lease
+            // applies it again rather than trusting what this one remembers.
+            if let current = pool.firstIndex(where: { $0.id == lease.connectionID }) {
+                pool[current].readOnlyApplied = nil
+            }
+        } catch {
+            // A connection that cannot be reset is not handed out again.
+            logger.debug("session reset failed; dropping the connection", metadata: ["error": "\(error)"])
+            if let current = pool.firstIndex(where: { $0.id == lease.connectionID }) {
+                let removed = pool.remove(at: current)
+                await removed.connection.close()
+            }
+        }
+    }
+
+    /// The transport of this session's connections, as the server reported it: whether
+    /// the wire is encrypted and whether it runs through an SSH tunnel. Nil before the
+    /// first connection is up.
+    public var transportSummary: TransportSummary? {
+        guard let first = pool.first else { return nil }
+        return TransportSummary(transport: first.connection.transport, isTunnelled: tunnel != nil)
     }
 
     /// Closes connections that have sat unused past the idle timeout.
@@ -321,9 +433,16 @@ public actor ConnectionSession {
         for pooled in pool { await pooled.connection.close() }
         pool.removeAll()
         cache.invalidateAll()
-        await tunnel?.close()
+        // A borrowed tunnel belongs to the connection's own session and outlives this one.
+        if tunnelSource == nil { await tunnel?.close() }
         tunnel = nil
         setState(.disconnected)
+    }
+
+    /// Drops everything cached about one table: its columns, key, indexes, constraints,
+    /// triggers and partitioning, and the schema listing that carries its row count.
+    public func invalidateIntrospection(for table: TableRef) {
+        cache.invalidate(table: table)
     }
 
     // MARK: - Introspection cache

@@ -66,10 +66,10 @@ public final class AppEnvironment {
         }
     }
 
-    /// Deletes a connection, its Keychain items and everything remembered about it.
+    /// Deletes a connection, its Keychain items and everything remembered about it,
+    /// closing every session it had open — on its own database and on any other.
     public func delete(_ config: ConnectionConfig) async {
-        await session(for: config.id)?.disconnect()
-        sessions.removeValue(forKey: config.id)
+        await invalidateSession(for: config.id)
         do {
             try await store?.deleteConnection(id: config.id)
             try await secrets.deleteSecrets(forConnection: config.id)
@@ -171,10 +171,13 @@ public final class AppEnvironment {
 
     // MARK: - Sessions
 
-    /// The session for a configuration, created on first use.
     /// Sessions opened on other databases of a connection, keyed by connection and name.
     private var databaseSessions: [String: ConnectionSession] = [:]
+    /// Connections whose read-only lock the user lifted for this run of the app (⌘⇧L).
+    /// Kept here so a session opened later on another database starts unlocked too.
+    private var readOnlyOverrides: Set<UUID> = []
 
+    /// The session for a configuration, created on first use.
     public func session(for id: UUID) -> ConnectionSession? {
         if let existing = sessions[id] { return existing }
         guard let config = connections.first(where: { $0.id == id }) else { return nil }
@@ -186,6 +189,7 @@ public final class AppEnvironment {
             logger: logger
         )
         sessions[id] = session
+        applyReadOnlyOverride(to: session, for: id)
         return session
     }
 
@@ -193,22 +197,32 @@ public final class AppEnvironment {
     /// when the sidebar listed databases; what tells a name apart from "another database".
     public var currentDatabases: [UUID: String] = [:]
 
+    /// The database a connection's own session is on: what the server said if the sidebar
+    /// has asked, else what the config names, else PostgreSQL's default — a database
+    /// named after the user. Never nil for PostgreSQL, so a session on "another" database
+    /// is only ever opened for a database that really is another one.
+    private func mainDatabase(of config: ConnectionConfig) -> String? {
+        currentDatabases[config.id] ?? config.database ?? (config.dialect == .postgresql ? config.user : nil)
+    }
+
     /// A session on the same server but another database — what PostgreSQL needs to
     /// read or write a database other than the one the connection opens. The main
     /// session is returned when `database` is that one or nil, and always for MySQL,
     /// whose databases are schemas of the one server session.
     public func session(for id: UUID, database: String?) -> ConnectionSession? {
         guard let config = connections.first(where: { $0.id == id }) else { return nil }
-        guard config.dialect == .postgresql, let database, !database.isEmpty,
-            database != config.database, database != currentDatabases[id]
+        guard config.dialect == .postgresql, let database, !database.isEmpty, database != mainDatabase(of: config)
         else { return session(for: id) }
         let key = "\(id.uuidString)/\(database)"
         if let existing = databaseSessions[key] { return existing }
         var other = config
         other.database = database
         let session = ConnectionSession(
-            config: other, registry: registry, secrets: secrets, tunnelProvider: tunnelProvider, logger: logger)
+            config: other, registry: registry, secrets: secrets, tunnelProvider: tunnelProvider,
+            // One SSH connection per server: the other database's session rides the main one's tunnel.
+            tunnelSource: self.session(for: id), logger: logger)
         databaseSessions[key] = session
+        applyReadOnlyOverride(to: session, for: id)
         return session
     }
 
@@ -229,27 +243,46 @@ public final class AppEnvironment {
         return (sessions[id].map { [$0] } ?? []) + others
     }
 
+    /// Whether the user has lifted the connection's read-only lock for this run.
+    public func isReadOnlyOverridden(_ id: UUID) -> Bool { readOnlyOverrides.contains(id) }
+
+    /// Lifts or restores a connection's read-only lock on every session it has now and
+    /// every session it opens later.
+    public func setReadOnlyOverride(for id: UUID, _ overridden: Bool) async {
+        if overridden { readOnlyOverrides.insert(id) } else { readOnlyOverrides.remove(id) }
+        for session in sessions(for: id) { await session.setReadOnlyOverride(overridden) }
+    }
+
+    private func applyReadOnlyOverride(to session: ConnectionSession, for id: UUID) {
+        guard readOnlyOverrides.contains(id) else { return }
+        Task { await session.setReadOnlyOverride(true) }
+    }
+
     /// Closes every connection of `id` while keeping the sessions, so a watcher of the
     /// main session's state sees it go and come back.
     public func disconnect(_ id: UUID) async {
         for session in sessions(for: id) { await session.disconnect() }
     }
 
-    /// Drops a cached session so the next use picks up an edited configuration.
+    /// Drops a cached session so the next use picks up an edited configuration. What was
+    /// known about the old one — the database it sat on, the lifted lock — goes with it.
     public func invalidateSession(for id: UUID) async {
         let prefix = id.uuidString + "/"
         for key in databaseSessions.keys where key.hasPrefix(prefix) {
             if let other = databaseSessions.removeValue(forKey: key) { await other.disconnect() }
         }
+        currentDatabases.removeValue(forKey: id)
+        readOnlyOverrides.remove(id)
         guard let session = sessions.removeValue(forKey: id) else { return }
         await session.disconnect()
     }
 
     public func disconnectAll() async {
-        for session in sessions.values { await session.disconnect() }
-        sessions.removeAll()
+        // Other databases first: their tunnels are borrowed from the main sessions.
         for session in databaseSessions.values { await session.disconnect() }
         databaseSessions.removeAll()
+        for session in sessions.values { await session.disconnect() }
+        sessions.removeAll()
     }
 
     // MARK: - History, preferences, settings

@@ -413,6 +413,72 @@ final class DDLGeneratorTests: XCTestCase {
         )
     }
 
+    // MARK: - Names from a catalogue are never trusted as SQL
+
+    /// A character set, collation, engine, index method or operator class read from a
+    /// hostile server must not be able to end the clause it sits in.
+    func testCatalogueNamesThatAreNotBareWordsAreQuoted() {
+        let id = ColumnDefinition(name: "id", type: "integer", isNullable: false)
+        var name = ColumnDefinition(name: "name", type: "varchar(20)")
+        name.characterSet = "utf8mb4; DROP TABLE x; --"
+        name.collation = "utf8mb4_bin`; DROP TABLE y; --"
+        var definition = base(myTable, idColumn: id, nameColumn: name)
+        definition.options = TableOptions(
+            engine: "InnoDB; DROP TABLE z", characterSet: "utf8mb4\"", collation: "utf8mb4_0900_ai_ci")
+        let create = my().create(definition).map(\.sql)
+        XCTAssertEqual(
+            create.first,
+            "CREATE TABLE `d`.`customers` (\n    `id` integer NOT NULL,\n"
+                + "    `name` varchar(20) CHARACTER SET `utf8mb4; DROP TABLE x; --` "
+                + "COLLATE `utf8mb4_bin``; DROP TABLE y; --`,\n    PRIMARY KEY (`id`)\n) "
+                + "ENGINE = `InnoDB; DROP TABLE z` DEFAULT CHARSET = `utf8mb4\"` COLLATE = utf8mb4_0900_ai_ci"
+        )
+
+        var current = base(pgTable, idColumn: id, nameColumn: ColumnDefinition(name: "name", type: "text"))
+        var edited = current
+        edited.indexes = [
+            IndexDefinition(
+                name: "n_idx", columns: [IndexColumn(name: "name", operatorClass: "text_pattern_ops; DROP TABLE q")],
+                method: "btree); DROP TABLE p; --")
+        ]
+        XCTAssertEqual(
+            pg().alter(from: current, to: edited).map(\.sql),
+            [
+                #"CREATE INDEX "n_idx" ON "public"."customers" USING "btree); DROP TABLE p; --" "#
+                    + #"("name" "text_pattern_ops; DROP TABLE q")"#
+            ]
+        )
+        // A plain name stays a plain word, as every server expects it.
+        current.options = TableOptions(engine: nil)
+        edited = current
+        edited.indexes = [IndexDefinition(name: "n_idx", columns: [IndexColumn(name: "name")], method: "gin")]
+        XCTAssertEqual(
+            pg().alter(from: current, to: edited).map(\.sql),
+            [#"CREATE INDEX "n_idx" ON "public"."customers" USING gin ("name")"#]
+        )
+    }
+
+    /// A type goes into a statement only as `ColumnTypeSpec` renders it: members quoted,
+    /// anything that is not type spelling dropped.
+    func testTypesAreRenderedThroughTheSpec() {
+        let id = ColumnDefinition(name: "id", type: "integer", isNullable: false)
+        let name = ColumnDefinition(name: "name", type: "text")
+        let current = base(pgTable, idColumn: id, nameColumn: name)
+        var edited = current
+        edited.columns[1].type = "varchar(50); DROP TABLE customers; --"
+        XCTAssertEqual(
+            pg().alter(from: current, to: edited).map(\.sql),
+            [
+                #"ALTER TABLE "public"."customers" ALTER COLUMN "name" TYPE varchar(50)  DROP TABLE customers  "#
+                    + #"USING "name"::varchar(50)  DROP TABLE customers "#
+            ]
+        )
+        var mysqlEdited = base(myTable, idColumn: id, nameColumn: name)
+        mysqlEdited.columns[1].type = "enum('a','b'); DROP TABLE t"
+        let clause = my().columnClause(mysqlEdited.columns[1])
+        XCTAssertEqual(clause, "`name` enum('a','b')  DROP TABLE t")
+    }
+
     // MARK: - Ordering
 
     /// Constraints come off before the columns they sit on, and go back on afterwards.

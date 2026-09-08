@@ -63,6 +63,12 @@ public final class QueryBuilderController {
 
     private var session: ConnectionSession? { environment.session(for: connectionID, schema: schema) }
 
+    /// The connection's name when it is marked production, else nil.
+    public var productionName: String? {
+        let config = environment.connections.first { $0.id == connectionID }
+        return config?.isProduction == true ? config?.name : nil
+    }
+
     /// The statement the canvas describes right now.
     public var sql: String? { model.sql(dialect: dialect) }
 

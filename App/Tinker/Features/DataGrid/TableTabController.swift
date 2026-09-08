@@ -347,7 +347,10 @@ public final class TableTabController: DataGridDelegate {
     }
 
     public func addRow() {
-        model?.addRow()
+        guard let model, model.addRow() != nil else { return }
+        // The new row is where the user is about to type, so focus moves into it; a row
+        // added and never entered would otherwise be dropped on the next selection change.
+        selection = GridSelection(row: model.displayRowCount - 1, column: 0)
         bumpRevision()
         updateStatus()
     }
@@ -380,28 +383,67 @@ public final class TableTabController: DataGridDelegate {
     /// two commits never run at once and no edit is lost between them.
     private func writeIfAutoCommit(_ scope: CommitScope) {
         guard autoCommitsEdits, let model, model.edits.pendingStatementCount(scope) > 0 else { return }
-        if writeTask != nil {
+        enqueueWrite(scope)
+    }
+
+    /// The one gate every commit goes through — auto-commit, Retry, the toolbar's Commit
+    /// and the ⌘⇧S sheet — so two never run at once. A scope asked for while a write is
+    /// on the server is merged into the next write; the page is re-read once, after the
+    /// queue drains, so an edit made during a write is neither lost nor written twice.
+    @discardableResult
+    private func enqueueWrite(_ scope: CommitScope) -> Task<Void, Never> {
+        if let writeTask {
             queuedWrite = (queuedWrite == .everything || scope == .everything) ? .everything : .loadedRowsOnly
-            return
+            return writeTask
         }
-        writeTask = Task { [weak self] in
+        isWriting = true
+        let task = Task { [weak self] in
             guard let self else { return }
-            isWriting = true
-            var next: CommitScope? = scope
-            while let scope = next {
-                _ = await commit(scope)
-                next = queuedWrite
+            var initial: CommitScope? = scope
+            repeat {
+                var current = initial
+                initial = nil
+                var failed = false
+                while let scope = current {
+                    current = nil
+                    if (model?.edits.pendingStatementCount(scope) ?? 0) > 0, !(await performCommit(scope)) {
+                        failed = true
+                        break
+                    }
+                    current = queuedWrite
+                    queuedWrite = nil
+                }
+                if failed {
+                    queuedWrite = nil
+                    break
+                }
+                await reloadAfterWrite()
+                initial = queuedWrite
                 queuedWrite = nil
-            }
+            } while initial != nil
             isWriting = false
             writeTask = nil
         }
+        writeTask = task
+        return task
+    }
+
+    /// Re-reads the page after a write, so a value the server set (a default, a trigger's
+    /// work) is what the grid shows. A new row still being filled in stays.
+    private func reloadAfterWrite() async {
+        guard let model else { return }
+        await model.reload(keepingNewRows: !model.edits.pendingInserts.isEmpty)
+        bumpRevision()
+        updateStatus()
     }
 
     /// A new row is written when the user leaves it, not while it is being filled in. A
     /// row the user added and then left untouched holds nothing, so it goes away.
+    ///
+    /// Not while a write is on the server: its reload empties the row count for a moment,
+    /// during which the row the user is in would not read as a new row.
     private func flushNewRowsIfLeft(focusRow: Int) {
-        guard autoCommitsEdits, let model, !model.edits.pendingInserts.isEmpty,
+        guard autoCommitsEdits, !isWriting, let model, !model.edits.pendingInserts.isEmpty,
             !model.isPendingInsertRow(focusRow)
         else { return }
         for insert in model.edits.pendingInserts where insert.values.isEmpty {
@@ -420,7 +462,10 @@ public final class TableTabController: DataGridDelegate {
         flushNewRowsIfLeft(focusRow: selection.focusRow)
     }
 
+    /// Drops every pending edit. Refused while a write is on the server: what is on the
+    /// wire will land whatever the grid shows, so the answer would be a lie.
     public func discardEdits() {
+        guard !isWriting else { return }
         model?.edits.discardAll()
         bumpRevision()
         updateStatus()
@@ -431,27 +476,43 @@ public final class TableTabController: DataGridDelegate {
         (try? model?.pendingStatements()) ?? []
     }
 
-    /// Runs the commit and re-reads the page, so a value the server set (a default, a
-    /// trigger's work) is what the grid shows. `loadedRowsOnly` leaves new rows pending.
+    /// Commits the pending changes of `scope` and re-reads the page. Goes through the
+    /// same single-flight gate as auto-commit, so it waits for a write already on the
+    /// server rather than running beside it. Returns what happened, for the status bar.
     public func commit(_ scope: CommitScope = .everything) async -> String? {
-        guard let model, let session else { return nil }
-        if await session.isReadOnly { return "This connection is read-only" }
+        lastCommitMessage = nil
+        await enqueueWrite(scope).value
+        return lastCommitMessage ?? errorText
+    }
+
+    /// The last commit's outcome: a count, or nil when nothing was pending.
+    @ObservationIgnored private var lastCommitMessage: String?
+
+    /// Runs one commit. Returns false when the server refused it; the edits stay put
+    /// and the message is in `errorText`, which the status bar shows beside Retry.
+    private func performCommit(_ scope: CommitScope) async -> Bool {
+        guard let model, let session else { return false }
+        if await session.isReadOnly {
+            errorText = "This connection is read-only"
+            return false
+        }
         do {
             let runner = SessionStatementRunner(session: session)
             let result = try await model.commit(using: runner, scope: scope)
-            await model.reload(keepingNewRows: scope == .loadedRowsOnly)
+            if result.statementCount > 0 {
+                lastCommitMessage =
+                    "Committed \(result.statementCount) statement\(result.statementCount == 1 ? "" : "s")"
+            }
+            errorText = nil
             bumpRevision()
             updateStatus()
-            return result.statementCount == 0
-                ? nil
-                : "Committed \(result.statementCount) statement\(result.statementCount == 1 ? "" : "s")"
+            return true
         } catch let error as GridCommitError {
             errorText = error.description
-            return error.description
+            return false
         } catch {
-            let message = (error as? DBError)?.errorDescription ?? String(describing: error)
-            errorText = message
-            return message
+            errorText = (error as? DBError)?.errorDescription ?? String(describing: error)
+            return false
         }
     }
 

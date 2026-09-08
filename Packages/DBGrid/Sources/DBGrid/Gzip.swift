@@ -87,6 +87,10 @@ public final class GzipInflater {
 
     /// Decompresses whatever `input` holds, which may be any slice of the file: the
     /// stream keeps its own state between calls.
+    /// The most one call may produce. A 1 MiB piece of a dump inflates to a few MiB;
+    /// only a crafted file inflates to gigabytes, and it is refused rather than held.
+    public static let outputLimit = 64 * 1_024 * 1_024
+
     public func decompress(_ input: Data) throws -> Data {
         guard isOpen, !isFinished else { return Data() }
         var output = Data()
@@ -111,6 +115,10 @@ public final class GzipInflater {
                     return out.count - Int(stream.avail_out)
                 }
                 output.append(contentsOf: buffer[0 ..< produced])
+                guard output.count <= Self.outputLimit else {
+                    throw GzipError(
+                        code: Z_DATA_ERROR, stage: "inflate (output over \(Self.outputLimit >> 20) MiB per piece)")
+                }
                 if ended {
                     if stream.avail_in > 0 {
                         // Another member follows; start it where this one ended.

@@ -88,6 +88,12 @@ public final class StructureController {
 
     private var session: ConnectionSession? { environment.session(for: connectionID, table: table) }
 
+    /// True while the user has changed something that has not been run.
+    public var hasUnsavedEdits: Bool {
+        guard let loaded, let edited else { return false }
+        return loaded != edited
+    }
+
     // MARK: - Loading
 
     /// Reads the table's definition, once.
@@ -95,19 +101,31 @@ public final class StructureController {
     /// The table tab starts this read as soon as its rows are on screen, and the Structure
     /// view asks again when it appears; the second caller waits for the read in flight
     /// rather than starting its own, so the switch costs nothing extra.
-    public func load(force: Bool = false) async {
+    ///
+    /// `force` reads again from the server, dropping this table's cached catalogue first,
+    /// and waits for any read already in flight rather than racing it. Edits the user
+    /// has not run are kept when `keepingEdits` is set — a refresh must not throw away
+    /// their work — and replaced otherwise, which is what a run wants.
+    public func load(force: Bool = false, keepingEdits: Bool = false) async {
         // Nothing to read: the table does not exist yet.
         guard mode == .edit else { return }
-        if let loadTask, !force {
+        if let loadTask {
             await loadTask.value
-            return
+            if !force { return }
         }
         // Already read: switching back to Structure shows it at once rather than re-reading.
         if loaded != nil, !force { return }
-        let task = Task { await read() }
+        if force, let session {
+            await session.invalidateIntrospection(for: table)
+        }
+        let task = Task { await read(keepingEdits: keepingEdits) }
         loadTask = task
+        isLoading = true
         await task.value
-        if loadTask == task { loadTask = nil }
+        if loadTask == task {
+            loadTask = nil
+            isLoading = false
+        }
     }
 
     /// One leased connection, the catalog reads one after another on it.
@@ -115,13 +133,11 @@ public final class StructureController {
     /// Reads fired together each miss the cache at once, and on a fresh session every
     /// miss leases — and opens — its own connection; seven handshakes cost more than
     /// seven small queries in a row on one.
-    private func read() async {
+    private func read(keepingEdits: Bool) async {
         guard let session else {
             errorText = "No session for this connection"
             return
         }
-        isLoading = true
-        defer { isLoading = false }
         let started = ContinuousClock.now
         do {
             let table = table
@@ -172,11 +188,22 @@ public final class StructureController {
                 partitioning: partitioning,
                 options: TableOptions(engine: info?.engine, collation: info?.collation)
             )
+            // Column identities are fresh every read; the selection follows the name.
+            let selectedName = edited?.columns.first { $0.id == selectedColumnID }?.name
+            let keptEdits = keepingEdits && hasUnsavedEdits ? edited : nil
             loaded = definition
-            edited = definition
+            if let keptEdits {
+                edited = keptEdits
+                statusText = "The table changed on the server; your unsaved edits are kept."
+            } else {
+                edited = definition
+            }
             errorText = nil
-            if selectedColumnID == nil || !definition.columns.contains(where: { $0.id == selectedColumnID }) {
-                selectedColumnID = definition.columns.first?.id
+            let columnsShown = edited?.columns ?? definition.columns
+            if let selectedName, let match = columnsShown.first(where: { $0.name == selectedName }) {
+                selectedColumnID = match.id
+            } else if !columnsShown.contains(where: { $0.id == selectedColumnID }) {
+                selectedColumnID = columnsShown.first?.id
             }
         } catch {
             errorText = (error as? DBError)?.errorDescription ?? String(describing: error)
@@ -248,8 +275,9 @@ public final class StructureController {
     /// Runs the pending statements and reloads from the server.
     ///
     /// What the tab shows afterwards is what the server has, never what was asked for: the
-    /// introspection cache for this table is dropped first, so a partly-applied MySQL run
-    /// is visible rather than hidden behind the edit that produced it.
+    /// introspection cache for this table is dropped and the definition read again, on
+    /// success and on failure alike, so a partly-applied MySQL run is visible rather than
+    /// hidden behind the edit that produced it.
     public func execute() async {
         guard let session, !pendingStatements.isEmpty else { return }
         if await session.isReadOnly {
@@ -269,7 +297,7 @@ public final class StructureController {
                 // starts reflecting the server like any other.
                 didCreate = true
             }
-            await load()
+            await load(force: true)
 
             if result.isSuccess {
                 errorText = nil
@@ -283,7 +311,7 @@ public final class StructureController {
         } catch {
             let message = (error as? DBError)?.errorDescription ?? String(describing: error)
             await session.invalidateIntrospection()
-            await load()
+            await load(force: true)
             errorText = message
         }
     }

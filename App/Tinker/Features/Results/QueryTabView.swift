@@ -60,6 +60,10 @@ public struct QueryTabView: View {
             await controller.loadCompletionSources()
         }
         .onChange(of: controller.sql) { _, new in tab.sql = new }
+        // The rows on the map belong to one result: another result, or a re-run, puts
+        // every row back.
+        .onChange(of: controller.selectedResultID) { _, _ in mapRows = nil }
+        .onChange(of: controller.results.map(\.id)) { _, _ in mapRows = nil }
         // "Show on Map" from a result cell: that one row, from that column.
         .onChange(of: controller.mapRequest) { _, request in
             guard let request else { return }
@@ -522,7 +526,7 @@ public struct QueryTabView: View {
                         Button("Discard") { controller.discardEdits() }
                             .controlSize(.small)
                         Button {
-                            Task { await controller.commitEdits() }
+                            Task { await controller.commitEdits(.loadedRowsOnly) }
                         } label: {
                             Label("Retry", systemImage: Icon.commit)
                         }
@@ -535,6 +539,7 @@ public struct QueryTabView: View {
                 } else if let grid = result.grid, grid.edits.pendingStatementCount > 0 {
                     Button("Discard") { controller.discardEdits() }
                         .controlSize(.small)
+                        .disabled(controller.isWritingEdits)
                     Button {
                         presentCommitPreview(grid)
                     } label: {
@@ -542,6 +547,7 @@ public struct QueryTabView: View {
                     }
                     .controlSize(.small)
                     .buttonStyle(.borderedProminent)
+                    .disabled(controller.isWritingEdits)
                 }
                 if result.grid != nil {
                     if controller.selection.rowSpan > 1 || controller.selection.columnSpan > 1 {

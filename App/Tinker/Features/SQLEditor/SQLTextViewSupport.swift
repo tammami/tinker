@@ -61,6 +61,9 @@ public final class SQLTextView: NSTextView {
     /// for anything that is not one of ours, so the menu and the text system keep theirs.
     private func handleCommandKey(_ event: NSEvent, via route: String) -> Bool {
         guard event.modifierFlags.contains(.command), !event.modifierFlags.contains(.control) else { return false }
+        // Key equivalents reach every editor in the window, the hidden tabs' included; only
+        // the one the user is typing in may answer, or another tab's statement would run.
+        guard window?.firstResponder === self else { return false }
         let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
         // ⌘R runs the statement at the cursor (or the highlighted block), ⌘⇧R only the
         // selection, ⌘⌥R the whole page. The menu carries the same three.
@@ -98,7 +101,7 @@ public final class SQLTextView: NSTextView {
     /// the list has to be closed from both or it cannot be dismissed at all.
     public override func cancelOperation(_ sender: Any?) {
         if let coordinator, coordinator.completion.isVisible {
-            coordinator.completion.dismiss()
+            coordinator.dismissByUser()
             return
         }
         super.cancelOperation(sender)
@@ -126,7 +129,7 @@ public final class SQLTextView: NSTextView {
             case 125: return coordinator.completion.moveSelection(by: 1)  // down
             case 126: return coordinator.completion.moveSelection(by: -1)  // up
             case 36, 48: return coordinator.completion.acceptSelection()  // return, tab
-            case 53: return coordinator.completion.dismiss()  // escape
+            case 53: return coordinator.dismissByUser()  // escape
             default: break
             }
         }

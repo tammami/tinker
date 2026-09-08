@@ -113,9 +113,10 @@ public struct SidebarView: View {
 extension WorkspaceModel {
     /// Opens the connection sheet on a fresh PostgreSQL configuration.
     public func presentNewConnection() {
+        // A new connection starts with TLS required (ADR-0031); stored ones keep theirs.
         editingConnection = ConnectionConfig(
             name: "New Connection", dialect: .postgresql,
-            host: "localhost", port: 5_432, user: NSUserName()
+            host: "localhost", port: 5_432, user: NSUserName(), tls: TLSConfig(mode: .require)
         )
         isEditingNewConnection = true
     }
@@ -194,9 +195,10 @@ struct SidebarRow: View {
                     .foregroundStyle(iconColor)
                     .frame(width: DesignTokens.Metrics.iconWidth)
                     .symbolVariant(isGroup ? .fill : .none)
+                // Snake-case names lose their meaning when cut in the middle; the tail goes.
                 Text(item.title)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)
                 if let subtitle = item.subtitle {
                     if case .tableFolder = item.kind {
                         Spacer(minLength: DesignTokens.Spacing.xs)
@@ -243,7 +245,7 @@ struct SidebarRow: View {
                 .opacity(isLive ? 1 : 0.55)
             Text(config.name)
                 .lineLimit(1)
-                .truncationMode(.middle)
+                .truncationMode(.tail)
                 .foregroundStyle(isLive ? .primary : .secondary)
             if config.isProduction {
                 Badge(text: "PROD", color: Color(nsColor: DesignTokens.Colors.productionBadge), isProminent: true)
@@ -443,7 +445,7 @@ struct SidebarRow: View {
             Button {
                 workspace.editingConnection = ConnectionConfig(
                     name: "New Connection", groupPath: path, dialect: .postgresql,
-                    host: "localhost", port: 5_432, user: NSUserName()
+                    host: "localhost", port: 5_432, user: NSUserName(), tls: TLSConfig(mode: .require)
                 )
                 workspace.isEditingNewConnection = true
             } label: {
@@ -827,6 +829,15 @@ struct SidebarRow: View {
     @MainActor
     func runDDL(_ verb: String, info: TableInfo, connectionID: UUID) async {
         guard let session = workspace.environment.session(for: connectionID, table: info.ref) else { return }
+        if await session.isReadOnly {
+            workspace.confirmation = DestructiveConfirmation(
+                title: "\(verb) not run",
+                message: "This connection is read-only. Unlock it with ⌘⇧L to change objects.",
+                confirmTitle: "OK",
+                action: {}
+            )
+            return
+        }
         do {
             let (lease, connection) = try await session.lease()
             defer { Task { await session.release(lease) } }

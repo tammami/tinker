@@ -52,6 +52,9 @@ prepare_pg() {
     local admin="$1"
     command -v psql >/dev/null || die "psql not found on PATH (needed for PostgreSQL preparation)"
     parse_url "$admin"
+    # The password travels in PGPASSWORD, never in psql's argv where `ps` shows it.
+    export PGPASSWORD="$URL_PASS"
+    admin="${URL_SCHEME}://${URL_USER}@${URL_HOST}:${URL_PORT:-5432}/${URL_DB:-postgres}"
     local host="$URL_HOST" port="${URL_PORT:-5432}"
     case "$URL_SCHEME" in postgres|postgresql) ;; *) die "TINKER_TEST_PG_ADMIN_URL must use postgresql://";; esac
 

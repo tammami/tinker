@@ -529,4 +529,42 @@ final class CommitScopeTests: XCTestCase {
         buffer.discard(.everything)
         XCTAssertTrue(buffer.isEmpty)
     }
+
+    /// An edit made while a commit is on the server must not vanish when that commit
+    /// clears the buffer: only what the snapshot wrote goes.
+    func testRemovingACommittedSnapshotKeepsChangesMadeSince() throws {
+        var buffer = makeBuffer()
+        let snapshot = buffer.snapshot(.loadedRowsOnly)
+        // While the write is on the wire: row 0's cell changes again, a new cell on row 5
+        // is edited, and a second new row is added.
+        buffer.setValue(.int(3), row: 0, column: "a", loaded: .int(1), identity: ["id": .int(1)])
+        buffer.setValue(.string("x"), row: 5, column: "name", loaded: .string("y"), identity: ["id": .int(6)])
+        let second = buffer.addInsert()
+        buffer.setInsertValue(.string("second"), id: second.id, column: "name")
+
+        buffer.remove(committed: snapshot)
+
+        XCTAssertEqual(buffer.editedRowIndices, [0, 5], "row 0 was changed again; row 5 was never written")
+        XCTAssertTrue(buffer.deletedRowIndices.isEmpty, "the delete was written")
+        XCTAssertEqual(buffer.pendingInserts.count, 2, "loadedRowsOnly wrote no insert")
+        XCTAssertEqual(buffer.value(row: 0, column: "a", loaded: .int(1)), .int(3))
+
+        // A full commit of what is left clears exactly that; nothing added later is touched.
+        let everything = buffer.snapshot(.everything)
+        let generator = DMLGenerator(dialect: .postgresql, table: table, identityColumns: ["id"])
+        XCTAssertEqual(try buffer.statements(using: generator, snapshot: everything).count, 4)
+        let third = buffer.addInsert()
+        buffer.setInsertValue(.string("third"), id: third.id, column: "name")
+        buffer.remove(committed: everything)
+        XCTAssertTrue(buffer.editedRowIndices.isEmpty)
+        XCTAssertEqual(buffer.pendingInserts.map(\.id), [third.id])
+    }
+
+    func testRemovingASnapshotLeavesAnUnchangedCellUnedited() {
+        var buffer = makeBuffer()
+        let snapshot = buffer.snapshot(.everything)
+        buffer.remove(committed: snapshot)
+        XCTAssertTrue(buffer.isEmpty)
+        XCTAssertEqual(buffer.pendingStatementCount, 0)
+    }
 }

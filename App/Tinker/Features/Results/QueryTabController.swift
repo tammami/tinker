@@ -85,19 +85,25 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     /// Set by the tab view: shows a confirmation sheet before statements run on production.
     @ObservationIgnored public var onConfirmProduction: ((DestructiveConfirmation) -> Void)?
 
-    /// Statements whose leading keyword takes data or objects away; on production these
-    /// need the connection's name typed, as the connection editor promises.
-    static let destructiveKeywords: Set<String> = ["DELETE", "DROP", "TRUNCATE", "ALTER", "UPDATE"]
-
     /// Starts the statements, after asking on a production connection when any of them
-    /// writes. Reads run without a question; nothing else does.
+    /// writes. Reads run without a question; nothing else does. With no way to ask (the
+    /// tab's view has not attached one), a production write does not run at all.
     private func start(_ statements: [SQLStatement]) {
         let writes = statements.filter { !$0.isProbablyReadOnly }
-        guard isProduction, !writes.isEmpty, let config, let onConfirmProduction else {
+        guard isProduction, !writes.isEmpty, let config else {
             runTask = Task { await execute(statements) }
             return
         }
-        let destructive = writes.contains { Self.destructiveKeywords.contains($0.leadingKeyword) }
+        guard let onConfirmProduction else {
+            statusText = "Not run: production writes need the tab's confirmation sheet"
+            errorBanner = QueryErrorBanner(
+                error: DBError.protocolError(
+                    "“\(config.name)” is a production connection and this tab cannot ask for confirmation; open the statement in a query tab"
+                ),
+                statement: writes[0].text)
+            return
+        }
+        let destructive = writes.contains(where: \.isProbablyDestructive)
         let listed = writes.prefix(5).map { "• " + $0.text.split(whereSeparator: \.isNewline).joined(separator: " ") }
         var message =
             "\(writes.count) of \(statements.count) statement\(statements.count == 1 ? "" : "s") "
@@ -112,7 +118,10 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
                 confirmTitle: "Run on \(config.name)",
                 action: { [weak self] in
                     guard let self else { return }
-                    await execute(statements)
+                    // Through `runTask`, so ⌘. cancels a confirmed run like any other.
+                    let task = Task { await self.execute(statements) }
+                    runTask = task
+                    await task.value
                 }
             ))
     }
@@ -186,6 +195,10 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         // Running is the end of typing, so the suggestion list goes with it.
         NotificationCenter.default.post(name: .tinkerDismissCompletion, object: nil)
         guard !isRunning else { return }
+        guard !isWritingEdits else {
+            statusText = "Waiting for the edit to save before running"
+            return
+        }
         let statements: [SQLStatement]
         if let selectedRange, !selectedRange.isEmpty {
             let units = Array(sql.utf16)
@@ -212,9 +225,12 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     /// never on a read-only connection.
     public func explain(analyze: Bool) {
         NotificationCenter.default.post(name: .tinkerDismissCompletion, object: nil)
-        guard !isRunning,
-            let statement = StatementSplitter.statement(at: caretOffset, in: sql, dialect: dialect)
-        else {
+        guard !isRunning else { return }
+        guard !isWritingEdits else {
+            statusText = "Waiting for the edit to save before running"
+            return
+        }
+        guard let statement = StatementSplitter.statement(at: caretOffset, in: sql, dialect: dialect) else {
             statusText = "Put the cursor in a statement to explain it"
             return
         }
@@ -251,6 +267,11 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         defer {
             isRunning = false
             timerTask?.cancel()
+            // An edit that arrived while the statements ran waited; it goes now.
+            if let scope = writeAfterRun {
+                writeAfterRun = nil
+                enqueueWrite(scope, on: writeTarget ?? selectedResult)
+            }
         }
 
         isReadOnly = await session.isReadOnly
@@ -316,7 +337,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
                 await environment.recordHistory(
                     QueryHistoryEntry(
                         connectionID: connectionID, database: session.config.database,
-                        sql: statement.text, startedAt: startedAt, duration: duration,
+                        sql: SQLRedactor.redactSecrets(statement.text), startedAt: startedAt, duration: duration,
                         rowCount: Int64(grid.rowCount), succeeded: true
                     ))
                 isInTransaction = await connection.isInTransaction
@@ -361,10 +382,11 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             } else {
                 result.message = "\(rowTotal) row\(rowTotal == 1 ? "" : "s") in \(Self.format(duration))"
             }
+            // History is written to disk: a password inside `CREATE USER` must not go with it.
             await environment.recordHistory(
                 QueryHistoryEntry(
                     connectionID: connectionID, database: session.config.database,
-                    sql: statement.text, startedAt: startedAt, duration: duration,
+                    sql: SQLRedactor.redactSecrets(statement.text), startedAt: startedAt, duration: duration,
                     rowCount: Int64(rowTotal), succeeded: true
                 ))
             isInTransaction = await connection.isInTransaction
@@ -377,9 +399,9 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             await environment.recordHistory(
                 QueryHistoryEntry(
                     connectionID: connectionID, database: session.config.database,
-                    sql: statement.text, startedAt: startedAt,
+                    sql: SQLRedactor.redactSecrets(statement.text), startedAt: startedAt,
                     duration: clockStart.duration(to: .now),
-                    error: banner.message, succeeded: false
+                    error: SQLRedactor.redactSecrets(banner.message), succeeded: false
                 ))
             bumpRevision()
             return true
@@ -431,9 +453,17 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         (try? selectedResult?.grid?.pendingStatements()) ?? []
     }
 
+    /// Drops every pending edit on the selected result. Refused while a write is on the
+    /// server: what is on the wire will land whatever the grid shows.
     public func discardEdits() {
+        guard !isWritingEdits else { return }
         selectedResult?.grid?.edits.discardAll()
         bumpRevision()
+    }
+
+    /// Pending edits on any result, not just the selected one; what closing the tab asks about.
+    public var hasPendingEdits: Bool {
+        results.contains { ($0.grid?.edits.pendingStatementCount ?? 0) > 0 }
     }
 
     public func setSelectionNull() {
@@ -456,39 +486,81 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
 
     // MARK: - Auto-commit of result edits
 
-    /// True while an auto-commit write of result edits is on the server.
+    /// True while a write of result edits is on the server.
     public private(set) var isWritingEdits = false
     @ObservationIgnored private var writeTask: Task<Void, Never>?
     @ObservationIgnored private var queuedWrite: CommitScope?
+    /// The result whose edits the write task is committing.
+    @ObservationIgnored private var writeTarget: QueryResultTab?
+    /// A write asked for while statements were running; it goes when they finish, since
+    /// both would use the tab's one held connection.
+    @ObservationIgnored private var writeAfterRun: CommitScope?
+    @ObservationIgnored private var lastCommitMessage: String?
 
     /// With auto-commit on, an edit to a result is written as it is made, one write at a
     /// time; an edit made during a write follows it. Off, edits wait for Commit.
     private func writeIfAutoCommit(_ scope: CommitScope) {
-        guard autoCommitsEdits, let grid = selectedResult?.grid, grid.edits.pendingStatementCount(scope) > 0 else {
-            return
-        }
-        if writeTask != nil {
-            queuedWrite = (queuedWrite == .everything || scope == .everything) ? .everything : .loadedRowsOnly
-            return
-        }
-        writeTask = Task { [weak self] in
-            guard let self else { return }
-            isWritingEdits = true
-            var next: CommitScope? = scope
-            while let scope = next {
-                _ = await commitEdits(scope)
-                next = queuedWrite
-                queuedWrite = nil
-            }
-            isWritingEdits = false
-            writeTask = nil
-        }
+        guard autoCommitsEdits, let result = selectedResult, let grid = result.grid,
+            grid.edits.pendingStatementCount(scope) > 0
+        else { return }
+        enqueueWrite(scope, on: result)
     }
 
-    /// A new row goes when the user leaves it; one left untouched holds nothing and is dropped.
+    /// The one gate every commit of result edits goes through — auto-commit, Retry, the
+    /// ⌘⇧S sheet — so two never run at once and never beside a running statement, which
+    /// would share the held connection. The page is re-read once the queue drains.
+    @discardableResult
+    private func enqueueWrite(_ scope: CommitScope, on result: QueryResultTab?) -> Task<Void, Never> {
+        if let writeTask {
+            queuedWrite = (queuedWrite == .everything || scope == .everything) ? .everything : .loadedRowsOnly
+            return writeTask
+        }
+        if isRunning {
+            writeAfterRun = (writeAfterRun == .everything || scope == .everything) ? .everything : .loadedRowsOnly
+            return runTask.map { task in Task { await task.value } } ?? Task {}
+        }
+        guard let result, let grid = result.grid else { return Task {} }
+        isWritingEdits = true
+        writeTarget = result
+        let task = Task { [weak self] in
+            guard let self else { return }
+            var initial: CommitScope? = scope
+            repeat {
+                var current = initial
+                initial = nil
+                var failed = false
+                while let scope = current {
+                    current = nil
+                    if grid.edits.pendingStatementCount(scope) > 0, !(await performCommitEdits(scope, on: result)) {
+                        failed = true
+                        break
+                    }
+                    current = queuedWrite
+                    queuedWrite = nil
+                }
+                if failed {
+                    queuedWrite = nil
+                    break
+                }
+                await grid.reload(keepingNewRows: !grid.edits.pendingInserts.isEmpty)
+                result.message = Self.pageMessage(grid, exactTotal: result.exactTotal, duration: .zero)
+                bumpRevision()
+                initial = queuedWrite
+                queuedWrite = nil
+            } while initial != nil
+            isWritingEdits = false
+            writeTarget = nil
+            writeTask = nil
+        }
+        writeTask = task
+        return task
+    }
+
+    /// A new row goes when the user leaves it; one left untouched holds nothing and is
+    /// dropped. Not while a write is on the server, whose reload briefly empties the grid.
     private func flushNewRowsIfLeft(focusRow: Int) {
-        guard autoCommitsEdits, let grid = selectedResult?.grid, !grid.edits.pendingInserts.isEmpty,
-            !grid.isPendingInsertRow(focusRow)
+        guard autoCommitsEdits, !isWritingEdits, let grid = selectedResult?.grid,
+            !grid.edits.pendingInserts.isEmpty, !grid.isPendingInsertRow(focusRow)
         else { return }
         for insert in grid.edits.pendingInserts where insert.values.isEmpty {
             grid.edits.removeInsert(id: insert.id)
@@ -498,8 +570,9 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     }
 
     public func addRow() {
-        guard let grid = selectedResult?.grid, grid.isEditable else { return }
-        grid.addRow()
+        guard let grid = selectedResult?.grid, grid.isEditable, grid.addRow() != nil else { return }
+        // Focus moves into the new row, so it is not flushed as untouched on the next click.
+        selection = GridSelection(row: grid.displayRowCount - 1, column: 0)
         bumpRevision()
     }
 
@@ -516,28 +589,45 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     /// then commits when the user commits it. Either way the page is re-read afterwards,
     /// so a timestamp the server set is what the grid shows.
     public func commitEdits(_ scope: CommitScope = .everything) async -> String? {
-        guard let result = selectedResult, let grid = result.grid, grid.isEditable, let session else { return nil }
-        if await session.isReadOnly { return "This connection is read-only" }
+        guard let result = selectedResult, let grid = result.grid, grid.isEditable else { return nil }
+        lastCommitMessage = nil
+        await enqueueWrite(scope, on: result).value
+        return lastCommitMessage ?? errorBanner?.message
+    }
+
+    /// Runs one commit of `result`'s edits. Returns false when the server refused it; the
+    /// edits stay put and the banner says why.
+    private func performCommitEdits(_ scope: CommitScope, on result: QueryResultTab) async -> Bool {
+        guard let grid = result.grid, let session else { return false }
+        if await session.isReadOnly {
+            errorBanner = QueryErrorBanner(
+                error: DBError.protocolError("This connection is read-only. Unlock it with ⌘⇧L to write."),
+                statement: result.statement)
+            bumpRevision()
+            return false
+        }
         do {
             let connection = try await connectionForRun(session: session)
-            let runner = HeldConnectionRunner(connection: connection, usesSavepoint: !autoCommit)
+            // A transaction the user opened by hand (BEGIN as a statement) is theirs to
+            // commit: the edit joins it under a savepoint rather than committing it.
+            let runner = HeldConnectionRunner(connection: connection, usesSavepoint: !autoCommit || isInTransaction)
             let committed = try await grid.commit(using: runner, scope: scope)
             isInTransaction = await connection.isInTransaction
-            await grid.reload(keepingNewRows: scope == .loadedRowsOnly)
-            result.message = Self.pageMessage(grid, exactTotal: result.exactTotal, duration: .zero)
+            if committed.statementCount > 0 {
+                lastCommitMessage =
+                    "Committed \(committed.statementCount) statement\(committed.statementCount == 1 ? "" : "s")"
+                    + (isInTransaction ? " into the open transaction" : "")
+            }
             bumpRevision()
-            return committed.statementCount == 0
-                ? nil
-                : "Committed \(committed.statementCount) statement\(committed.statementCount == 1 ? "" : "s")"
-                    + (autoCommit ? "" : " into the open transaction")
+            return true
         } catch let error as GridCommitError {
             errorBanner = QueryErrorBanner(error: error, statement: error.statement ?? result.statement)
             bumpRevision()
-            return error.description
+            return false
         } catch {
             errorBanner = QueryErrorBanner(error: error, statement: result.statement)
             bumpRevision()
-            return (error as? DBError)?.errorDescription ?? String(describing: error)
+            return false
         }
     }
 
@@ -601,6 +691,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     private func connectionForRun(session: ConnectionSession) async throws -> any SQLConnection {
         if let heldConnection {
             try await applySessionDatabase(on: heldConnection)
+            await session.applyReadOnlyGuard(to: heldConnection)
             // Auto-commit was turned off after this connection was taken: the next statement
             // is the first of a transaction, so one is opened here rather than never.
             if !autoCommit, !isInTransaction {
@@ -746,6 +837,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     /// Switches the tab to another database or schema, reporting what the server said if
     /// it refuses. The picker keeps the previous choice on failure.
     public func selectDatabase(_ name: String) async {
+        // Columns being read for the old schema must not land under the new one.
+        warmTask?.cancel()
         let previous = sessionDatabase
         sessionDatabase = name
         guard let session = environment.session(for: connectionID) else { return }
@@ -774,6 +867,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         guard id != connectionID,
             let config = environment.connections.first(where: { $0.id == id })
         else { return }
+        warmTask?.cancel()
         await releaseHeldConnection()
         connectionID = id
         dialect = config.dialect
@@ -1026,17 +1120,23 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     }
 
     /// Returns true when a table's columns were not cached before.
+    ///
+    /// The connection, schema and session are fixed at entry: a switch while a read is in
+    /// flight bumps `completionGeneration`, and what arrives after that is dropped rather
+    /// than filed under the new connection's key. A table that cannot be read is cached
+    /// as empty for this generation, so typing does not re-ask the server every pause.
     private func warmColumns(of mentions: [SQLTableMention]) async -> Bool {
         guard let session else { return false }
+        let generation = completionGeneration
+        let keys = mentions.map { (mention: $0, key: cacheKey(for: $0)) }
         var loaded = false
-        for mention in mentions {
-            let key = cacheKey(for: mention)
+        for (mention, key) in keys {
             guard cachedColumns[key] == nil else { continue }
             let ref = TableRef(schema: schemaRef(key.schema), name: mention.name)
-            if let columns = try? await session.introspection(.columns(ref), load: { try await $0.columns(of: ref) }) {
-                cachedColumns[key] = columns
-                loaded = true
-            }
+            let columns = try? await session.introspection(.columns(ref), load: { try await $0.columns(of: ref) })
+            guard generation == completionGeneration, !Task.isCancelled else { return loaded }
+            cachedColumns[key] = columns ?? []
+            if columns != nil { loaded = true }
         }
         return loaded
     }

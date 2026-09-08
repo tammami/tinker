@@ -141,13 +141,20 @@ public struct DatabaseDumper: Sendable {
     public static func header(server: String, database: String, dialect: SQLDialect, options: DumpOptions) -> [String] {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
-        return [
+        var lines = [
             "Tinker dump",
             "Server: \(server) (\(dialect == .postgresql ? "PostgreSQL" : "MySQL"))",
             "Database: \(database)",
             "Written: \(formatter.string(from: Date()))",
             "Content: \(options.content.title)",
         ]
+        if dialect == .mysql {
+            // Literals are escaped for the server's default sql_mode; a session running
+            // with NO_BACKSLASH_ESCAPES would read `\\\\` as two characters (ADR-0033).
+            lines.append(
+                "Literals assume the default sql_mode (backslash escapes); restore with NO_BACKSLASH_ESCAPES off.")
+        }
+        return lines
     }
 
     /// Writes the dump into `channel`, finishing it at the end or on failure.

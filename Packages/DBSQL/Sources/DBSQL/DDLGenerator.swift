@@ -234,7 +234,9 @@ public struct DDLGenerator: Sendable {
                 statements.append(
                     GeneratedDDL(
                         kind: .alterColumn,
-                        sql: "\(prefix) ALTER COLUMN \(column) TYPE \(after.type) USING \(column)::\(after.type)",
+                        sql:
+                            "\(prefix) ALTER COLUMN \(column) TYPE \(typeText(after.type)) "
+                            + "USING \(column)::\(typeText(after.type))",
                         table: table,
                         isDestructive: true
                     ))
@@ -274,12 +276,12 @@ public struct DDLGenerator: Sendable {
 
     /// The column as it appears inside `CREATE TABLE` or after `ADD COLUMN`.
     public func columnClause(_ column: ColumnDefinition) -> String {
-        var parts = [quote(column.name), column.type]
+        var parts = [quote(column.name), typeText(column.type)]
         if let characterSet = column.characterSet, dialect == .mysql {
-            parts.append("CHARACTER SET \(characterSet)")
+            parts.append("CHARACTER SET \(safeName(characterSet))")
         }
         if let collation = column.collation {
-            parts.append(dialect == .mysql ? "COLLATE \(collation)" : "COLLATE \(quote(collation))")
+            parts.append(dialect == .mysql ? "COLLATE \(safeName(collation))" : "COLLATE \(quote(collation))")
         }
         if let generated = column.generatedExpression {
             parts.append("GENERATED ALWAYS AS (\(generated))")
@@ -361,7 +363,7 @@ public struct DDLGenerator: Sendable {
         case .postgresql:
             var sql = "CREATE \(index.isUnique ? "UNIQUE " : "")INDEX \(quote(index.name))"
             sql += " ON \(qualified(table))"
-            if let method = index.method { sql += " USING \(method)" }
+            if let method = index.method { sql += " USING \(safeName(method))" }
             sql += " (\(columns))"
             if let predicate = index.predicate { sql += " WHERE \(predicate)" }
             return sql
@@ -387,7 +389,7 @@ public struct DDLGenerator: Sendable {
         var clause = quote(column.name)
         if let prefix = column.prefixLength, dialect == .mysql { clause += "(\(prefix))" }
         if let operatorClass = column.operatorClass, dialect == .postgresql {
-            clause += " \(operatorClass)"
+            clause += " \(safeName(operatorClass))"
         }
         if column.isDescending { clause += " DESC" }
         return clause
@@ -700,7 +702,7 @@ public struct DDLGenerator: Sendable {
             statements.append(
                 GeneratedDDL(
                     kind: .tableOption,
-                    sql: "ALTER TABLE \(qualified(edited.ref)) ENGINE = \(engine)",
+                    sql: "ALTER TABLE \(qualified(edited.ref)) ENGINE = \(safeName(engine))",
                     table: edited.ref
                 ))
         }
@@ -708,8 +710,8 @@ public struct DDLGenerator: Sendable {
             || current.options.characterSet != edited.options.characterSet
         {
             var sql = "ALTER TABLE \(qualified(edited.ref))"
-            if let set = edited.options.characterSet { sql += " CONVERT TO CHARACTER SET \(set)" }
-            if let collation = edited.options.collation { sql += " COLLATE \(collation)" }
+            if let set = edited.options.characterSet { sql += " CONVERT TO CHARACTER SET \(safeName(set))" }
+            if let collation = edited.options.collation { sql += " COLLATE \(safeName(collation))" }
             statements.append(GeneratedDDL(kind: .tableOption, sql: sql, table: edited.ref))
         }
         return statements
@@ -726,9 +728,9 @@ public struct DDLGenerator: Sendable {
 
     private func mysqlTableSuffix(_ definition: TableDefinition) -> String? {
         var parts: [String] = []
-        if let engine = definition.options.engine { parts.append("ENGINE = \(engine)") }
-        if let set = definition.options.characterSet { parts.append("DEFAULT CHARSET = \(set)") }
-        if let collation = definition.options.collation { parts.append("COLLATE = \(collation)") }
+        if let engine = definition.options.engine { parts.append("ENGINE = \(safeName(engine))") }
+        if let set = definition.options.characterSet { parts.append("DEFAULT CHARSET = \(safeName(set))") }
+        if let collation = definition.options.collation { parts.append("COLLATE = \(safeName(collation))") }
         if let comment = definition.comment { parts.append("COMMENT = \(quoteText(comment))") }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
@@ -777,6 +779,27 @@ public struct DDLGenerator: Sendable {
     // MARK: - Helpers
 
     private func quote(_ name: String) -> String { Identifier.quote(name, dialect: dialect) }
+
+    /// A character set, collation, engine, index method or operator class as it goes into
+    /// a statement. These are bare words on every server; a name that is anything more
+    /// than letters, digits and underscores is quoted, so a value read from a hostile
+    /// catalogue cannot close the clause and start another statement.
+    private func safeName(_ name: String) -> String {
+        let plain = name.unicodeScalars.allSatisfy { scalar in
+            switch scalar {
+            case "a" ... "z", "A" ... "Z", "0" ... "9", "_": true
+            default: false
+            }
+        }
+        return plain && !name.isEmpty ? name : quote(name)
+    }
+
+    /// A column type as it goes into a statement: read apart and written back through
+    /// `ColumnTypeSpec`, which quotes enum members and drops anything a type cannot
+    /// contain.
+    private func typeText(_ type: String) -> String {
+        ColumnTypeSpec.normalized(type, dialect: dialect)
+    }
     private func quoteText(_ text: String) -> String {
         SQLLiteral.quoteString(text, dialect: dialect)
     }

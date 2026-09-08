@@ -227,63 +227,98 @@ public struct MySQLIntrospector: SchemaIntrospector {
     }
 
     public func indexes(of table: TableRef) async throws -> [IndexInfo] {
+        // One row per index column, in key order: a column name may itself contain a
+        // comma, and GROUP_CONCAT truncates at group_concat_max_len, so the columns are
+        // never joined in SQL and split here.
         let result = try await query(
             """
-            SELECT s.INDEX_NAME,
-                   MIN(s.NON_UNIQUE) = 0,
-                   MIN(s.INDEX_TYPE),
-                   GROUP_CONCAT(s.COLUMN_NAME ORDER BY s.SEQ_IN_INDEX SEPARATOR ','),
-                   MAX(s.NULLABLE = 'YES') = 0
+            SELECT s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.COLUMN_NAME, s.NULLABLE = 'YES'
             FROM information_schema.STATISTICS s
             WHERE s.TABLE_SCHEMA = ? AND s.TABLE_NAME = ?
-            GROUP BY s.INDEX_NAME
-            ORDER BY s.INDEX_NAME = 'PRIMARY' DESC, s.INDEX_NAME
+            ORDER BY s.INDEX_NAME = 'PRIMARY' DESC, s.INDEX_NAME, s.SEQ_IN_INDEX
             """, [.string(table.database), .string(table.name)])
 
-        return result.rows.compactMap { row in
-            guard let name = row[0].text else { return nil }
-            let columns = (row[3].text ?? "").split(separator: ",").map(String.init)
+        struct Partial {
+            var columns: [String] = []
+            var isUnique = false
+            var method: String?
+            var nullableFree = true
+        }
+        var order: [String] = []
+        var partials: [String: Partial] = [:]
+        for row in result.rows {
+            guard let name = row[0].text, let column = row[3].text else { continue }
+            var partial =
+                partials[name]
+                ?? Partial(columns: [], isUnique: !Self.isTrue(row[1]), method: row[2].text, nullableFree: true)
+            if partials[name] == nil { order.append(name) }
+            partial.columns.append(column)
+            if Self.isTrue(row[4]) { partial.nullableFree = false }
+            partials[name] = partial
+        }
+        return order.compactMap { name in
+            guard let partial = partials[name] else { return nil }
             return IndexInfo(
                 name: name,
-                columns: columns,
-                isUnique: Self.isTrue(row[1]),
+                columns: partial.columns,
+                isUnique: partial.isUnique,
                 isPrimary: name == "PRIMARY",
-                method: row[2].text,
+                method: partial.method,
                 predicate: nil,
-                isNullableFree: Self.isTrue(row[4])
+                isNullableFree: partial.nullableFree
             )
         }
     }
 
     public func foreignKeys(of table: TableRef) async throws -> [ForeignKeyInfo] {
+        // One row per key column, for the same reason as `indexes(of:)`.
         let result = try await query(
             """
-            SELECT k.CONSTRAINT_NAME,
-                   GROUP_CONCAT(k.COLUMN_NAME ORDER BY k.ORDINAL_POSITION SEPARATOR ','),
-                   MIN(k.REFERENCED_TABLE_SCHEMA),
-                   MIN(k.REFERENCED_TABLE_NAME),
-                   GROUP_CONCAT(k.REFERENCED_COLUMN_NAME ORDER BY k.ORDINAL_POSITION SEPARATOR ','),
-                   MIN(r.UPDATE_RULE),
-                   MIN(r.DELETE_RULE)
+            SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME,
+                   k.REFERENCED_COLUMN_NAME, r.UPDATE_RULE, r.DELETE_RULE
             FROM information_schema.KEY_COLUMN_USAGE k
             JOIN information_schema.REFERENTIAL_CONSTRAINTS r
               ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
              AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
             WHERE k.TABLE_SCHEMA = ? AND k.TABLE_NAME = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL
-            GROUP BY k.CONSTRAINT_NAME
-            ORDER BY k.CONSTRAINT_NAME
+            ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION
             """, [.string(table.database), .string(table.name)])
 
-        return result.rows.compactMap { row in
-            guard let name = row[0].text, let referenced = row[3].text else { return nil }
+        struct Partial {
+            var columns: [String] = []
+            var referencedColumns: [String] = []
+            var referencedTable: TableRef
+            var onUpdate: ForeignKeyAction
+            var onDelete: ForeignKeyAction
+        }
+        var order: [String] = []
+        var partials: [String: Partial] = [:]
+        for row in result.rows {
+            guard let name = row[0].text, let column = row[1].text, let referenced = row[3].text,
+                let referencedColumn = row[4].text
+            else { continue }
             let schema = row[2].text ?? table.database
+            var partial =
+                partials[name]
+                ?? Partial(
+                    referencedTable: TableRef(database: schema, schema: schema, name: referenced),
+                    onUpdate: ForeignKeyAction(rawValue: (row[5].text ?? "NO ACTION").uppercased()) ?? .noAction,
+                    onDelete: ForeignKeyAction(rawValue: (row[6].text ?? "NO ACTION").uppercased()) ?? .noAction
+                )
+            if partials[name] == nil { order.append(name) }
+            partial.columns.append(column)
+            partial.referencedColumns.append(referencedColumn)
+            partials[name] = partial
+        }
+        return order.compactMap { name in
+            guard let partial = partials[name] else { return nil }
             return ForeignKeyInfo(
                 name: name,
-                columns: (row[1].text ?? "").split(separator: ",").map(String.init),
-                referencedTable: TableRef(database: schema, schema: schema, name: referenced),
-                referencedColumns: (row[4].text ?? "").split(separator: ",").map(String.init),
-                onUpdate: ForeignKeyAction(rawValue: (row[5].text ?? "NO ACTION").uppercased()) ?? .noAction,
-                onDelete: ForeignKeyAction(rawValue: (row[6].text ?? "NO ACTION").uppercased()) ?? .noAction
+                columns: partial.columns,
+                referencedTable: partial.referencedTable,
+                referencedColumns: partial.referencedColumns,
+                onUpdate: partial.onUpdate,
+                onDelete: partial.onDelete
             )
         }
     }
@@ -291,12 +326,13 @@ public struct MySQLIntrospector: SchemaIntrospector {
     public func primaryKey(of table: TableRef) async throws -> [String]? {
         let result = try await query(
             """
-            SELECT GROUP_CONCAT(s.COLUMN_NAME ORDER BY s.SEQ_IN_INDEX SEPARATOR ',')
+            SELECT s.COLUMN_NAME
             FROM information_schema.STATISTICS s
             WHERE s.TABLE_SCHEMA = ? AND s.TABLE_NAME = ? AND s.INDEX_NAME = 'PRIMARY'
+            ORDER BY s.SEQ_IN_INDEX
             """, [.string(table.database), .string(table.name)])
-        guard let joined = result.rows.first?.first?.text, !joined.isEmpty else { return nil }
-        return joined.split(separator: ",").map(String.init)
+        let columns = result.rows.compactMap { $0.first?.text }
+        return columns.isEmpty ? nil : columns
     }
 
     public func routines(in schema: SchemaRef) async throws -> [RoutineInfo] {

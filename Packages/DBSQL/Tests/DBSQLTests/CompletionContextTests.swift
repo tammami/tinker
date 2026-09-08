@@ -95,6 +95,17 @@ final class CompletionContextTests: XCTestCase {
         XCTAssertEqual(context("SELECT * FROM customers LIMIT ").expecting, .any)
     }
 
+    func testADotMustTouchBothTheQualifierAndTheWord() {
+        XCTAssertEqual(context("SELECT c.na| FROM customers c").expecting, .qualified("c"))
+        // A space after the dot is not a qualified name.
+        let spaced = context("SELECT c. na| FROM customers c")
+        XCTAssertNotEqual(spaced.expecting, .qualified("c"))
+        XCTAssertEqual(spaced.prefix, "na")
+        // Nothing typed yet after the dot still qualifies; a space after it does not.
+        XCTAssertEqual(context("SELECT c.| FROM customers c").expecting, .qualified("c"))
+        XCTAssertNotEqual(context("SELECT c. | FROM customers c").expecting, .qualified("c"))
+    }
+
     func testCaretInsideAStatementUsesOnlyWhatIsBeforeIt() {
         let inside = context("SELECT | FROM customers WHERE id = 1")
         XCTAssertEqual(inside.expecting, .columns)

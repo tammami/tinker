@@ -131,6 +131,47 @@ final class StatementSplitterTests: XCTestCase {
         XCTAssertFalse(statement("DROP TABLE t").isProbablyReadOnly)
     }
 
+    func testExplainAnalyzeIsAsMuchOfAWriteAsWhatItExplains() {
+        func statement(_ sql: String) -> SQLStatement { StatementSplitter.split(sql, dialect: .postgresql)[0] }
+        XCTAssertTrue(statement("EXPLAIN SELECT 1").isProbablyReadOnly)
+        XCTAssertTrue(statement("EXPLAIN DELETE FROM t").isProbablyReadOnly, "a plain EXPLAIN runs nothing")
+        XCTAssertFalse(statement("EXPLAIN ANALYZE DELETE FROM t").isProbablyReadOnly)
+        XCTAssertFalse(statement("EXPLAIN (ANALYZE, BUFFERS) UPDATE t SET a = 1").isProbablyReadOnly)
+        XCTAssertFalse(statement("explain analyse verbose insert into t values (1)").isProbablyReadOnly)
+        XCTAssertTrue(statement("EXPLAIN (ANALYZE) SELECT * FROM t").isProbablyReadOnly)
+        XCTAssertTrue(statement("EXPLAIN FORMAT=JSON SELECT 1").isProbablyReadOnly)
+        XCTAssertFalse(statement("EXPLAIN ANALYZE FORMAT=TREE DELETE FROM t").isProbablyReadOnly)
+        XCTAssertTrue(statement("EXPLAIN ANALYZE DELETE FROM t").isProbablyDestructive)
+        XCTAssertFalse(statement("EXPLAIN DELETE FROM t").isProbablyDestructive)
+    }
+
+    func testSelectIntoAndWithWritesAreWrites() {
+        func statement(_ sql: String) -> SQLStatement { StatementSplitter.split(sql, dialect: .postgresql)[0] }
+        XCTAssertFalse(statement("SELECT * INTO new_table FROM t").isProbablyReadOnly)
+        XCTAssertFalse(statement("SELECT a FROM t INTO OUTFILE '/tmp/x'").isProbablyReadOnly)
+        XCTAssertTrue(
+            statement("SELECT (SELECT 1 INTO x) FROM t").isProbablyReadOnly, "INTO inside parentheses is not a write")
+        XCTAssertTrue(statement("SELECT 'INTO' FROM t").isProbablyReadOnly, "a string is not a keyword")
+        XCTAssertTrue(statement("SELECT * FROM t -- INTO y").isProbablyReadOnly, "a comment is not a keyword")
+        XCTAssertTrue(statement("WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d").isProbablyDestructive)
+        XCTAssertFalse(statement("WITH d AS (SELECT 'DELETE') SELECT * FROM d").isProbablyDestructive)
+        XCTAssertTrue(statement("WITH d AS (SELECT 'DELETE') SELECT * FROM d").isProbablyReadOnly)
+    }
+
+    func testDestructiveKeywords() {
+        func statement(_ sql: String) -> SQLStatement { StatementSplitter.split(sql, dialect: .postgresql)[0] }
+        for sql in [
+            "DELETE FROM t", "drop table t", "TRUNCATE t", "ALTER TABLE t ADD c int", "UPDATE t SET a = 1",
+            "REPLACE INTO t VALUES (1)", "MERGE INTO t USING s ON 1=1 WHEN MATCHED THEN DELETE",
+            "RENAME TABLE t TO u",
+        ] {
+            XCTAssertTrue(statement(sql).isProbablyDestructive, sql)
+        }
+        for sql in ["INSERT INTO t VALUES (1)", "SELECT 1", "CREATE TABLE t (a int)", "SHOW TABLES"] {
+            XCTAssertFalse(statement(sql).isProbablyDestructive, sql)
+        }
+    }
+
     func testShortLabelCollapsesWhitespace() {
         let statement = StatementSplitter.split("SELECT\n   a,\n   b\nFROM t", dialect: .postgresql)[0]
         XCTAssertEqual(statement.shortLabel, "SELECT a, b FROM t")

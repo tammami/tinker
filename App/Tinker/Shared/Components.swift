@@ -468,6 +468,8 @@ struct BarPopUp<ID: Hashable>: NSViewRepresentable {
         let popUp = NSPopUpButton(frame: .zero, pullsDown: false)
         popUp.target = context.coordinator
         popUp.action = #selector(Coordinator.didSelect(_:))
+        popUp.menu?.delegate = context.coordinator
+        context.coordinator.popUp = popUp
         popUp.cell?.lineBreakMode = .byTruncatingTail
         popUp.setContentHuggingPriority(.defaultLow, for: .horizontal)
         popUp.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -481,11 +483,25 @@ struct BarPopUp<ID: Hashable>: NSViewRepresentable {
             popUp.controlSize = size
             popUp.font = NSFont.systemFont(ofSize: NSFont.systemFontSize(for: size))
         }
-        if context.coordinator.items != items {
-            context.coordinator.items = items
+        // Items that arrive while the menu is open (a database list loading) wait until it
+        // closes; rebuilding under the pointer would let the click land on the wrong row.
+        if context.coordinator.isMenuOpen {
+            context.coordinator.pending = (items, selection)
+            return
+        }
+        Self.apply(items: items, selection: selection, to: popUp, coordinator: context.coordinator, size: size)
+    }
+
+    static func apply(
+        items: [Item], selection: ID, to popUp: NSPopUpButton, coordinator: Coordinator, size: NSControl.ControlSize
+    ) {
+        if coordinator.items != items {
+            coordinator.items = items
             popUp.removeAllItems()
             for item in items {
                 let menuItem = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
+                // The row carries its own id, so a click means that item whatever the index.
+                menuItem.representedObject = item.id
                 if let icon = item.icon {
                     menuItem.image = NSImage(systemSymbolName: icon, accessibilityDescription: nil)?
                         .withSymbolConfiguration(.init(pointSize: NSFont.systemFontSize(for: size), weight: .regular))
@@ -509,24 +525,44 @@ struct BarPopUp<ID: Hashable>: NSViewRepresentable {
         }
     }
 
-    /// The width is the bar's to decide; the height is the control's own.
+    /// The width is the bar's to decide, when it names one; the height is the control's own.
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSPopUpButton, context: Context) -> CGSize? {
         let own = nsView.intrinsicContentSize
-        return CGSize(width: proposal.width ?? own.width, height: own.height)
+        let width = proposal.width.map { $0.isFinite ? $0 : own.width } ?? own.width
+        return CGSize(width: width, height: own.height)
     }
 
     @MainActor
-    final class Coordinator: NSObject {
+    final class Coordinator: NSObject, NSMenuDelegate {
         var selection: Binding<ID>
         var items: [Item] = []
+        /// True while the pop-up's menu is on screen.
+        var isMenuOpen = false
+        /// Items and selection that arrived while the menu was open, applied when it closes.
+        var pending: ([Item], ID)?
 
         init(selection: Binding<ID>) { self.selection = selection }
 
         @objc func didSelect(_ sender: NSPopUpButton) {
-            let index = sender.indexOfSelectedItem
-            guard index >= 0, index < items.count else { return }
-            selection.wrappedValue = items[index].id
+            guard let id = sender.selectedItem?.representedObject as? ID else { return }
+            selection.wrappedValue = id
         }
+
+        func menuWillOpen(_ menu: NSMenu) { isMenuOpen = true }
+
+        func menuDidClose(_ menu: NSMenu) {
+            isMenuOpen = false
+            guard let (items, selection) = pending, let popUp else {
+                pending = nil
+                return
+            }
+            pending = nil
+            // The click's selection has already been reported; apply the newer list now.
+            BarPopUp.apply(items: items, selection: selection, to: popUp, coordinator: self, size: popUp.controlSize)
+        }
+
+        /// The control this coordinator drives, for applying a list that arrived mid-click.
+        weak var popUp: NSPopUpButton?
     }
 }
 
@@ -547,14 +583,17 @@ struct WindowKeyObserver: NSViewRepresentable {
         view.onBecomeKey = onBecomeKey
     }
 
+    static func dismantleNSView(_ view: ObservingView, coordinator: ()) {
+        view.stopObserving()
+    }
+
     final class ObservingView: NSView {
         var onBecomeKey: (() -> Void)?
         private var observer: (any NSObjectProtocol)?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if let observer { NotificationCenter.default.removeObserver(observer) }
-            observer = nil
+            stopObserving()
             guard let window else { return }
             observer = NotificationCenter.default.addObserver(
                 forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
@@ -563,8 +602,11 @@ struct WindowKeyObserver: NSViewRepresentable {
             }
         }
 
-        // The observer is removed when the view leaves its window (`viewDidMoveToWindow`
-        // with no window) rather than in deinit, which Swift 6 keeps nonisolated.
+        /// Drops the observer; called when the view leaves its window or is torn down.
+        func stopObserving() {
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            observer = nil
+        }
     }
 }
 
@@ -572,5 +614,33 @@ extension View {
     /// Calls `action` whenever the window this view is in becomes key.
     func onWindowBecomeKey(_ action: @escaping () -> Void) -> some View {
         background(WindowKeyObserver(onBecomeKey: action).frame(width: 0, height: 0))
+    }
+}
+
+/// The footer piece every production write carries: the connection's name in red and,
+/// for an action that takes something away or changes the schema, a field its name has
+/// to be typed into before the button enables — the promise the connection editor makes.
+struct ProductionGate: View {
+    let connectionName: String
+    let requiresTypedName: Bool
+    @Binding var typed: String
+
+    var body: some View {
+        Label(connectionName, systemImage: Icon.production)
+            .foregroundStyle(.red)
+            .font(.callout.weight(.semibold))
+        if requiresTypedName {
+            TextField("Type \(connectionName) to confirm", text: $typed)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 220)
+                .help("This is a production connection; type its name to enable the action")
+        }
+    }
+
+    /// True when the gate lets the action through: not production, no name needed, or
+    /// the name typed exactly.
+    static func passes(productionName: String?, requiresTypedName: Bool, typed: String) -> Bool {
+        guard let productionName, requiresTypedName else { return true }
+        return typed == productionName
     }
 }

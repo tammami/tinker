@@ -137,8 +137,54 @@ final class MySQLIntegrationTests: XCTestCase {
             disabled.tls = TLSConfig(mode: .disable)
             let connection = try await MySQLDriver.connect(disabled, logger: logger)
             let cipher = try await connection.executeCollecting("SHOW SESSION STATUS LIKE 'Ssl_cipher'")
+            XCTAssertFalse(connection.transport.isEncrypted, "TLS was disabled but the connection reports encryption")
             await connection.close()
             XCTAssertEqual(cipher.rows.first?.last?.text ?? "", "", "TLS was disabled but the session is encrypted")
+        }
+    }
+
+    /// `require` is satisfied only by an encrypted wire: the driver reads the negotiated
+    /// cipher after the handshake and reports it, so a silent plaintext fallback cannot
+    /// pass as TLS.
+    func testRequiredTLSIsVerifiedAgainstTheNegotiatedCipher() async throws {
+        let servers = try TestEnvironment.requireServers(for: .mysql)
+        for server in servers {
+            var required = server.resolvedConfig(connectTimeout: .seconds(10))
+            required.tls = TLSConfig(mode: .require)
+            do {
+                let connection = try await MySQLDriver.connect(required, logger: logger)
+                XCTAssertTrue(connection.transport.isEncrypted)
+                XCTAssertNotNil(connection.transport.cipher)
+                TestLog.note("MySQL transport: \(connection.transport.summary)")
+                await connection.close()
+            } catch let error as DBError {
+                // A server without TLS must be refused with a message that names the mode.
+                let text = error.errorDescription ?? ""
+                XCTAssertTrue(
+                    text.contains("require") || error == .tlsRequiredButUnavailable,
+                    "unexpected refusal: \(text)")
+                TestLog.note("MySQL TLS require: server has no TLS; refused as: \(text)")
+            }
+        }
+    }
+
+    /// A `SET` or `USE` on one lease must not reach the next: the reset puts the session back.
+    func testSessionStateIsResetAfterASetStatement() async throws {
+        try await withEachServer { connection, server in
+            let before = try await connection.executeCollecting("SELECT @@session.sql_mode").firstText ?? ""
+            XCTAssertFalse(
+                before.contains("ANSI_QUOTES"), "the server default already has ANSI_QUOTES; test cannot tell")
+            _ = try await connection.executeCollecting("SET SESSION sql_mode = 'ANSI_QUOTES'")
+            _ = try await connection.executeCollecting("SET SESSION foreign_key_checks = 0")
+            let changed = try await connection.executeCollecting("SELECT @@session.sql_mode").firstText
+            XCTAssertEqual(changed, "ANSI_QUOTES")
+            try await connection.resetSessionState()
+            let restored = try await connection.executeCollecting("SELECT @@session.sql_mode").firstText
+            XCTAssertEqual(restored, before)
+            let checks = try await connection.executeCollecting("SELECT @@session.foreign_key_checks").firstText
+            XCTAssertEqual(checks, "1")
+            let database = try await connection.executeCollecting("SELECT DATABASE()").firstText
+            XCTAssertEqual(database, server.database)
         }
     }
 

@@ -289,7 +289,7 @@ public final class WorkspaceController {
 
     /// Whether a tab holds edits or an open transaction.
     public func hasUnsavedWork(_ tab: WorkspaceTab) -> Bool {
-        if let controller = queryControllers[tab.id] { return controller.isInTransaction }
+        if let controller = queryControllers[tab.id] { return controller.isInTransaction || controller.hasPendingEdits }
         if let controller = tableControllers[tab.id] {
             return (controller.model?.edits.pendingStatementCount ?? 0) > 0
         }
@@ -368,6 +368,7 @@ public final class WorkspaceController {
             Task { await controller.rollbackTransaction() }
             return
         }
+        // Refused while a write is on the server; the controller says so by doing nothing.
         activeTableController?.discardEdits()
     }
 
@@ -444,12 +445,29 @@ public final class WorkspaceController {
 
     public func toggleReadOnly() {
         guard let id = workspace.activeConnectionID,
-            let session = environment.session(for: id)
+            let session = environment.session(for: id),
+            let config = environment.connections.first(where: { $0.id == id })
         else { return }
-        Task {
-            // Every session of the connection unlocks or locks together.
+        let apply: @MainActor () async -> Void = { [environment] in
+            // Every session of the connection unlocks or locks together, including any
+            // opened later on another of its databases.
             let current = await session.isReadOnly
-            for each in environment.sessions(for: id) { await each.setReadOnlyOverride(current) }
+            await environment.setReadOnlyOverride(for: id, current)
+        }
+        Task {
+            // Unlocking a production connection is the one toggle worth a typed name.
+            guard config.isProduction, await session.isReadOnly else {
+                await apply()
+                return
+            }
+            workspace.confirmation = DestructiveConfirmation(
+                title: "Unlock writes on “\(config.name)”?",
+                message:
+                    "This is a production connection marked read-only. Unlocking lets every tab on it write until the app quits or you lock it again with ⌘⇧L.",
+                requiredTypedName: config.name,
+                confirmTitle: "Unlock",
+                action: apply
+            )
         }
     }
 

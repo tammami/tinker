@@ -52,7 +52,9 @@ enum PostgresErrorMapper {
         case .connectionError:
             return .connectionFailed(underlying: underlyingText(psql), hint: nil)
         default:
-            return .protocolError(String(reflecting: psql))
+            // Not `String(reflecting:)`: PSQLError's debug description carries the query
+            // and its bound values, which must not reach a banner or the history file.
+            return .protocolError(summary(psql))
         }
     }
 
@@ -98,11 +100,20 @@ enum PostgresErrorMapper {
     }
 
     /// The most specific text available, preferring NIO's own message over the wrapper's.
+    /// Never the wrapper's debug description, which includes the query and its values.
     private static func underlyingText(_ error: PSQLError) -> String {
         if let underlying = error.underlying {
             if let sslError = underlying as? NIOSSLError { return String(reflecting: sslError) }
-            return String(reflecting: underlying)
+            return String(describing: underlying)
         }
-        return String(reflecting: error)
+        return summary(error)
+    }
+
+    /// The error's code and, when the server sent one, its message; nothing else.
+    private static func summary(_ error: PSQLError) -> String {
+        let code = "\(error.code)"
+        if let info = error.serverInfo, let message = info[.message] { return "\(code): \(message)" }
+        if let underlying = error.underlying { return "\(code): \(String(describing: underlying))" }
+        return code
     }
 }

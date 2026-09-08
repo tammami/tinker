@@ -44,6 +44,12 @@ public final class ServerActivityController {
 
     private var session: ConnectionSession? { environment.session(for: connectionID) }
 
+    /// The connection's name when it is marked production, else nil.
+    public var productionName: String? {
+        let config = environment.connections.first { $0.id == connectionID }
+        return config?.isProduction == true ? config?.name : nil
+    }
+
     /// Borrows a connection, reads through its server introspector, returns it.
     private func read<T: Sendable>(_ body: @Sendable (any ServerIntrospector) async throws -> T) async throws -> T {
         guard let session else { throw DBError.notConnected }
@@ -136,6 +142,10 @@ public final class ServerActivityController {
 
     public func terminate(_ id: String) async {
         do {
+            // Ending someone's session is a write in every sense; the lock applies.
+            if let session, await session.isReadOnly {
+                throw DBError.protocolError("This connection is read-only. Unlock it with ⌘⇧L to end sessions.")
+            }
             try await read { try await $0.terminateSession(id: id) }
             await loadSessions()
         } catch {
@@ -340,7 +350,9 @@ public struct ServerActivityView: View {
                 confirmation: DestructiveConfirmation(
                     title: "Drop user “\(user.id)”?",
                     message:
-                        "The account and its grants are removed from the server. Objects it owns are left alone, and the server refuses if any depend on it.",
+                        "The account and its grants are removed from the server. Objects it owns are left alone, and the server refuses if any depend on it."
+                        + (controller.productionName.map { " This is the production connection “\($0)”." } ?? ""),
+                    requiredTypedName: controller.productionName,
                     confirmTitle: "Drop User",
                     action: {
                         let request = UserRequest(name: user.name, host: user.host ?? "%")
@@ -359,7 +371,9 @@ public struct ServerActivityView: View {
                 confirmation: DestructiveConfirmation(
                     title: "End session \(session.id)?",
                     message:
-                        "The connection from \(session.user ?? "?") at \(session.clientAddress ?? "?") is closed on the server and whatever it is running is cancelled.",
+                        "The connection from \(session.user ?? "?") at \(session.clientAddress ?? "?") is closed on the server and whatever it is running is cancelled."
+                        + (controller.productionName.map { " This is the production connection “\($0)”." } ?? ""),
+                    requiredTypedName: controller.productionName,
                     confirmTitle: "End Session",
                     action: { await controller.terminate(session.id) }
                 ),
@@ -667,6 +681,7 @@ struct UserEditorSheet: View {
 
     @State private var user = UserRequest(name: "")
     @State private var databases: [String] = []
+    @State private var typedName = ""
     @State private var failure: String?
     @State private var isRunning = false
 
@@ -787,12 +802,19 @@ struct UserEditorSheet: View {
                 }
             }
         } footer: {
+            if let production = controller.productionName {
+                ProductionGate(connectionName: production, requiresTypedName: true, typed: $typedName)
+            }
             Spacer()
             Button("Cancel", action: onDismiss).keyboardShortcut(.cancelAction)
             Button(isRunning ? "Running…" : (isCreate ? "Create User" : "Apply")) { Task { await run() } }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .disabled(problem != nil || isRunning)
+                .disabled(
+                    problem != nil || isRunning
+                        || !ProductionGate.passes(
+                            productionName: controller.productionName, requiresTypedName: true, typed: typedName)
+                )
         }
         .task {
             databases = await controller.databaseNames()

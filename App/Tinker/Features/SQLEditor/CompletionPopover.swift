@@ -233,11 +233,13 @@ private final class CompletionRowView: NSView {
         let attributed = NSMutableAttributedString(string: text, attributes: [.font: font])
         // Only the leading run is marked: candidates are offered by prefix.
         let tail = prefix.split(separator: ".").last.map(String.init) ?? prefix
-        guard !tail.isEmpty, text.lowercased().hasPrefix(tail.lowercased()) else { return attributed }
+        // The range is measured on the candidate itself: lower-casing can change a
+        // string's length (`İ`), and the range must fit the text it marks.
+        guard !tail.isEmpty else { return attributed }
+        let range = (text as NSString).range(of: tail, options: [.caseInsensitive, .anchored])
+        guard range.location != NSNotFound else { return attributed }
         attributed.addAttribute(
-            .font, value: NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask),
-            range: NSRange(location: 0, length: (tail as NSString).length)
-        )
+            .font, value: NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask), range: range)
         return attributed
     }
 

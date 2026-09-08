@@ -22,8 +22,11 @@ final class ZipStreamWriter {
     private var current: Entry?
     private var deflater: GzipDeflater?
 
+    /// Zip without ZIP64 records addresses at most 4 GiB; past that the file would be silently wrong.
+    static let sizeLimit = UInt64(UInt32.max)
+
     init(url: URL) throws {
-        FileManager.default.createFile(atPath: url.path, contents: nil)
+        try FileManager.default.createPrivateFile(at: url)
         handle = try FileHandle(forWritingTo: url)
     }
 
@@ -59,6 +62,9 @@ final class ZipStreamWriter {
         let compressed = try deflater.compress(data)
         entry.compressedSize += UInt64(compressed.count)
         current = entry
+        guard entry.uncompressedSize <= Self.sizeLimit, entry.compressedSize <= Self.sizeLimit,
+            position + UInt64(compressed.count) <= Self.sizeLimit
+        else { throw XLSXError.tooLarge }
         try emit(compressed)
     }
 
@@ -66,6 +72,9 @@ final class ZipStreamWriter {
         guard var entry = current, let deflater else { preconditionFailure("no entry is open") }
         let tail = try deflater.compress(Data(), finish: true)
         entry.compressedSize += UInt64(tail.count)
+        guard entry.compressedSize <= Self.sizeLimit, position + UInt64(tail.count) + 16 <= Self.sizeLimit else {
+            throw XLSXError.tooLarge
+        }
         try emit(tail)
         var descriptor = Data()
         descriptor.append(le32(0x0807_4B50))
@@ -82,6 +91,7 @@ final class ZipStreamWriter {
     func finish() throws {
         precondition(current == nil, "an entry is still open")
         let directoryStart = position
+        guard directoryStart <= Self.sizeLimit else { throw XLSXError.tooLarge }
         for entry in entries {
             var record = Data()
             record.append(le32(0x0201_4B50))
@@ -132,11 +142,19 @@ final class ZipStreamWriter {
 public enum XLSXError: Error, CustomStringConvertible, Sendable {
     /// A worksheet holds at most 1,048,576 rows, the header included.
     case tooManyRows(limit: Int)
+    /// A worksheet holds at most 16,384 columns.
+    case tooManyColumns(limit: Int)
+    /// The archive would pass 4 GiB, which this writer does not address.
+    case tooLarge
 
     public var description: String {
         switch self {
         case let .tooManyRows(limit):
             "An Excel worksheet holds at most \(limit) rows; export the rest as CSV or split the query."
+        case let .tooManyColumns(limit):
+            "An Excel worksheet holds at most \(limit) columns."
+        case .tooLarge:
+            "The workbook would exceed 4 GB, more than an .xlsx file can hold; export as CSV instead."
         }
     }
 }
@@ -150,7 +168,9 @@ public enum XLSXError: Error, CustomStringConvertible, Sendable {
 public final class XLSXWorkbookWriter {
     /// Excel's hard limit on rows per worksheet.
     public static let rowLimit = 1_048_576
-    /// Excel's limit on characters in one cell; longer text is cut to fit.
+    /// Excel's hard limit on columns per worksheet (`XFD`).
+    public static let columnLimit = 16_384
+    /// Excel's limit on UTF-16 units in one cell; longer text is cut to fit.
     static let cellTextLimit = 32_767
     private static let chunk = 256 * 1_024
 
@@ -166,6 +186,7 @@ public final class XLSXWorkbookWriter {
 
     /// Writes the fixed parts and opens the sheet. `title` names the sheet tab.
     public func begin(columns: [ColumnMeta], includeHeader: Bool, title: String) throws {
+        guard columns.count <= Self.columnLimit else { throw XLSXError.tooManyColumns(limit: Self.columnLimit) }
         columnCount = columns.count
         try put(
             "[Content_Types].xml",
@@ -209,14 +230,17 @@ public final class XLSXWorkbookWriter {
         }
     }
 
-    /// Writes one row. Past Excel's limit rows are dropped and `finish` reports it.
-    public func write(row: [DBValue]) throws {
-        guard !overflowed else { return }
+    /// Writes one row and returns true. Past Excel's limit rows are dropped, false is
+    /// returned, and `finish` reports it.
+    @discardableResult
+    public func write(row: [DBValue]) throws -> Bool {
+        guard !overflowed else { return false }
         guard rowNumber < Self.rowLimit else {
             overflowed = true
-            return
+            return false
         }
         try writeRow(row, style: 0)
+        return true
     }
 
     private func writeRow(_ values: [DBValue], style: Int) throws {
@@ -286,15 +310,19 @@ public final class XLSXWorkbookWriter {
         return letters
     }
 
-    /// Digits, one sign, one point, one exponent: what Excel reads as a number.
+    /// Digits, one sign, one point, one exponent with digits after it: what Excel reads
+    /// as a number.
     static func isPlainNumber(_ text: String) -> Bool {
         guard !text.isEmpty, text.count < 40 else { return false }
         var sawDigit = false
         var sawPoint = false
         var sawExponent = false
+        var exponentDigits = 0
         for (offset, character) in text.enumerated() {
             switch character {
-            case "0" ... "9": sawDigit = true
+            case "0" ... "9":
+                sawDigit = true
+                if sawExponent { exponentDigits += 1 }
             case "-", "+":
                 guard offset == 0 || text[text.index(text.startIndex, offsetBy: offset - 1)].lowercased() == "e"
                 else { return false }
@@ -307,7 +335,7 @@ public final class XLSXWorkbookWriter {
             default: return false
             }
         }
-        return sawDigit
+        return sawDigit && (!sawExponent || exponentDigits > 0)
     }
 
     /// Escapes the five XML characters and drops control characters XML 1.0 forbids.
@@ -328,14 +356,24 @@ public final class XLSXWorkbookWriter {
         return out
     }
 
+    /// Cuts text to Excel's cell limit, counted in UTF-16 units as Excel counts, without
+    /// splitting a surrogate pair.
     static func clip(_ text: String) -> String {
-        text.count > cellTextLimit ? String(text.prefix(cellTextLimit)) : text
+        guard text.utf16.count > cellTextLimit else { return text }
+        var end = text.utf16.index(text.utf16.startIndex, offsetBy: cellTextLimit)
+        if let cut = String(text.utf16[..<end]) { return cut }
+        end = text.utf16.index(before: end)
+        return String(text.utf16[..<end]) ?? ""
     }
 
-    /// A sheet name Excel accepts: 31 characters at most, none of `[]:*?/\`.
+    /// A sheet name Excel accepts: 31 characters at most, none of `[]:*?/\`, no
+    /// apostrophe at either end, and not the reserved `History`.
     static func sheetName(_ title: String) -> String {
         let cleaned = title.map { "[]:*?/\\".contains($0) ? "_" : $0 }
-        let trimmed = String(cleaned.prefix(31)).trimmingCharacters(in: .whitespaces)
-        return trimmed.isEmpty ? "Sheet1" : trimmed
+        let trimmed = String(cleaned.prefix(31))
+            .trimmingCharacters(in: .whitespaces)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "'"))
+        guard !trimmed.isEmpty, trimmed.lowercased() != "history" else { return "Sheet1" }
+        return trimmed
     }
 }

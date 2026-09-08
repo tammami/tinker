@@ -137,6 +137,17 @@ public enum TestEnvironment {
         return lines.joined(separator: "\n")
     }
 
+    /// `scheme://user:***@host…` for a value that failed to parse, so the message never
+    /// carries the password.
+    static func redacted(_ value: String) -> String {
+        guard let at = value.lastIndex(of: "@"), let schemeEnd = value.range(of: "://") else {
+            return "<\(value.count) characters, no host>"
+        }
+        let credentials = value[schemeEnd.upperBound ..< at]
+        let user = credentials.split(separator: ":", maxSplits: 1).first.map(String.init) ?? ""
+        return "\(value[..<schemeEnd.upperBound])\(user):***\(value[at...])"
+    }
+
     /// Database name is the URL path without its leading slash.
     static func databaseName(in url: URL) -> String {
         var path = url.path
@@ -146,7 +157,8 @@ public enum TestEnvironment {
 
     static func validate(_ value: String, variable: String, engine: TestEngine) throws -> TestServer {
         guard let url = URL(string: value), let scheme = url.scheme, url.host != nil else {
-            throw TestEnvironmentError.invalidURL(variable: variable, value: value)
+            // The value may carry a password; only its shape is reported.
+            throw TestEnvironmentError.invalidURL(variable: variable, value: Self.redacted(value))
         }
         guard engine.acceptedSchemes.contains(scheme.lowercased()) else {
             throw TestEnvironmentError.wrongScheme(variable: variable, scheme: scheme, expected: engine.acceptedSchemes)

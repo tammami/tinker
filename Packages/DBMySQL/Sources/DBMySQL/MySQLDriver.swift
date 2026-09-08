@@ -10,8 +10,8 @@ import NIOSSL
 /// The MySQL and MariaDB driver.
 ///
 /// Authentication covers `caching_sha2_password` — MySQL 8's default, including the RSA
-/// public-key exchange used when TLS is off — as well as `mysql_native_password` and
-/// `sha256_password` (SPEC §7.3).
+/// public-key exchange used when TLS is off — and `mysql_native_password` (SPEC §7.3).
+/// `sha256_password` is not offered by mysql-nio and fails with the server's own message.
 public enum MySQLDriver: SQLDriver {
     public static var dialect: SQLDialect { .mysql }
     public static var displayName: String { "MySQL / MariaDB" }
@@ -35,8 +35,11 @@ public enum MySQLDriver: SQLDriver {
 
     /// Opens one physical connection, honouring the TLS mode.
     ///
-    /// `preferred` falls back to plaintext when the handshake is refused, which is what
-    /// the mode means; every stricter mode fails loudly instead.
+    /// `prefer` falls back to plaintext when the handshake is refused, which is what the
+    /// mode means; every stricter mode fails loudly instead. mysql-nio itself proceeds
+    /// in the clear when a server greeting lacks the SSL capability, so ``MySQLSQLConnection``
+    /// checks the negotiated cipher after the handshake and refuses an unencrypted wire
+    /// for any mode that requires one.
     static func openConnection(
         _ config: ResolvedConnectionConfig,
         logger: Logger
@@ -97,6 +100,8 @@ public enum MySQLDriver: SQLDriver {
     static func tlsConfiguration(_ config: ResolvedConnectionConfig) throws -> TLSConfiguration? {
         guard config.tls.mode != .disable else { return nil }
         var tls = TLSConfiguration.makeClientConfiguration()
+        // TLS 1.0 and 1.1 are broken protocols; nothing this app talks to still needs them.
+        tls.minimumTLSVersion = .tlsv12
         if let caFile = config.tls.caFile, !caFile.isEmpty {
             do {
                 tls.trustRoots = .certificates(try NIOSSLCertificate.fromPEMFile(caFile))

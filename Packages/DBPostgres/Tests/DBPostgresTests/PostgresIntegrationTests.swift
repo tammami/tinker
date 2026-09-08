@@ -137,6 +137,32 @@ final class PostgresIntegrationTests: XCTestCase {
         }
     }
 
+    /// The wire the connection reports must agree with what the server sees.
+    func testTransportReportsWhatTheServerSees() async throws {
+        try await withEachServer { connection, _ in
+            let result = try await connection.executeCollecting(
+                "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
+            XCTAssertEqual(result.rows.first?.first, .bool(connection.transport.isEncrypted))
+            TestLog.note("transport: \(connection.transport.summary)")
+        }
+    }
+
+    /// A `SET` on one lease must not reach the next: the reset puts the session back.
+    func testSessionStateIsResetAfterASetStatement() async throws {
+        try await withEachServer { connection, _ in
+            let before = try await connection.executeCollecting("SHOW search_path").firstText
+            _ = try await connection.executeCollecting("SET search_path TO pg_catalog")
+            let changed = try await connection.executeCollecting("SHOW search_path").firstText
+            XCTAssertEqual(changed, "pg_catalog")
+            _ = try await connection.executeCollecting("SET statement_timeout = 123456")
+            try await connection.resetSessionState()
+            let restored = try await connection.executeCollecting("SHOW search_path").firstText
+            XCTAssertEqual(restored, before)
+            let timeout = try await connection.executeCollecting("SHOW statement_timeout").firstText
+            XCTAssertNotEqual(timeout, "123456ms", "a statement timeout set by the user leaked past the reset")
+        }
+    }
+
     func testTLSDisableConnectsWithoutEncryption() async throws {
         let servers = try TestEnvironment.requireServers(for: .postgresql)
         for server in servers {

@@ -159,6 +159,11 @@ public struct PostgresBinaryDecoder: Sendable {
         default: break
         }
 
+        // A count the payload cannot hold is a hostile or corrupt server; the bytes are
+        // shown raw rather than trusted.
+        guard digitCount >= 0, Int(digitCount) * 2 <= buffer.readableBytes else {
+            return .raw(typeName: "numeric", text: nil, bytes: nil)
+        }
         var digits: [Int] = []
         digits.reserveCapacity(Int(digitCount))
         for _ in 0 ..< Int(digitCount) {
@@ -269,6 +274,9 @@ public struct PostgresBinaryDecoder: Sendable {
         else { return .raw(typeName: typeName(oid), text: nil, bytes: nil) }
 
         let isIPv4 = family == 2 && address.count == 4
+        guard isIPv4 || address.count == 16 else {
+            return .raw(typeName: typeName(oid), text: nil, bytes: Data(address))
+        }
         let host: String =
             if isIPv4 {
                 address.map(String.init).joined(separator: ".")
@@ -287,6 +295,9 @@ public struct PostgresBinaryDecoder: Sendable {
         guard let bitCount = buffer.readInteger(as: Int32.self),
             let bytes = buffer.readBytes(length: buffer.readableBytes)
         else { return .raw(typeName: typeName(oid), text: nil, bytes: nil) }
+        guard bitCount >= 0, Int(bitCount) <= bytes.count * 8 else {
+            return .raw(typeName: typeName(oid), text: nil, bytes: Data(bytes))
+        }
         var text = ""
         text.reserveCapacity(Int(bitCount))
         for position in 0 ..< Int(bitCount) {
@@ -307,13 +318,22 @@ public struct PostgresBinaryDecoder: Sendable {
             let elementOIDRaw = buffer.readInteger(as: UInt32.self)
         else { return .array([]) }
         if dimensionCount == 0 { return .array([]) }
+        // PostgreSQL allows six dimensions; more is not a real array.
+        guard dimensionCount > 0, dimensionCount <= 6 else { return .raw(typeName: "array", text: nil, bytes: nil) }
 
         var total = 1
         for _ in 0 ..< Int(dimensionCount) {
-            let length = Int(buffer.readInteger(as: Int32.self) ?? 0)
+            guard let length = buffer.readInteger(as: Int32.self), length >= 0 else {
+                return .raw(typeName: "array", text: nil, bytes: nil)
+            }
             _ = buffer.readInteger(as: Int32.self)  // lower bound, not modelled
-            total *= max(0, length)
+            let (product, overflow) = total.multipliedReportingOverflow(by: Int(length))
+            guard !overflow else { return .raw(typeName: "array", text: nil, bytes: nil) }
+            total = product
         }
+        // Every element carries at least its 4-byte length, so a total the payload cannot
+        // hold is not one to allocate for.
+        guard total <= buffer.readableBytes / 4 else { return .raw(typeName: "array", text: nil, bytes: nil) }
 
         let elementOID = elementOIDRaw != 0 ? elementOIDRaw : fallbackElement
         let resolved = catalog.resolvingDomain(elementOID)

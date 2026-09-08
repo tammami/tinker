@@ -205,6 +205,70 @@ final class PostgresBinaryDecoderTests: XCTestCase {
         XCTAssertEqual(decoder.decode(oid: PGOID.inet, bytes: host).text, "10.0.0.1")
     }
 
+    /// A hostile or broken server must not be able to crash the client with a length
+    /// the payload cannot hold; every such value comes back raw instead.
+    func testMaliciousLengthsFallBackToRawInsteadOfTrapping() {
+        // numeric: a digit count of 32,767 groups inside a header-only payload.
+        let numeric = buffer([0x7F, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+        if case .raw = decoder.decode(oid: PGOID.numeric, bytes: numeric) {
+        } else {
+            XCTFail("numeric trusted the count")
+        }
+        // numeric: a negative digit count.
+        let negativeNumeric = buffer([0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+        if case .raw = decoder.decode(oid: PGOID.numeric, bytes: negativeNumeric) {
+        } else {
+            XCTFail("numeric trusted a negative count")
+        }
+        // bit: 1,000,000 bits announced over one byte.
+        let bits = buffer([0x00, 0x0F, 0x42, 0x40, 0xFF])
+        if case .raw = decoder.decode(oid: PGOID.bit, bytes: bits) {} else { XCTFail("bit trusted the count") }
+        // bit: a negative bit count.
+        let negativeBits = buffer([0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+        if case .raw = decoder.decode(oid: PGOID.varbit, bytes: negativeBits) {
+        } else {
+            XCTFail("bit trusted a negative count")
+        }
+        // inet: family 3 (IPv6) with a 5-byte address.
+        let inet = buffer([0x03, 0x80, 0x00, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05])
+        if case .raw = decoder.decode(oid: PGOID.inet, bytes: inet) {} else { XCTFail("inet trusted an odd length") }
+        // array: 1,000 dimensions.
+        var dimensions = ByteBufferAllocator().buffer(capacity: 16)
+        dimensions.writeInteger(Int32(1_000))
+        dimensions.writeInteger(Int32(0))
+        dimensions.writeInteger(PGOID.int4)
+        if case .raw = decoder.decode(oid: 1_007, bytes: dimensions) {} else { XCTFail("array trusted the dimensions") }
+        // array: one dimension whose length no payload could hold.
+        var huge = ByteBufferAllocator().buffer(capacity: 32)
+        huge.writeInteger(Int32(1))
+        huge.writeInteger(Int32(0))
+        huge.writeInteger(PGOID.int4)
+        huge.writeInteger(Int32.max)
+        huge.writeInteger(Int32(1))
+        if case .raw = decoder.decode(oid: 1_007, bytes: huge) {} else { XCTFail("array trusted the length") }
+        // array: two dimensions whose product overflows.
+        var overflow = ByteBufferAllocator().buffer(capacity: 32)
+        overflow.writeInteger(Int32(2))
+        overflow.writeInteger(Int32(0))
+        overflow.writeInteger(PGOID.int4)
+        overflow.writeInteger(Int32.max)
+        overflow.writeInteger(Int32(1))
+        overflow.writeInteger(Int32.max)
+        overflow.writeInteger(Int32(1))
+        if case .raw = decoder.decode(oid: 1_007, bytes: overflow) {} else { XCTFail("array trusted the product") }
+        // A negative dimension length.
+        var negative = ByteBufferAllocator().buffer(capacity: 32)
+        negative.writeInteger(Int32(1))
+        negative.writeInteger(Int32(0))
+        negative.writeInteger(PGOID.int4)
+        negative.writeInteger(Int32(-5))
+        negative.writeInteger(Int32(1))
+        if case .raw = decoder.decode(oid: 1_007, bytes: negative) {
+        } else {
+            XCTFail("array trusted a negative length")
+        }
+    }
+
     func testArrayWithNulls() {
         var buffer = ByteBufferAllocator().buffer(capacity: 64)
         buffer.writeInteger(Int32(1))  // one dimension

@@ -188,6 +188,7 @@ public final class TransferController {
         let serverName = environment.connections.first { $0.id == request.connectionID }?.name ?? ""
         task = Task { [weak self] in
             guard let self else { return }
+            var wroteFile = false
             do {
                 let session = try session(request.connectionID, database: request.schema.database)
                 _ = try await session.connect()
@@ -198,6 +199,9 @@ public final class TransferController {
                     ? (try? await connection.introspector.routines(in: request.schema)) ?? [] : []
                 let selection = DumpSelection(schema: request.schema, tables: tables, routines: routines)
                 let writer = try ScriptFileWriter(url: url, dialect: dialect, compress: compress)
+                // From here on the file at `url` is ours to remove on failure; before this
+                // point it was whatever the user already had there.
+                wroteFile = true
                 for line in DatabaseDumper.header(
                     server: serverName, database: request.schema.database, dialect: dialect, options: options)
                 {
@@ -226,11 +230,11 @@ public final class TransferController {
                 fraction = 1
                 phase = .finished
             } catch is CancellationError {
-                try? FileManager.default.removeItem(at: url)
+                if wroteFile { try? FileManager.default.removeItem(at: url) }
                 phase = .cancelled
-                status = "Cancelled; the partial file was removed."
+                status = wroteFile ? "Cancelled; the partial file was removed." : "Cancelled."
             } catch {
-                try? FileManager.default.removeItem(at: url)
+                if wroteFile { try? FileManager.default.removeItem(at: url) }
                 fail(error)
             }
         }

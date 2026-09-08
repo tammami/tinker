@@ -42,7 +42,10 @@ public enum PostgresDriver: SQLDriver {
                 + Int64(config.connectTimeout.components.attoseconds / 1_000_000_000)
         )
         if config.tls.mode.verifiesHostname {
-            configuration.options.tlsServerName = config.tlsServerName ?? config.host
+            // Server Name Indication carries a host name; an IP literal is not one and
+            // NIOSSL refuses it, so a certificate for an address is checked without SNI.
+            let name = config.tlsServerName ?? config.host
+            configuration.options.tlsServerName = isIPAddress(name) ? nil : name
         }
         var startupParameters: [(String, String)] = []
         if let applicationName = config.options[ConnectionConfig.OptionKey.applicationName] {
@@ -82,6 +85,8 @@ public enum PostgresDriver: SQLDriver {
         guard config.tls.mode != .disable else { return .disable }
 
         var tlsConfiguration = TLSConfiguration.makeClientConfiguration()
+        // TLS 1.0 and 1.1 are broken protocols; nothing this app talks to still needs them.
+        tlsConfiguration.minimumTLSVersion = .tlsv12
         if let caFile = config.tls.caFile, !caFile.isEmpty {
             do {
                 tlsConfiguration.trustRoots = .certificates(try NIOSSLCertificate.fromPEMFile(caFile))
@@ -113,6 +118,16 @@ public enum PostgresDriver: SQLDriver {
             throw DBError.tunnelFailed(stage: .tls, underlying: String(reflecting: error))
         }
         return config.tls.mode == .prefer ? .prefer(context) : .require(context)
+    }
+}
+
+extension PostgresDriver {
+    /// True for an IPv4 or IPv6 literal.
+    static func isIPAddress(_ host: String) -> Bool {
+        var ipv4 = in_addr()
+        if inet_pton(AF_INET, host, &ipv4) == 1 { return true }
+        var ipv6 = in6_addr()
+        return inet_pton(AF_INET6, host, &ipv6) == 1
     }
 }
 

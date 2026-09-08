@@ -20,6 +20,7 @@ public struct QueryBuilderView: View {
 
     @State private var isCreateViewPresented = false
     @State private var viewName = "new_view"
+    @State private var typedName = ""
     @FocusState private var isSearchFocused: Bool
 
     public var body: some View {
@@ -553,6 +554,9 @@ public struct QueryBuilderView: View {
                 }
             }
         } footer: {
+            if let production = controller.productionName {
+                ProductionGate(connectionName: production, requiresTypedName: true, typed: $typedName)
+            }
             Spacer()
             Button("Cancel") { isCreateViewPresented = false }.keyboardShortcut(.cancelAction)
             Button("Create") {
@@ -568,7 +572,11 @@ public struct QueryBuilderView: View {
             }
             .keyboardShortcut(.defaultAction)
             .buttonStyle(.borderedProminent)
-            .disabled(viewName.trimmingCharacters(in: .whitespaces).isEmpty)
+            .disabled(
+                viewName.trimmingCharacters(in: .whitespaces).isEmpty
+                    || !ProductionGate.passes(
+                        productionName: controller.productionName, requiresTypedName: true, typed: typedName)
+            )
         }
     }
 }

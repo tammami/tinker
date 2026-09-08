@@ -78,10 +78,13 @@ public struct SQLCompletionContext: Sendable, Hashable {
         // The tokens before the caret, with the word being typed split off the end.
         var before = tokens.filter { $0.utf16Range.upperBound <= caret }
         var prefix = ""
+        /// Where the word being typed starts; the caret itself when nothing is typed.
+        var prefixStart = caret
         if let last = before.last, last.utf16Range.upperBound == caret,
             last.kind == .identifier || last.kind == .keyword || last.kind == .quotedIdentifier
         {
             prefix = last.text
+            prefixStart = last.utf16Range.lowerBound
             before.removeLast()
         } else if let split = tokens.first(where: {
             $0.utf16Range.lowerBound < caret && caret < $0.utf16Range.upperBound
@@ -91,14 +94,19 @@ public struct SQLCompletionContext: Sendable, Hashable {
             // The caret sits inside a word: what is typed so far is the prefix.
             let units = Array(split.text.utf16)
             prefix = String(decoding: units[..<(caret - split.utf16Range.lowerBound)], as: UTF16.self)
+            prefixStart = split.utf16Range.lowerBound
         }
 
-        // `u.na` or `u.`: the qualifier decides everything.
+        // `u.na` or `u.`: the qualifier decides everything — when the dot touches both
+        // the name before it and the word after it; `u. na` is two things.
         var qualifier: [String] = []
+        var joinPoint = prefixStart
         while before.count >= 2, before[before.count - 1].text == ".",
+            before[before.count - 1].utf16Range.upperBound == joinPoint,
             before[before.count - 2].kind == .identifier || before[before.count - 2].kind == .quotedIdentifier,
             before[before.count - 2].utf16Range.upperBound == before[before.count - 1].utf16Range.lowerBound
         {
+            joinPoint = before[before.count - 2].utf16Range.lowerBound
             qualifier.insert(Identifier.unquote(before[before.count - 2].text, dialect: dialect), at: 0)
             before.removeLast(2)
         }

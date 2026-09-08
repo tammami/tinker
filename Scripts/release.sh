@@ -4,7 +4,7 @@
 #   Scripts/release.sh                 full release: archive, Developer ID sign (Xcode
 #                                      cloud signing), notarize, staple, zip and DMG
 #   Scripts/release.sh --skip-notarize stop after signing; still builds the DMG
-#   Scripts/release.sh --share         a universal build to hand to someone without a
+#   Scripts/release.sh --share         an Apple-silicon build to hand to someone without a
 #                                      Developer ID: signed with the certificate at hand
 #                                      (or ad hoc), zipped; opened once with right-click → Open
 #   Scripts/release.sh --unsigned      no signing at all, for a local smoke test
@@ -30,7 +30,7 @@ for argument in "$@"; do
         --skip-notarize) MODE="skip-notarize" ;;
         --unsigned) MODE="unsigned" ;;
         # A build to hand to someone without a Developer ID: signed with whatever
-        # certificate is at hand (or ad hoc), universal, zipped so nothing is lost on
+        # certificate is at hand (or ad hoc), Apple silicon only, zipped so nothing is lost on
         # the way. The recipient opens it once with right-click → Open.
         --share) MODE="share" ;;
         *) echo "unknown argument: $argument" >&2; exit 2 ;;
@@ -91,11 +91,14 @@ ARCHIVE_ARGS=(
     -destination 'generic/platform=macOS'
     -archivePath "$ARCHIVE"
     CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
-    # Universal: the recipient may be on an Intel Mac.
+    # Apple silicon only: Intel Macs are not supported, so no x86_64 slice is built.
     ONLY_ACTIVE_ARCH=NO
-    ARCHS="arm64 x86_64"
+    ARCHS="arm64"
 )
 if [[ -n "${TINKER_APPCAST_URL:-}" ]]; then
+    # Sparkle verifies the update's signature, but the feed itself must not be fetched
+    # in the clear: a plain-http appcast can be swapped for one pointing anywhere.
+    [[ "$TINKER_APPCAST_URL" == https://* ]] || fail "TINKER_APPCAST_URL must start with https:// (got $TINKER_APPCAST_URL)"
     ARCHIVE_ARGS+=(TINKER_APPCAST_URL="$TINKER_APPCAST_URL")
 fi
 if [[ -n "${TINKER_SPARKLE_PUBLIC_KEY:-}" ]]; then
@@ -221,7 +224,7 @@ with "Tinker Not Opened — Apple could not verify…". That is expected. Do thi
      xattr -dr com.apple.quarantine /Applications/Tinker.app
   and then open it as usual.
 
-Needs macOS 14 or later. Runs on Apple silicon and Intel Macs.
+Needs macOS 14 or later on an Apple silicon (M-series) Mac. Intel Macs are not supported.
 README
     # ditto keeps the bundle's permissions and structure; a folder dragged into a chat
     # or a Finder-compressed copy of a modified bundle may not.
@@ -262,7 +265,7 @@ If double-clicking Tinker shows only "The application 'Tinker' can't be opened":
     - Terminal:  xattr -dr com.apple.quarantine /Applications/Tinker.app
     - Or fetch the file again over AirDrop or a download link opened in Safari/Chrome.
 
-  Needs macOS 14 or later. Runs on Apple silicon and Intel Macs.
+  Needs macOS 14 or later on an Apple silicon (M-series) Mac. Intel Macs are not supported.
 NOTE
 ln -s /Applications "$STAGING/Applications"
 hdiutil create -volname "Tinker $VERSION" -srcfolder "$STAGING" \

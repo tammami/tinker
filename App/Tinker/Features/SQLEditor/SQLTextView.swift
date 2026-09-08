@@ -212,6 +212,11 @@ public struct SQLEditorView: NSViewRepresentable {
     public func makeCoordinator() -> SQLEditorCoordinator {
         SQLEditorCoordinator(text: $text, dialect: dialect, delegate: delegate)
     }
+
+    /// A closed tab takes its editor's observers and its list with it.
+    public static func dismantleNSView(_ nsView: NSScrollView, coordinator: SQLEditorCoordinator) {
+        coordinator.stopObserving()
+    }
 }
 
 /// Keeps the text view, the highlighting and the completion popover in step.
@@ -243,6 +248,28 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
     private var refreshObserver: (any NSObjectProtocol)?
     /// Where the word the list is about starts, so a caret that leaves it closes the list.
     private var offeredLocation: Int?
+    /// Where the user pressed Escape on the list, so columns arriving a moment later do
+    /// not bring it back at the same spot.
+    private var suppressedLocation: Int?
+
+    /// Removes every observer and puts the list away; called when the editor goes.
+    func stopObserving() {
+        for observer in [dismissObserver, offerObserver, refreshObserver, caretObserver] {
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+        }
+        dismissObserver = nil
+        offerObserver = nil
+        refreshObserver = nil
+        caretObserver = nil
+        highlightTask?.cancel()
+        completion.dismiss()
+    }
+
+    /// The user closed the list on purpose; it stays closed while the caret is here.
+    func dismissByUser() {
+        suppressedLocation = completionPrefixRange()?.location
+        completion.dismiss()
+    }
 
     /// Watches for the tab telling every editor to put its list away, and for a request
     /// to move the caret after text was inserted programmatically.
@@ -267,9 +294,13 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
             forName: .tinkerRefreshCompletion, object: nil, queue: .main
         ) { [weak self] _ in
             // Columns or tables arrived for the statement being typed: the list, if it is
-            // up or was wanted here, now has them.
+            // up or was wanted here, now has them. One the user closed stays closed.
             MainActor.assumeIsolated {
                 guard let self, let textView = self.textView, textView.window?.firstResponder === textView
+                else { return }
+                let here = self.completionPrefixRange()?.location
+                guard here != nil, here != self.suppressedLocation else { return }
+                guard self.completion.isVisible || here == self.offeredLocation || self.offeredLocation == nil
                 else { return }
                 self.offerCompletions()
             }
@@ -348,6 +379,9 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         guard !candidates.isEmpty,
             !(candidates.count == 1 && candidates[0].text.caseInsensitiveCompare(prefix) == .orderedSame)
         else { return completion.dismiss() }
+        // Typing on from where the list was closed is a new ask.
+        if suppressedLocation == range.location, prefix.isEmpty { return completion.dismiss() }
+        if suppressedLocation != range.location { suppressedLocation = nil }
         offeredLocation = range.location
 
         let caretRect = textView.firstRect(forCharacterRange: range, actualRange: nil)

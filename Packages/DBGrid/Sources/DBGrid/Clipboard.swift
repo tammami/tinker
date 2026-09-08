@@ -35,17 +35,42 @@ public enum ClipboardFormatter {
         public var includeHeader: Bool
         public var dialect: SQLDialect
         public var table: TableRef?
+        /// Prefix a field a spreadsheet would run as a formula with an apostrophe
+        /// (DECISIONS.md ADR-0031). On by default; off reproduces the value exactly.
+        public var guardFormulas: Bool
 
         public init(
             nullText: String = "",
             includeHeader: Bool = false,
             dialect: SQLDialect = .postgresql,
-            table: TableRef? = nil
+            table: TableRef? = nil,
+            guardFormulas: Bool = true
         ) {
             self.nullText = nullText
             self.includeHeader = includeHeader
             self.dialect = dialect
             self.table = table
+            self.guardFormulas = guardFormulas
+        }
+    }
+
+    /// A field that Excel, Numbers or Sheets would evaluate rather than show — one that
+    /// starts with `=`, `+`, `-`, `@`, a tab or a carriage return — gets a leading
+    /// apostrophe, which spreadsheets read as "text follows". Everything else is untouched.
+    public static func guardingFormula(_ text: String) -> String {
+        guard let first = text.unicodeScalars.first else { return text }
+        switch first {
+        case "=", "+", "-", "@", "\t", "\r": return "'" + text
+        default: return text
+        }
+    }
+
+    /// Only text can carry a formula; a number, date or boolean is rendered by Tinker and
+    /// is never guarded, so `-5` in a numeric column stays `-5`.
+    public static func mayCarryFormula(_ value: DBValue) -> Bool {
+        switch value {
+        case .string, .json, .raw, .array: true
+        default: false
         }
     }
 
@@ -122,10 +147,12 @@ public enum ClipboardFormatter {
             lines.append(
                 row.map { field in
                     // Tabs and newlines would break the row structure a spreadsheet expects.
-                    cellText(field, nullText: options.nullText)
+                    let text =
+                        cellText(field, nullText: options.nullText)
                         .replacingOccurrences(of: "\t", with: " ")
                         .replacingOccurrences(of: "\n", with: " ")
                         .replacingOccurrences(of: "\r", with: " ")
+                    return options.guardFormulas && mayCarryFormula(field) ? guardingFormula(text) : text
                 }.joined(separator: "\t"))
         }
         return lines.joined(separator: "\n")
@@ -135,7 +162,11 @@ public enum ClipboardFormatter {
         var lines: [String] = []
         if options.includeHeader { lines.append(columns.map { csvField($0.name) }.joined(separator: ",")) }
         for row in rows {
-            lines.append(row.map { csvField(cellText($0, nullText: options.nullText)) }.joined(separator: ","))
+            lines.append(
+                row.map { value in
+                    let text = cellText(value, nullText: options.nullText)
+                    return csvField(options.guardFormulas && mayCarryFormula(value) ? guardingFormula(text) : text)
+                }.joined(separator: ","))
         }
         return lines.joined(separator: "\n")
     }
@@ -179,7 +210,8 @@ public enum ClipboardFormatter {
         case let .int(number): String(number)
         case let .uint(number): String(number)
         case let .double(number):
-            number.isFinite ? String(number) : jsonString(DBValue.canonicalDouble(number))
+            // JSON has no NaN or infinity; null is the only honest spelling.
+            number.isFinite ? String(number) : "null"
         case let .decimal(text):
             // A decimal wider than a double must not silently lose digits, so it is
             // written as a string rather than a JSON number.

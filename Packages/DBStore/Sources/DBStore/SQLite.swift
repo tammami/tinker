@@ -91,6 +91,9 @@ public actor SQLiteDatabase {
         _ = try? Self.executeRaw("PRAGMA journal_mode = WAL", on: handle)
         _ = try? Self.executeRaw("PRAGMA foreign_keys = ON", on: handle)
         _ = try? Self.executeRaw("PRAGMA synchronous = NORMAL", on: handle)
+        // Deleted rows — cleared history, a removed connection — are overwritten on disk,
+        // not merely unlinked, so a deleted secret-bearing statement cannot be dug out.
+        _ = try? Self.executeRaw("PRAGMA secure_delete = ON", on: handle)
     }
 
     /// The handle is closed by ``close()``. There is no `deinit` cleanup because a

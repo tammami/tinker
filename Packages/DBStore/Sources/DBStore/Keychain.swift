@@ -43,6 +43,8 @@ public struct KeychainSecretStore: SecretStore {
             let legacy = SecretRef(service: SecretRef.legacyService, account: reference.account)
             guard let value = try await secret(for: legacy) else { return nil }
             try? await setSecret(value, for: reference)
+            // Moved, not copied: one item per secret, under the current service only.
+            try? await deleteSecret(for: legacy)
             return value
         default:
             throw KeychainError(status: status, operation: "read")

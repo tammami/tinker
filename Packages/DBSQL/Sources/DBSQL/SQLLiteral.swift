@@ -57,7 +57,13 @@ extension DBValue {
         case let .raw(typeName, text, bytes):
             if let text {
                 let quoted = SQLLiteral.quoteString(text, dialect: dialect)
-                return dialect == .postgresql ? "\(quoted)::\(typeName)" : quoted
+                guard dialect == .postgresql else { return quoted }
+                // The type name came from the server's catalogue; one spelled with anything
+                // but type characters is quoted as an identifier rather than trusted.
+                let cast =
+                    ColumnTypeSpec.isSafeTypeText(typeName) && !typeName.contains("\"")
+                    ? typeName : Identifier.quote(typeName, dialect: dialect)
+                return "\(quoted)::\(cast)"
             }
             if let bytes { return SQLLiteral.byteLiteral(bytes, dialect: dialect) }
             return "NULL"

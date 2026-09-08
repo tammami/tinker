@@ -58,6 +58,12 @@ private enum OperationRunner {
     static func isProduction(_ connectionID: UUID, _ environment: AppEnvironment) -> Bool {
         environment.connections.first { $0.id == connectionID }?.isProduction ?? false
     }
+
+    /// The connection's name when it is marked production, else nil.
+    static func productionName(_ connectionID: UUID, _ environment: AppEnvironment) -> String? {
+        let config = environment.connections.first { $0.id == connectionID }
+        return config?.isProduction == true ? config?.name : nil
+    }
 }
 
 // MARK: - Rename
@@ -70,6 +76,7 @@ private struct RenameTableSheet: View {
 
     @State private var name = ""
     @State private var failure: String?
+    @State private var typedName = ""
     @State private var isRunning = false
 
     private var dialect: SQLDialect { OperationRunner.dialect(request.connectionID, environment) }
@@ -92,15 +99,20 @@ private struct RenameTableSheet: View {
                 if let failure { InlineBanner(kind: .error, message: failure) { self.failure = nil } }
             }
         } footer: {
-            if OperationRunner.isProduction(request.connectionID, environment) {
-                Label("Production", systemImage: Icon.production).foregroundStyle(.red).font(.callout.weight(.semibold))
+            if let production = OperationRunner.productionName(request.connectionID, environment) {
+                ProductionGate(connectionName: production, requiresTypedName: true, typed: $typedName)
             }
             Spacer()
             Button("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
             Button(isRunning ? "Renaming…" : "Rename") { Task { await run() } }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .disabled(!isValid || isRunning)
+                .disabled(
+                    !isValid || isRunning
+                        || !ProductionGate.passes(
+                            productionName: OperationRunner.productionName(request.connectionID, environment),
+                            requiresTypedName: true, typed: typedName)
+                )
         }
         .onAppear { name = request.table.name }
     }
@@ -132,6 +144,7 @@ private struct DuplicateTableSheet: View {
     @State private var name = ""
     @State private var includeData = false
     @State private var failure: String?
+    @State private var typedName = ""
     @State private var isRunning = false
 
     private var dialect: SQLDialect { OperationRunner.dialect(request.connectionID, environment) }
@@ -159,15 +172,20 @@ private struct DuplicateTableSheet: View {
                 if let failure { InlineBanner(kind: .error, message: failure) { self.failure = nil } }
             }
         } footer: {
-            if OperationRunner.isProduction(request.connectionID, environment) {
-                Label("Production", systemImage: Icon.production).foregroundStyle(.red).font(.callout.weight(.semibold))
+            if let production = OperationRunner.productionName(request.connectionID, environment) {
+                ProductionGate(connectionName: production, requiresTypedName: true, typed: $typedName)
             }
             Spacer()
             Button("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
             Button(isRunning ? "Duplicating…" : "Duplicate") { Task { await run() } }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .disabled(!isValid || isRunning)
+                .disabled(
+                    !isValid || isRunning
+                        || !ProductionGate.passes(
+                            productionName: OperationRunner.productionName(request.connectionID, environment),
+                            requiresTypedName: true, typed: typedName)
+                )
         }
         .onAppear { name = request.table.name + "_copy" }
     }
@@ -198,6 +216,7 @@ private struct MaintenanceSheet: View {
     let onCancel: () -> Void
 
     @State private var failure: String?
+    @State private var typedName = ""
     @State private var isRunning = false
     @State private var output: QueryResult?
     @State private var elapsed: Duration?
@@ -228,6 +247,9 @@ private struct MaintenanceSheet: View {
                 if let failure { InlineBanner(kind: .error, message: failure) { self.failure = nil } }
             }
         } footer: {
+            if let production = OperationRunner.productionName(request.connectionID, environment) {
+                ProductionGate(connectionName: production, requiresTypedName: false, typed: .constant(""))
+            }
             Spacer()
             Button(elapsed == nil ? "Cancel" : "Close", action: onCancel).keyboardShortcut(.cancelAction)
             if elapsed == nil {
@@ -273,6 +295,7 @@ private struct ImportCSVSheet: View {
     @State private var delimiter = ","
     @State private var nullText = ""
     @State private var failure: String?
+    @State private var typedName = ""
     @State private var isRunning = false
     @State private var insertedCount: Int64?
     @State private var progressCount: Int64 = 0
@@ -365,8 +388,8 @@ private struct ImportCSVSheet: View {
                 if let failure { InlineBanner(kind: .error, message: failure) { self.failure = nil } }
             }
         } footer: {
-            if OperationRunner.isProduction(request.connectionID, environment) {
-                Label("Production", systemImage: Icon.production).foregroundStyle(.red).font(.callout.weight(.semibold))
+            if let production = OperationRunner.productionName(request.connectionID, environment) {
+                ProductionGate(connectionName: production, requiresTypedName: false, typed: .constant(""))
             }
             Spacer()
             Button(insertedCount == nil ? "Cancel" : "Close") {

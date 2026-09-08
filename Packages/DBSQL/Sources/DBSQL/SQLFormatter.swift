@@ -85,10 +85,28 @@ public enum SQLTokenizer {
             }
 
             if scalar.value >= 0x30, scalar.value <= 0x39 {
-                while let next = scanner.peek(),
-                    (next.value >= 0x30 && next.value <= 0x39) || next == "." || next == "e" || next == "E"
+                if scalar == "0", let x = scanner.peek(1), x == "x" || x == "X", let digit = scanner.peek(2),
+                    digit.properties.isASCIIHexDigit
                 {
-                    scanner.advance()
+                    // A hex literal: `0x1F` is one number, not a zero and a name.
+                    scanner.advance(2)
+                    while let next = scanner.peek(), next.properties.isASCIIHexDigit { scanner.advance() }
+                } else {
+                    while let next = scanner.peek() {
+                        if (next.value >= 0x30 && next.value <= 0x39) || next == "." {
+                            scanner.advance()
+                        } else if next == "e" || next == "E" {
+                            // The exponent may carry a sign: `1e-5` is one number.
+                            scanner.advance()
+                            if let sign = scanner.peek(), sign == "+" || sign == "-", let digit = scanner.peek(1),
+                                digit.value >= 0x30, digit.value <= 0x39
+                            {
+                                scanner.advance()
+                            }
+                        } else {
+                            break
+                        }
+                    }
                 }
                 tokens.append(
                     SQLToken(
@@ -122,6 +140,21 @@ public enum SQLTokenizer {
             token.kind != .whitespace && token.utf16Range.contains(utf16Offset)
         }
     }
+
+    /// Keywords that are also common column or table names, which the formatter must not
+    /// re-case: `comment`, `key`, `first`, `window`… stay as typed, and on a MySQL server
+    /// with case-sensitive table names `FROM comment` and `FROM COMMENT` are different tables.
+    public static let nonReserved: Set<String> = [
+        "ADD", "ANALYZE", "BEGIN", "CASCADE", "COLUMN", "COMMENT", "COMMIT", "CONSTRAINT", "CUBE",
+        "CURRENT", "DATABASE", "DEFERRABLE", "EXCLUDE", "EXPLAIN", "FILTER", "FIRST", "FOLLOWING", "FUNCTION",
+        "GROUPING", "INDEX", "KEY", "LAST", "LATERAL", "MATERIALIZED", "MERGE", "ONLY", "OVER",
+        "PARTITION", "PRECEDING", "PROCEDURE", "RANGE", "RECURSIVE", "RENAME", "REPLACE", "RESTRICT", "ROLLBACK",
+        "ROLLUP", "ROW", "ROWS", "SAVEPOINT", "SCHEMA", "SHOW", "TEMPORARY", "TRIGGER", "TRUNCATE", "UNBOUNDED",
+        "UNLOGGED", "VACUUM", "VIEW", "WINDOW", "WITHOUT",
+    ]
+
+    /// The keywords the formatter upper-cases: reserved words, never a name-like one.
+    public static var reserved: Set<String> { keywords.subtracting(nonReserved) }
 
     /// Keywords recognised for highlighting, formatting and autocomplete.
     public static let keywords: Set<String> = [
@@ -174,23 +207,65 @@ public enum SQLFormatter {
     /// The words of a join, kept together on one line that starts fresh.
     static let joinWords: Set<String> = ["JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "NATURAL"]
     /// Keywords that bind to a following parenthesis like a function name does.
-    static let functionKeywords: Set<String> = ["CAST", "COALESCE", "REPLACE"]
+    static let functionKeywords: Set<String> = ["CAST", "COALESCE", "REPLACE", "LEFT", "RIGHT"]
     /// Characters that make up operators, so `<=` and `||` stay whole.
     static let operatorScalars = Set("<>=!|:&@#?~^*+-/%".unicodeScalars)
 
     public static func format(_ sql: String, dialect: SQLDialect, indentWidth: Int = 2) -> String {
         let statements = StatementSplitter.split(sql, dialect: dialect)
         guard !statements.isEmpty else { return sql }
-        let formatted = statements.map { statement -> String in
-            let body = formatStatement(statement.text, dialect: dialect, indentWidth: indentWidth)
-            return statement.terminator.map { "\(body)\($0)" } ?? body
+        let units = Array(sql.utf16)
+        var paragraphs: [String] = []
+        var cursor = 0
+
+        /// Text the splitter left out — comments between or after statements — kept as
+        /// its own paragraph rather than dropped.
+        func keepGap(upTo end: Int) {
+            guard cursor < end, end <= units.count else { return }
+            let gap = String(decoding: units[cursor ..< end], as: UTF16.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !gap.isEmpty { paragraphs.append(gap) }
         }
-        return formatted.joined(separator: "\n\n")
+
+        for statement in statements {
+            keepGap(upTo: statement.utf16Range.lowerBound)
+            let body = formatStatement(statement.text, dialect: dialect, indentWidth: indentWidth)
+            var paragraph = body
+            var end = statement.utf16Range.upperBound
+            if let terminator = statement.terminator {
+                // A body that ends in a line comment must not swallow its terminator.
+                paragraph += endsInLineComment(statement.text, dialect: dialect) ? "\n\(terminator)" : terminator
+                // Step past the terminator in the source, whitespace before it included.
+                while end < units.count, let scalar = UnicodeScalar(units[end]), scalar.properties.isWhitespace {
+                    end += 1
+                }
+                let terminatorUnits = Array(terminator.utf16)
+                if end + terminatorUnits.count <= units.count,
+                    Array(units[end ..< end + terminatorUnits.count]) == terminatorUnits
+                {
+                    end += terminatorUnits.count
+                }
+            }
+            paragraphs.append(paragraph)
+            cursor = end
+        }
+        keepGap(upTo: units.count)
+        return paragraphs.joined(separator: "\n\n")
+    }
+
+    /// True when the last token of `sql` is a `--` or `#` comment, which runs to the end
+    /// of its line and would take anything appended after it with it.
+    static func endsInLineComment(_ sql: String, dialect: SQLDialect) -> Bool {
+        guard let last = SQLTokenizer.tokenize(sql, dialect: dialect).last(where: { $0.kind != .whitespace }) else {
+            return false
+        }
+        return last.kind == .comment && !last.text.hasPrefix("/*")
     }
 
     private enum Paren {
         /// A sub-select: the clauses inside sit two levels in, the closing paren one level in.
-        case block(clauseIndent: Int)
+        /// It remembers whether the enclosing text was inside a `BETWEEN … AND`.
+        case block(clauseIndent: Int, inBetween: Bool)
         /// A function call, an `IN` list, a column list: everything inside stays on the line.
         case inline
     }
@@ -207,7 +282,27 @@ public enum SQLFormatter {
         var clause = ""
         /// Between `BETWEEN` and its `AND`, which must not start a line.
         var inBetween = false
+        /// A `-` or `+` that is a sign, so the number after it binds to it: `= -1`.
+        var signPending = false
         var previous: SQLToken?
+
+        /// Tokens that are next to each other in the source with nothing between them.
+        func adjacent(_ a: SQLToken?, _ b: SQLToken?) -> Bool {
+            guard let a, let b else { return false }
+            return a.utf16Range.upperBound == b.utf16Range.lowerBound
+        }
+
+        /// How a keyword is written out: reserved words upper-cased, name-like ones as typed.
+        /// A keyword next to a `.` is part of a qualified name and stays as typed too.
+        func cased(_ token: SQLToken, next: SQLToken?) -> String {
+            let upper = token.text.uppercased()
+            // `NULLS FIRST` / `NULLS LAST` are one phrase even though FIRST and LAST are names elsewhere.
+            if ["FIRST", "LAST"].contains(upper), previous?.text.uppercased() == "NULLS" { return upper }
+            guard SQLTokenizer.reserved.contains(upper) else { return token.text }
+            if previous?.text == ".", adjacent(previous, token) { return token.text }
+            if next?.text == ".", adjacent(token, next) { return token.text }
+            return upper
+        }
 
         var inlineParens: Bool { parens.last.map { if case .inline = $0 { true } else { false } } ?? false }
         var bodyIndent: Int { clauseIndent + 1 }
@@ -229,6 +324,7 @@ public enum SQLFormatter {
                 && !output.hasSuffix(" ")
                 && !output.hasSuffix("\n")
                 && !output.hasSuffix("(")
+                && !output.hasSuffix("[")
                 && !output.hasSuffix(".")
                 && !output.hasSuffix("::")
             if needsSpace { output += " " }
@@ -252,9 +348,14 @@ public enum SQLFormatter {
 
             switch token.kind {
             case .comment:
-                append(token.text)
-                // A line comment owns the rest of its line; what follows must start a new one.
-                if !token.text.hasPrefix("/*") { newline(at: output.hasSuffix("\n") ? 0 : bodyIndent) }
+                if token.text.hasPrefix("/*") {
+                    append(token.text)
+                } else {
+                    // A line comment owns the rest of its line; what follows starts a new
+                    // one at the body's indent. The token carries its own newline.
+                    append(token.text.trimmingCharacters(in: .newlines))
+                    newline(at: bodyIndent)
+                }
                 continue
 
             case .punctuation:
@@ -268,9 +369,11 @@ public enum SQLFormatter {
                     let afterFunctionKeyword =
                         previous?.kind == .keyword && functionKeywords.contains(previous?.text.uppercased() ?? "")
                     let tight = (afterName && !["INSERT INTO", "CREATE"].contains(clause)) || afterFunctionKeyword
-                    append("(", tight: tight)
+                    append("(", tight: tight || signPending)
+                    signPending = false
                     if opensBlock {
-                        parens.append(.block(clauseIndent: clauseIndent))
+                        parens.append(.block(clauseIndent: clauseIndent, inBetween: inBetween))
+                        inBetween = false
                         clauseIndent += 2
                         newline(at: clauseIndent)
                     } else {
@@ -278,15 +381,23 @@ public enum SQLFormatter {
                     }
                     continue
                 case ")":
-                    if case .block(let saved) = parens.popLast() {
+                    if case .block(let saved, let outerBetween) = parens.popLast() {
                         clauseIndent = saved
+                        inBetween = outerBetween
                         newline(at: bodyIndent)
                     }
                     append(")", tight: true)
                     continue
+                case "[", "]":
+                    // Subscripts bind to their array: `arr[1]`, `matrix[1][2]`.
+                    append(token.text, tight: true)
+                    continue
                 case ",":
                     append(",", tight: true)
-                    if inlineParens {
+                    // MySQL's `LIMIT 10, 20` is one thing; a list item takes a line of its
+                    // own, unless a line comment trails the comma and keeps its place.
+                    let trailingComment = next?.kind == .comment && !(next?.text.hasPrefix("/*") ?? true)
+                    if inlineParens || clause == "LIMIT" || trailingComment {
                         output += " "
                     } else {
                         newline(at: bodyIndent)
@@ -307,14 +418,31 @@ public enum SQLFormatter {
                         continue
                     }
                     // Adjacent operator characters are one operator: `<=`, `||`, `->>`.
-                    let joinsPrevious =
-                        isOperator(token) && isOperator(previous)
-                        && previous?.utf16Range.upperBound == token.utf16Range.lowerBound
+                    let joinsPrevious = isOperator(token) && isOperator(previous) && adjacent(previous, token)
                     append(token.text, tight: joinsPrevious)
+                    // A sign rather than a subtraction: nothing operand-like came before it.
+                    if token.text == "-" || token.text == "+" {
+                        let operandBefore =
+                            previous.map {
+                                [.identifier, .quotedIdentifier, .number, .string, .parameter].contains($0.kind)
+                                    || $0.text == ")" || $0.text == "]"
+                            } ?? false
+                        signPending = !operandBefore && !joinsPrevious
+                    } else if token.text == "@" {
+                        // A variable: `@total`, `@@session.sql_mode`.
+                        signPending = adjacent(token, next)
+                    } else {
+                        signPending = false
+                    }
                     continue
                 }
 
             case .keyword where !inlineParens:
+                let word = cased(token, next: next)
+                // `FOR UPDATE` / `ON CONFLICT DO UPDATE SET`: this UPDATE heads no clause.
+                let lockingUpdate =
+                    upper == "UPDATE" && previous?.kind == .keyword
+                    && ["FOR", "KEY", "DO"].contains(previous?.text.uppercased() ?? "")
                 if let second = clausePairs[upper], let next, next.kind == .keyword,
                     second.contains(next.text.uppercased())
                 {
@@ -327,7 +455,16 @@ public enum SQLFormatter {
                     newline(at: bodyIndent)
                     continue
                 }
-                if clauseStarters.contains(upper) {
+                // A locking clause heads a line of its own: `FOR UPDATE`, `FOR NO KEY UPDATE`.
+                if upper == "FOR", let next, next.kind == .keyword,
+                    ["UPDATE", "SHARE", "NO", "KEY"].contains(next.text.uppercased())
+                {
+                    newline(at: clauseIndent)
+                    append(upper)
+                    clause = "FOR"
+                    continue
+                }
+                if clauseStarters.contains(upper), !lockingUpdate {
                     newline(at: clauseIndent)
                     append(upper)
                     clause = upper
@@ -342,10 +479,11 @@ public enum SQLFormatter {
                     newline(at: bodyIndent)
                     continue
                 }
-                if joinWords.contains(upper) {
+                // `LEFT(name, 3)` is a function, not a join.
+                if joinWords.contains(upper), !(next?.text == "(" && adjacent(token, next)) {
                     let continuesJoin = previous.map { joinWords.contains($0.text.uppercased()) } ?? false
                     if !continuesJoin { newline(at: bodyIndent) }
-                    append(upper)
+                    append(word)
                     continue
                 }
                 if upper == "BETWEEN" { inBetween = true }
@@ -357,15 +495,23 @@ public enum SQLFormatter {
                     }
                 }
                 if upper == "CREATE" { clause = "CREATE" }
-                append(upper)
+                append(word)
                 continue
 
             case .keyword:
-                append(upper)
+                append(cased(token, next: next))
+                continue
+
+            case .string:
+                // A prefix binds to its string: `E'…'`, `X'0A'`, `N'…'`, `_utf8mb4'…'`.
+                let prefixed = previous?.kind == .identifier && adjacent(previous, token)
+                append(token.text, tight: prefixed || signPending)
+                signPending = false
                 continue
 
             default:
-                append(token.text)
+                append(token.text, tight: signPending)
+                signPending = false
                 continue
             }
         }

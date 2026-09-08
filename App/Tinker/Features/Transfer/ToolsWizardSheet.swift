@@ -190,6 +190,7 @@ struct ToolsWizardSheet: View {
     @State private var target: EndpointModel
     @State private var controller: TransferController
     @State private var step = 1
+    @State private var typedName = ""
     @State private var targetIsFile = false
     @State private var selectedTables: Set<String> = []
     @State private var selectedViews: Set<String> = []
@@ -716,8 +717,10 @@ struct ToolsWizardSheet: View {
 
     private var footer: some View {
         HStack(spacing: DesignTokens.Spacing.sm) {
-            if target.config?.isProduction == true, !targetIsFile {
-                Label("Production", systemImage: Icon.production).foregroundStyle(.red).font(.callout.weight(.semibold))
+            if let config = target.config, config.isProduction, !targetIsFile {
+                ProductionGate(
+                    connectionName: config.name, requiresTypedName: step == 3 && kind == .structureSync,
+                    typed: $typedName)
             }
             Spacer()
             if controller.isRunning {
@@ -817,7 +820,11 @@ struct ToolsWizardSheet: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(
                     result.statements(includingDestructive: includeDestructive, droppingExtraTables: dropExtraTables)
-                        .isEmpty)
+                        .isEmpty
+                        || !ProductionGate.passes(
+                            productionName: target.config?.isProduction == true ? target.config?.name : nil,
+                            requiresTypedName: true, typed: typedName)
+                )
             }
         }
     }

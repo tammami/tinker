@@ -9,6 +9,8 @@ public struct WorkspaceView: View {
     @State private var controller: WorkspaceController
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var isFirstRunPresented = false
+    /// What the displayed connection's wire looks like, read once it is connected.
+    @State private var transport: TransportSummary?
 
     let environment: AppEnvironment
     @Bindable var settings: AppSettings
@@ -529,7 +531,9 @@ public struct WorkspaceView: View {
     }
 
     var statusBar: some View {
-        StatusBarView {
+        let displayed = workspace.displayedConnection
+        let stateKey = displayed.map { "\($0.id.uuidString)/\(sidebar.state(of: $0.id).isUsable)" } ?? ""
+        return StatusBarView {
             if let config = workspace.displayedConnection {
                 HStack(spacing: DesignTokens.Spacing.xs + 2) {
                     Circle()
@@ -541,6 +545,16 @@ public struct WorkspaceView: View {
                     Label(database, systemImage: Icon.database)
                 }
                 Text(sidebar.state(of: config.id).describedForStatusBar)
+                if sidebar.state(of: config.id).isUsable, let transport {
+                    // A closed lock for TLS or a tunnel, an open one for a wire in the clear,
+                    // so a `prefer` connection that fell back to plaintext is never a secret.
+                    Label(
+                        transport.isProtected ? "Encrypted" : "Not encrypted",
+                        systemImage: transport.isProtected ? Icon.lock : Icon.unlock
+                    )
+                    .foregroundStyle(transport.isProtected ? Color.secondary : Color.orange)
+                    .help(transport.summary)
+                }
                 if config.readOnly {
                     Label("Read-only", systemImage: Icon.readOnly).foregroundStyle(.orange)
                 }
@@ -565,6 +579,15 @@ public struct WorkspaceView: View {
                 )
                 .foregroundStyle(.orange)
             }
+        }
+        // Read once the connection is up (and again when it reconnects); the actor call
+        // cannot happen in the body itself.
+        .task(id: stateKey) {
+            guard let displayed, sidebar.state(of: displayed.id).isUsable else {
+                transport = nil
+                return
+            }
+            transport = await environment.session(for: displayed.id)?.transportSummary
         }
     }
 

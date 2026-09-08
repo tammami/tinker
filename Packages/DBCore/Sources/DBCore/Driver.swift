@@ -12,6 +12,32 @@ public protocol SQLDriver: Sendable {
     static func connect(_ config: ResolvedConnectionConfig, logger: Logger) async throws -> any SQLConnection
 }
 
+/// What the wire between the client and the server looks like, as the server reports it
+/// once the connection is up: whether it is encrypted, and with what.
+public struct TransportInfo: Sendable, Hashable {
+    public var isEncrypted: Bool
+    /// `TLSv1.3` and the like; nil when unknown or unencrypted.
+    public var protocolVersion: String?
+    /// The negotiated cipher suite; nil when unknown or unencrypted.
+    public var cipher: String?
+
+    public init(isEncrypted: Bool, protocolVersion: String? = nil, cipher: String? = nil) {
+        self.isEncrypted = isEncrypted
+        self.protocolVersion = protocolVersion
+        self.cipher = cipher
+    }
+
+    /// The transport of a connection that never asked: treated as unencrypted.
+    public static let plaintext = TransportInfo(isEncrypted: false)
+
+    /// One line for a tooltip: "TLSv1.3, TLS_AES_256_GCM_SHA384" or "Not encrypted".
+    public var summary: String {
+        guard isEncrypted else { return "Not encrypted" }
+        let detail = [protocolVersion, cipher].compactMap { $0 }.joined(separator: ", ")
+        return detail.isEmpty ? "Encrypted" : detail
+    }
+}
+
 /// One physical connection to a server.
 ///
 /// Conformances are actors or otherwise internally synchronised: ``cancelCurrent()``
@@ -21,6 +47,8 @@ public protocol SQLConnection: AnyObject, Sendable {
     /// The server's identity for this connection — PostgreSQL backend pid, MySQL thread id.
     /// Used to cancel work and shown in the status bar.
     var backendID: String { get }
+    /// Whether the wire is encrypted, as the server reported it after the handshake.
+    var transport: TransportInfo { get }
 
     /// Runs one statement and streams its result.
     ///
@@ -47,6 +75,12 @@ public protocol SQLConnection: AnyObject, Sendable {
     func ping() async throws
     func close() async
 
+    /// Puts session-level state back the way a fresh connection has it — the current
+    /// database or search path, the role, variables a statement changed — so a pooled
+    /// connection handed to the next tab carries nothing of the last one's `SET`/`USE`.
+    /// Drivers may skip the round trip when no such statement ran.
+    func resetSessionState() async throws
+
     var introspector: any SchemaIntrospector { get }
 
     /// Bulk-loads rows in the server's own text format — PostgreSQL's `COPY … FROM STDIN`.
@@ -67,6 +101,12 @@ public protocol BulkLoadWriter: Sendable {
 }
 
 extension SQLConnection {
+    /// A driver that cannot tell reports plaintext, which is the honest default.
+    public var transport: TransportInfo { .plaintext }
+
+    /// Nothing to reset for a driver that keeps no session state.
+    public func resetSessionState() async throws {}
+
     /// Runs a statement with no parameters and collects every row.
     /// For result sets known to be small — introspection, one-row probes, DDL.
     public func executeCollecting(_ sql: String, parameters: [DBValue] = []) async throws -> QueryResult {

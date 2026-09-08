@@ -44,18 +44,109 @@ public struct SQLStatement: Sendable, Hashable, Identifiable {
     /// True when the statement cannot modify data, used by the read-only guard (SPEC §9).
     ///
     /// Deliberately conservative: a `WITH` that contains any data-modifying keyword is
-    /// treated as a write, because PostgreSQL allows `WITH … INSERT`.
+    /// treated as a write, because PostgreSQL allows `WITH … INSERT`; `SELECT … INTO`
+    /// creates a table (or, on MySQL, a server file); and `EXPLAIN ANALYZE` runs the
+    /// statement it explains, so it is as much of a write as that statement.
     public var isProbablyReadOnly: Bool {
         let keyword = leadingKeyword
         let readOnlyKeywords: Set<String> = ["SELECT", "SHOW", "EXPLAIN", "DESCRIBE", "DESC", "TABLE", "VALUES"]
-        if keyword == "WITH" {
-            let upper = text.uppercased()
-            for writeKeyword in ["INSERT", "UPDATE", "DELETE", "MERGE"] where upper.contains(writeKeyword) {
-                return false
-            }
-            return true
+        switch keyword {
+        case "EXPLAIN":
+            guard let explained = explainedStatement else { return true }
+            return explained.runs ? explained.statement.isProbablyReadOnly : true
+        case "WITH":
+            return !containsKeyword(in: ["INSERT", "UPDATE", "DELETE", "MERGE"], topLevelOnly: false)
+        case "SELECT":
+            return !containsKeyword(in: ["INTO"], topLevelOnly: true)
+        default:
+            return readOnlyKeywords.contains(keyword)
         }
-        return readOnlyKeywords.contains(keyword)
+    }
+
+    /// True when the statement takes data or objects away, or rewrites them in place:
+    /// what a production connection asks the connection's name for.
+    public var isProbablyDestructive: Bool {
+        let destructive: Set<String> = ["DELETE", "DROP", "TRUNCATE", "ALTER", "UPDATE", "REPLACE", "MERGE", "RENAME"]
+        switch leadingKeyword {
+        case "EXPLAIN":
+            guard let explained = explainedStatement, explained.runs else { return false }
+            return explained.statement.isProbablyDestructive
+        case "WITH":
+            return containsKeyword(in: ["DELETE", "UPDATE", "MERGE"], topLevelOnly: false)
+        case let keyword:
+            return destructive.contains(keyword)
+        }
+    }
+
+    /// The statement an `EXPLAIN` explains, and whether the explain runs it (`ANALYZE`).
+    ///
+    /// Options come as a parenthesised list (`EXPLAIN (ANALYZE, BUFFERS) …`), as bare
+    /// words (`EXPLAIN ANALYZE VERBOSE …`) or as MySQL's `FORMAT=JSON`.
+    var explainedStatement: (statement: SQLStatement, runs: Bool)? {
+        let tokens = SQLTokenizer.tokenize(text, dialect: .postgresql).filter {
+            $0.kind != .whitespace && $0.kind != .comment
+        }
+        guard let first = tokens.first, first.kind == .keyword, first.text.uppercased() == "EXPLAIN" else { return nil }
+        let optionWords: Set<String> = [
+            "ANALYZE", "ANALYSE", "VERBOSE", "COSTS", "SETTINGS", "BUFFERS", "WAL", "TIMING", "SUMMARY",
+            "FORMAT", "JSON", "XML", "YAML", "TEXT", "TREE", "TRADITIONAL", "TRUE", "FALSE", "ON", "OFF",
+            "GENERIC_PLAN", "MEMORY", "SERIALIZE", "NONE", "BINARY",
+        ]
+        var runs = false
+        var index = 1
+        while index < tokens.count {
+            let token = tokens[index]
+            if token.kind == .punctuation, token.text == "(" {
+                var depth = 0
+                while index < tokens.count {
+                    let inner = tokens[index]
+                    if inner.kind == .punctuation, inner.text == "(" { depth += 1 }
+                    if inner.kind == .punctuation, inner.text == ")" {
+                        depth -= 1
+                        if depth == 0 { break }
+                    }
+                    if ["ANALYZE", "ANALYSE"].contains(inner.text.uppercased()), depth == 1 { runs = true }
+                    index += 1
+                }
+                index += 1
+                continue
+            }
+            if token.kind == .punctuation, token.text == "=" {
+                index += 1
+                continue
+            }
+            let word = token.text.uppercased()
+            guard optionWords.contains(word) else { break }
+            if word == "ANALYZE" || word == "ANALYSE" { runs = true }
+            index += 1
+        }
+        guard index < tokens.count else { return nil }
+        let start = tokens[index].utf16Range.lowerBound
+        let units = Array(text.utf16)
+        guard start < units.count else { return nil }
+        let inner = String(decoding: units[start...], as: UTF16.self)
+        let statement = SQLStatement(
+            text: inner, utf16Range: (utf16Range.lowerBound + start) ..< utf16Range.upperBound,
+            startLine: startLine, terminator: terminator)
+        return (statement, runs)
+    }
+
+    /// Whether any of `words` appears as a keyword token, outside strings and comments;
+    /// with `topLevelOnly`, only outside parentheses.
+    func containsKeyword(in words: Set<String>, topLevelOnly: Bool) -> Bool {
+        var depth = 0
+        for token in SQLTokenizer.tokenize(text, dialect: .postgresql) {
+            switch token.kind {
+            case .punctuation:
+                if token.text == "(" { depth += 1 }
+                if token.text == ")" { depth = max(0, depth - 1) }
+            case .keyword, .identifier:
+                if (!topLevelOnly || depth == 0), words.contains(token.text.uppercased()) { return true }
+            default:
+                break
+            }
+        }
+        return false
     }
 
     /// A label for a result tab: the first 40 characters on one line.

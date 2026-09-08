@@ -464,9 +464,14 @@ public final class GridModel {
     public func commit(
         using runner: any GridStatementRunner, scope: CommitScope = .everything
     ) async throws -> CommitResult {
-        let statements = try pendingStatements(scope)
+        guard let table = writableTable else { return try await GridCommitter().commit([], using: runner) }
+        let generator = DMLGenerator(dialect: dialect, table: table, identityColumns: identityColumns)
+        // Only what is written now is cleared afterwards: an edit that arrives while the
+        // statements are on the server stays pending for the next commit.
+        let snapshot = edits.snapshot(scope)
+        let statements = try edits.statements(using: generator, snapshot: snapshot)
         let result = try await GridCommitter().commit(statements, using: runner)
-        edits.discard(scope)
+        edits.remove(committed: snapshot)
         return result
     }
 }

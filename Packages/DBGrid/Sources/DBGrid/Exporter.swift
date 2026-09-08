@@ -49,8 +49,31 @@ public struct ExportOptions: Sendable, Hashable {
     public var table: TableRef?
     /// The worksheet's tab name for Excel; the table's name when there is one.
     public var sheetTitle = "Result"
+    /// CSV: prefix fields a spreadsheet would run as formulas with an apostrophe (ADR-0031).
+    public var guardFormulas = true
 
     public init() {}
+}
+
+/// Why an export could not start.
+public enum ExportError: Error, CustomStringConvertible, Sendable {
+    case cannotCreateFile(String)
+
+    public var description: String {
+        switch self {
+        case let .cannotCreateFile(path): "Could not create \(path)"
+        }
+    }
+}
+
+extension FileManager {
+    /// Creates an empty file only its owner can read, replacing what was there, and
+    /// says so if the folder refuses. Exports hold data; they are not for other users.
+    func createPrivateFile(at url: URL) throws {
+        guard createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+            throw ExportError.cannotCreateFile(url.path)
+        }
+    }
 }
 
 /// Writes rows to a file as they arrive.
@@ -82,7 +105,7 @@ public final class RowExporter {
             return
         }
         workbook = nil
-        FileManager.default.createFile(atPath: url.path, contents: nil)
+        try FileManager.default.createPrivateFile(at: url)
         handle = try FileHandle(forWritingTo: url)
         if options.writeByteOrderMark, options.format != .sqlInsert {
             buffer.append(contentsOf: [0xEF, 0xBB, 0xBF])
@@ -125,16 +148,20 @@ public final class RowExporter {
         case .xlsx:
             guard deferredError == nil else { return }
             do {
-                try workbook?.write(row: row)
+                // A row past Excel's limit is dropped and not counted.
+                guard try workbook?.write(row: row) == true else { return }
             } catch {
                 deferredError = error
+                return
             }
 
         case .csv:
             append(
                 row.map { value in
-                    ClipboardFormatter.csvField(
-                        ClipboardFormatter.cellText(value, nullText: options.nullText),
+                    let text = ClipboardFormatter.cellText(value, nullText: options.nullText)
+                    let guarded = options.guardFormulas && ClipboardFormatter.mayCarryFormula(value)
+                    return ClipboardFormatter.csvField(
+                        guarded ? ClipboardFormatter.guardingFormula(text) : text,
                         delimiter: options.delimiter, quote: options.quote
                     )
                 }.joined(separator: String(options.delimiter)) + "\n")
@@ -215,9 +242,19 @@ public final class RowExporter {
         buffer.append(contentsOf: text.utf8)
     }
 
+    /// A write that fails mid-stream (disk full, volume gone) is reported by `finish`;
+    /// nothing more is buffered after it, so memory does not grow while the rows keep coming.
     private func flushIfNeeded() {
-        guard buffer.count >= Self.flushThreshold else { return }
-        try? flush()
+        guard buffer.count >= Self.flushThreshold, deferredError == nil else {
+            if deferredError != nil { buffer.removeAll(keepingCapacity: false) }
+            return
+        }
+        do {
+            try flush()
+        } catch {
+            deferredError = error
+            buffer.removeAll(keepingCapacity: false)
+        }
     }
 
     private func flush() throws {

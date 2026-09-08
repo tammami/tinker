@@ -117,7 +117,42 @@ public final class SidebarModel {
         stateWatchers[connectionID] = Task { [weak self] in
             for await state in await session.states() {
                 guard let self else { return }
+                mainStates[connectionID] = state
+                // A database session that has failed keeps the dot red until it recovers.
+                if case .degraded = states[connectionID] ?? .disconnected,
+                    degradedDatabases[connectionID]?.isEmpty == false
+                {
+                    continue
+                }
                 states[connectionID] = state
+            }
+        }
+    }
+
+    /// The main session's own state, kept apart so a database session's failure can
+    /// colour the dot without losing what the main session last said.
+    private var mainStates: [UUID: ConnectionState] = [:]
+    /// Which of a connection's other-database sessions are currently failing.
+    private var degradedDatabases: [UUID: Set<String>] = [:]
+    private var databaseStateWatchers: [String: Task<Void, Never>] = [:]
+
+    /// Follows a session opened on another database of the connection: its failure shows
+    /// on the connection's dot, since that is the only dot there is.
+    func watchState(of connectionID: UUID, database: String, session: ConnectionSession) {
+        let key = "\(connectionID.uuidString)/\(database)"
+        guard databaseStateWatchers[key] == nil else { return }
+        databaseStateWatchers[key] = Task { [weak self] in
+            for await state in await session.states() {
+                guard let self else { return }
+                if case .degraded = state {
+                    degradedDatabases[connectionID, default: []].insert(database)
+                    states[connectionID] = state
+                } else {
+                    degradedDatabases[connectionID]?.remove(database)
+                    if degradedDatabases[connectionID]?.isEmpty != false {
+                        states[connectionID] = mainStates[connectionID] ?? states[connectionID] ?? .disconnected
+                    }
+                }
             }
         }
     }
@@ -271,6 +306,7 @@ public final class SidebarModel {
         case let .database(id, name):
             // PostgreSQL reads another database only through a session opened on it.
             guard let session = environment.session(for: id, database: name) else { return [] }
+            if session !== environment.session(for: id) { watchState(of: id, database: name, session: session) }
             _ = try await session.connect()
             // MySQL has no schema layer: a database holds its tables directly, so the
             // folders hang off the database row rather than off a schema of the same name.

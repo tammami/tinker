@@ -17,11 +17,17 @@ public struct KnownHostsFile: Sendable {
         (NSHomeDirectory() as NSString).appendingPathComponent(".ssh/known_hosts")
     }
 
-    /// One entry: the hosts it covers (plain or hashed) and the key itself.
+    /// One entry: the hosts it covers (plain or hashed), the key itself, and the marker
+    /// OpenSSH may put in front: `@revoked` (never trust this key) or `@cert-authority`
+    /// (a CA that signs host certificates, not a host key).
     public struct Entry: Sendable {
         public let hostPattern: String
         public let keyType: String
         public let base64Key: String
+        public let marker: String?
+
+        public var isRevoked: Bool { marker == "@revoked" }
+        public var isCertificateAuthority: Bool { marker == "@cert-authority" }
 
         /// True when the host name is stored as an HMAC-SHA1 digest, which is OpenSSH's
         /// `HashKnownHosts yes` format.
@@ -36,25 +42,42 @@ public struct KnownHostsFile: Sendable {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { return nil }
             let fields = trimmed.split(separator: " ", omittingEmptySubsequences: true)
-            // A marker such as `@cert-authority` shifts the fields along by one.
-            let offset = fields.first?.hasPrefix("@") == true ? 1 : 0
+            // A marker such as `@revoked` shifts the fields along by one.
+            let marker = fields.first?.hasPrefix("@") == true ? String(fields[0]) : nil
+            let offset = marker == nil ? 0 : 1
             guard fields.count >= offset + 3 else { return nil }
             return Entry(
                 hostPattern: String(fields[offset]),
                 keyType: String(fields[offset + 1]),
-                base64Key: String(fields[offset + 2])
+                base64Key: String(fields[offset + 2]),
+                marker: marker
             )
         }
     }
 
-    /// The keys recorded for `host` on `port`, in every form OpenSSH writes them.
+    /// The keys recorded as trusted for `host` on `port`, in every form OpenSSH writes
+    /// them. A `@revoked` key is never trusted and a `@cert-authority` key is not a host
+    /// key at all; neither is returned here.
     public func keys(forHost host: String, port: Int) -> [NIOSSHPublicKey] {
+        matchingEntries(host: host, port: port)
+            .filter { !$0.isRevoked && !$0.isCertificateAuthority }
+            .compactMap(Self.publicKey)
+    }
+
+    /// The keys `known_hosts` marks `@revoked` for `host` on `port`: a server presenting
+    /// one must be refused whatever else the file says.
+    public func revokedKeys(forHost host: String, port: Int) -> [NIOSSHPublicKey] {
+        matchingEntries(host: host, port: port).filter(\.isRevoked).compactMap(Self.publicKey)
+    }
+
+    private func matchingEntries(host: String, port: Int) -> [Entry] {
         // A non-default port is written as `[host]:port`.
         let candidates = port == 22 ? [host] : ["[\(host)]:\(port)", host]
-        return entries().compactMap { entry -> NIOSSHPublicKey? in
-            guard candidates.contains(where: { entry.matches(host: $0) }) else { return nil }
-            return try? NIOSSHPublicKey(openSSHPublicKey: "\(entry.keyType) \(entry.base64Key)")
-        }
+        return entries().filter { entry in candidates.contains { entry.matches(host: $0) } }
+    }
+
+    private static func publicKey(_ entry: Entry) -> NIOSSHPublicKey? {
+        try? NIOSSHPublicKey(openSSHPublicKey: "\(entry.keyType) \(entry.base64Key)")
     }
 
     /// True when `host` appears anywhere in the file, which is how `accept-new` tells a

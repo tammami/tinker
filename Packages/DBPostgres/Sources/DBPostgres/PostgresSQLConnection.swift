@@ -20,6 +20,10 @@ public actor PostgresSQLConnection: SQLConnection {
     public nonisolated let backendID: String
     public nonisolated let serverVersion: ServerVersion
     public nonisolated let introspector: any SchemaIntrospector
+    public nonisolated let transport: TransportInfo
+    /// Set when a statement changed session state (`SET`, `RESET`, `DISCARD`), so the
+    /// reset on release only pays its round trip when there is something to put back.
+    private var sessionMutated = false
 
     /// Tracked rather than read from the server, because the wire protocol's transaction
     /// status is not exposed by PostgresNIO. Updated both by the transaction methods and
@@ -32,17 +36,26 @@ public actor PostgresSQLConnection: SQLConnection {
         self.config = config
         self.logger = logger
 
-        // One round trip for everything the connection needs to know about itself.
+        // One round trip for everything the connection needs to know about itself,
+        // including whether the wire it came over is encrypted.
         let probe = try await Self.rawQuery(
             """
             SELECT version(), pg_backend_pid()::int8, current_setting('TimeZone'), \
-            current_setting('server_version')
+            current_setting('server_version'), s.ssl, s.version, s.cipher
+            FROM (SELECT 1) AS one
+            LEFT JOIN pg_catalog.pg_stat_ssl s ON s.pid = pg_backend_pid()
             """,
             on: underlying, logger: logger, decoder: PostgresBinaryDecoder(catalog: PostgresTypeCatalog())
         )
-        guard let row = probe.rows.first, row.count >= 4 else {
+        guard let row = probe.rows.first, row.count >= 7 else {
             throw DBError.protocolError("The server did not answer the connection probe")
         }
+        let encrypted = row[4] == .bool(true)
+        transport = TransportInfo(
+            isEncrypted: encrypted,
+            protocolVersion: encrypted ? row[5].text : nil,
+            cipher: encrypted ? row[6].text : nil
+        )
         let versionText = row[0].text ?? ""
         let numericVersion = row[3].text ?? ""
         backendID = row[1].text ?? "0"
@@ -78,6 +91,23 @@ public actor PostgresSQLConnection: SQLConnection {
                 "SET statement_timeout = \(milliseconds)",
                 on: underlying, logger: logger, decoder: decoder
             )
+        }
+    }
+
+    /// Puts the session back the way the connection started: every `SET` undone, the
+    /// role dropped, and the statement timeout the configuration asked for restored.
+    /// Skipped when nothing ran that could have changed them.
+    public func resetSessionState() async throws {
+        guard sessionMutated, !closed else { return }
+        sessionMutated = false
+        try await runSimple("RESET ALL")
+        try await runSimple("RESET ROLE")
+        if let timeout = config.statementTimeout {
+            let milliseconds =
+                timeout.components.seconds * 1_000
+                + Int64(timeout.components.attoseconds / 1_000_000_000_000_000)
+            _ = try? await Self.rawQuery(
+                "SET statement_timeout = \(milliseconds)", on: underlying, logger: logger, decoder: decoder)
         }
     }
 
@@ -150,11 +180,9 @@ public actor PostgresSQLConnection: SQLConnection {
         for name in [table.schema, table.name] + columns where name.contains("\"") {
             throw DBError.protocolError("COPY cannot target a name containing a double quote: \(name)")
         }
-        var previousPath =
+        let previousPath =
             try await Self.rawQuery("SHOW search_path", on: underlying, logger: logger, decoder: decoder)
             .rows.first?.first?.text ?? "\"$user\", public"
-        // pg_dump scripts empty the path; an empty list has to be spelled as ''.
-        if previousPath.trimmingCharacters(in: .whitespaces).isEmpty { previousPath = "''" }
         _ = try await Self.rawQuery(
             "SET search_path TO \(Identifier.quote(table.schema, dialect: .postgresql))",
             on: underlying, logger: logger, decoder: decoder)
@@ -167,8 +195,11 @@ public actor PostgresSQLConnection: SQLConnection {
             failure = error
         }
         // Put back before anything else can run on this connection, whichever way it went.
-        _ = try? await Self.rawQuery(
-            "SET search_path TO \(previousPath)", on: underlying, logger: logger, decoder: decoder)
+        // The previous value is bound, not interpolated: it is text the server gave us,
+        // and `set_config` takes it as a value rather than as SQL.
+        _ = try? await underlying.query(
+            "SELECT set_config('search_path', \(previousPath), false)", logger: logger
+        ).get()
         if let failure { throw PostgresErrorMapper.map(failure, user: config.user) }
     }
 
@@ -320,6 +351,9 @@ public actor PostgresSQLConnection: SQLConnection {
         switch keyword {
         case "BEGIN", "START": transactionOpen = true
         case "COMMIT", "ROLLBACK", "END": transactionOpen = false
+        case "SET", "RESET", "DISCARD": sessionMutated = true
+        // `SELECT set_config(…)` changes session state as `SET` does.
+        case "SELECT" where sql.uppercased().contains("SET_CONFIG("): sessionMutated = true
         default: break
         }
     }

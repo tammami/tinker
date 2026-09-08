@@ -280,3 +280,47 @@ Date: 2026-09-03
 **Decision.** An estimate is only ever used where it is true — an unfiltered table — and is shown as an estimate. A filtered grid counts what it actually read, and the Objects list says its row figures are the server's estimates.
 
 **Consequences.** A filtered grid can under-report until the last page is reached, which is honest. Nothing runs `COUNT(*)` to make a number look precise, which is what §12 forbade for good reason on a large table.
+
+## ADR-0031 — Grid edits may write as they are made, but never on production
+Date: 2026-09-07
+
+**Context.** SPEC §12.3 says nothing reaches the server until Commit or Discard. The user asked for the opposite on ordinary connections: an edit that writes the moment focus leaves the cell, a new row that writes when the selection leaves it, and no Commit/Discard question in the status bar — the way a spreadsheet behaves.
+
+**Decision.** Each table tab and query tab has an Auto-commit checkbox (on by default). With it on, a cell edit, Set NULL and Delete Rows write at once through the same path Commit uses — primary-key `WHERE` with the original values, one transaction, `affectedRows == 1` checked — and the page is re-read afterwards. A new row waits until the selection leaves it. With it off, §12.3 applies unchanged. On a connection marked Production the checkbox is not shown and every write still goes through the commit sheet, whatever the tab's setting: production keeps the spec's behaviour.
+
+**Consequences.** Writes are single-flight per grid: one commit at a time, a change made during a write goes as the next one, and only what a commit actually wrote is cleared from the buffer, so nothing typed during a write is lost. A refused write leaves the edit in place with the server's message and a Retry. §12.3's guarantee is now conditional on the checkbox, which is why it is visible in the bar and remembered per tab.
+## ADR-0032 — Text exports guard against spreadsheet formula injection
+Date: 2026-09-07
+
+**Context.** A CSV or tab-separated field that begins with `=`, `+`, `-`, `@`, a tab or a carriage return is evaluated by Excel, Numbers and Google Sheets when the file is opened. A value stored in a database by someone else — `=HYPERLINK(...)`, `=cmd|...` — therefore runs on the machine of whoever opens the export. The exports and the clipboard's CSV and TSV renderings passed such values through untouched.
+
+**Decision.** Those fields get a leading apostrophe, which every spreadsheet reads as "text follows" and hides. The guard is on by default in `ExportOptions.guardFormulas` and `ClipboardFormatter.Options.guardFormulas`, with a switch in the export sheet for someone who needs the bytes exactly as stored. JSON, SQL and Excel exports need no guard: JSON and SQL are not opened by spreadsheets, and the `.xlsx` writer emits inline strings, never formulas.
+
+**Consequences.** Only text-typed values (strings, JSON, arrays, raw server text) are guarded; a numeric, date or boolean column is rendered by Tinker and cannot carry a formula, so `-5` in an integer column stays `-5`. A text value that legitimately starts with `-` or `+` (a Markdown bullet, a phone number written `+62…`) is exported as `'+62…` unless the switch is off.
+
+## ADR-0033 — New connections require TLS; what a session negotiated is shown
+Date: 2026-09-07
+
+**Context.** A security review found that `tls.mode = prefer`, the default for new connections, falls back to plaintext without any sign in the UI, that TLS 1.0/1.1 were accepted, and that mysql-nio proceeds in the clear whenever a server greeting omits the SSL capability — even under `verify-full` — which an on-path attacker can arrange and then read the `caching_sha2_password` exchange.
+
+**Decision.** A connection created in the editor starts with `require`; connections already stored keep whatever they had, since changing them behind the user's back could stop a working connection. Both drivers set `minimumTLSVersion = .tlsv12`. The MySQL driver reads `Ssl_cipher` after the handshake and refuses an unencrypted wire for any mode that requires one. Every connection reports its transport (`pg_stat_ssl`, `Ssl_cipher`/`Ssl_version`) and the status bar shows a closed or open lock with the detail as a tooltip, so a `prefer` connection that ended up in the clear is visible.
+
+**Consequences.** A new connection to a server without TLS fails until the user lowers the mode, which is the point. Tests: `MySQLIntegrationTests.testRequiredTLSIsVerifiedAgainstTheNegotiatedCipher`, `PostgresIntegrationTests.testTransportReportsWhatTheServerSees`.
+
+## ADR-0034 — A pooled connection is reset before it is reused; history and errors are redacted
+Date: 2026-09-07
+
+**Context.** The same review found that a pooled connection carried session state from one tab to the next (`USE`, `SET search_path`, `SET ROLE`, `foreign_key_checks`), so an import with unqualified names could land in the database a closed tab had chosen; that query history stored `CREATE USER … PASSWORD '…'` verbatim in the SQLite store; and that PostgreSQL protocol errors were rendered with `String(reflecting:)`, whose text includes the query and its bound values.
+
+**Decision.** Drivers note statements that change session state and, when the session releases the lease, run `RESET ALL` + `RESET ROLE` (PostgreSQL, re-applying the configured statement timeout) or `USE <database>` plus the session defaults (MySQL). `SQLRedactor` masks the literal after `PASSWORD`, `IDENTIFIED … BY/AS` and `SECRET` before a statement or an error message is written to history, and the store runs with `secure_delete` on. Errors are summarised from their code and server message only.
+
+**Consequences.** A tab that relies on `SET search_path` on its own held connection is unaffected: the reset happens on release, not while the tab holds the lease. Server-side read-only (`default_transaction_read_only`) is applied on lease, after the reset, by the session. Tests: `PostgresIntegrationTests.testSessionStateIsResetAfterASetStatement`, `MySQLIntegrationTests.testSessionStateIsResetAfterASetStatement`, `RedactionTests`.
+
+## ADR-0035 — Dumps and `NO_BACKSLASH_ESCAPES`
+Date: 2026-09-07
+
+**Context.** `SQLLiteral` escapes MySQL string literals the way the server's default `sql_mode` reads them: `'` doubled and `\` doubled. A server or session running with `NO_BACKSLASH_ESCAPES` reads `\\` as two characters, so a dump restored there would corrupt values containing backslashes or NUL bytes. Nothing can break out of a literal either way, since `'` is always doubled.
+
+**Decision.** Dumps state the assumption rather than switch modes: the MySQL dump header carries `-- Literals assume the default sql_mode (backslash escapes); restore with NO_BACKSLASH_ESCAPES off.` A `SET sql_mode` at the top of a dump would silently change the target session's mode for everything that follows, which is worse than a documented assumption.
+
+**Consequences.** Restoring into a `NO_BACKSLASH_ESCAPES` session remains the user's call, and the header tells them. Import through Tinker itself runs on a fresh connection whose mode the reset in ADR-0032 puts back to the server default.

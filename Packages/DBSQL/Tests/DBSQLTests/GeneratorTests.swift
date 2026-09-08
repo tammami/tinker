@@ -425,6 +425,136 @@ final class SQLFormatterTests: XCTestCase {
         XCTAssertEqual(formatted, "SELECT\n  1\nUNION ALL\nSELECT\n  2")
     }
 
+    func testCommentsBetweenAndAfterStatementsAreKept() {
+        XCTAssertEqual(
+            SQLFormatter.format("select 1;\n-- TODO check", dialect: .postgresql),
+            "SELECT\n  1;\n\n-- TODO check")
+        XCTAssertEqual(
+            SQLFormatter.format("-- first\nselect 1;\n/* between */\nselect 2;", dialect: .postgresql),
+            "-- first\nSELECT\n  1;\n\n/* between */\nSELECT\n  2;")
+    }
+
+    func testATerminatorAfterATrailingLineCommentStartsItsOwnLine() {
+        XCTAssertEqual(
+            SQLFormatter.format("select 1 -- c\n; select 2;", dialect: .postgresql),
+            "SELECT\n  1 -- c\n;\n\nSELECT\n  2;")
+    }
+
+    func testALineCommentInsideAListKeepsItsPlaceAndTheIndent() {
+        XCTAssertEqual(
+            SQLFormatter.format("select a, -- c\n b from t", dialect: .postgresql),
+            "SELECT\n  a, -- c\n  b\nFROM\n  t")
+    }
+
+    func testNumbersWithSignedExponentsAndHexStayWhole() {
+        XCTAssertEqual(
+            SQLFormatter.format("select 0x1F from t where x < 1e-5", dialect: .mysql),
+            "SELECT\n  0x1F\nFROM\n  t\nWHERE\n  x < 1e-5")
+    }
+
+    func testStringPrefixesAndVariablesStayTight() {
+        XCTAssertEqual(
+            SQLFormatter.format("select E'a\\nb', X'0A', N'x' from t", dialect: .postgresql),
+            "SELECT\n  E'a\\nb',\n  X'0A',\n  N'x'\nFROM\n  t")
+        XCTAssertEqual(
+            SQLFormatter.format("set @total := 0; select @@session.sql_mode, _utf8mb4'x'", dialect: .mysql),
+            "SET\n  @total := 0;\n\nSELECT\n  @@session.sql_mode,\n  _utf8mb4'x'")
+    }
+
+    func testNameLikeKeywordsKeepTheirCase() {
+        XCTAssertEqual(
+            SQLFormatter.format("select comment, key, t.order from comment t", dialect: .mysql),
+            "SELECT\n  comment,\n  key,\n  t.order\nFROM\n  comment t")
+    }
+
+    func testBetweenInsideASubSelectDoesNotConfuseTheOuterOne() {
+        XCTAssertEqual(
+            SQLFormatter.format(
+                "select * from t where d between (select min(x) from u where p and q) and 5", dialect: .postgresql),
+            """
+            SELECT
+              *
+            FROM
+              t
+            WHERE
+              d BETWEEN (
+                SELECT
+                  min(x)
+                FROM
+                  u
+                WHERE
+                  p
+                  AND q
+              ) AND 5
+            """)
+    }
+
+    func testLockingAndUpsertClauses() {
+        XCTAssertEqual(
+            SQLFormatter.format("select * from t where id = 1 for update", dialect: .postgresql),
+            "SELECT\n  *\nFROM\n  t\nWHERE\n  id = 1\nFOR UPDATE")
+        XCTAssertEqual(
+            SQLFormatter.format(
+                "insert into t (a) values (1) on conflict (a) do update set b = 2", dialect: .postgresql),
+            "INSERT INTO\n  t (a)\nVALUES\n  (1) ON CONFLICT (a) DO UPDATE\nSET\n  b = 2")
+    }
+
+    func testCallsSubscriptsSignsAndMySQLLimit() {
+        XCTAssertEqual(
+            SQLFormatter.format("select left(name, 3), arr[1], -1, a - b from t where x = -1", dialect: .postgresql),
+            "SELECT\n  LEFT(name, 3),\n  arr[1],\n  -1,\n  a - b\nFROM\n  t\nWHERE\n  x = -1")
+        XCTAssertEqual(
+            SQLFormatter.format("select * from t limit 10, 20", dialect: .mysql),
+            "SELECT\n  *\nFROM\n  t\nLIMIT\n  10, 20")
+    }
+
+    /// Every statement in the corpus keeps its tokens, in order, and formats to a fixed point.
+    func testFormattingKeepsEveryTokenAndIsIdempotentOverACorpus() {
+        let corpus: [(String, SQLDialect)] = [
+            ("select a, b from t where a = 1 order by b", .postgresql),
+            (
+                "with x as (select a from t) select a, b from x join u on x.id = u.id where a = 1 and b in (select 1) group by a order by b",
+                .postgresql
+            ),
+            (
+                "select case when a > 1 then 'big' else 'small' end as size, row_number() over (partition by g order by a desc) from t",
+                .postgresql
+            ),
+            (
+                "insert into t (a, b) values (1, 'x'), (2, 'y') on conflict (a) do update set b = excluded.b returning id",
+                .postgresql
+            ),
+            (
+                "create table t (id serial primary key, name text not null default 'x', amount numeric(10,2))",
+                .postgresql
+            ),
+            ("select * from t where a between 1 and 5 and not b in (1, 2) and c is not null", .postgresql),
+            ("select a::text, b->>'k', -1, 1e-5, arr[1] from t where x <> -2", .postgresql),
+            ("select $$dollar 'quoted'$$, E'esc\\n', 'it''s' from t -- tail\n", .postgresql),
+            ("select `weird name`, comment, key from `t` where x like '%a%' limit 10, 20", .mysql),
+            ("set @n := 0; select @@session.sql_mode, X'0A', 0x1F", .mysql),
+            ("update t set a = 1, b = b - 1 where id = 3 /* why */ and d = 'x'", .mysql),
+            ("delete from t where id in (select id from u where flag) -- gone\n; select 1;", .postgresql),
+            (
+                "select count(*) filter (where a > 0), coalesce(b, 0), cast(c as int), left(d, 2) from t for update",
+                .postgresql
+            ),
+            ("select * from t union all select * from u except select * from v", .postgresql),
+            ("select a from t where d between (select min(x) from u where p and q) and 5 or e = 1", .postgresql),
+        ]
+        for (sql, dialect) in corpus {
+            let once = SQLFormatter.format(sql, dialect: dialect)
+            XCTAssertEqual(Self.tokens(sql, dialect), Self.tokens(once, dialect), "tokens changed for: \(sql)")
+            XCTAssertEqual(SQLFormatter.format(once, dialect: dialect), once, "not idempotent for: \(sql)")
+        }
+    }
+
+    private static func tokens(_ sql: String, _ dialect: SQLDialect) -> [String] {
+        SQLTokenizer.tokenize(sql, dialect: dialect)
+            .filter { $0.kind != .whitespace }
+            .map { "\($0.kind):\($0.text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased())" }
+    }
+
     func testFormattingIsIdempotent() {
         let sql =
             "with x as (select a from t) select a, b from x join u on x.id = u.id where a = 1 and b in (select 1) "

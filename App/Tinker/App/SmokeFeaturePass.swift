@@ -321,7 +321,27 @@ extension SmokeTest {
                 !query.isRunning && query.results.first?.statement == "SELECT 1"
             }
             check("a read on production runs without asking", asked == nil)
+            // Explain Analyze runs what it explains, so it asks like the statement would.
+            query.sql = "DELETE FROM smoke_features WHERE id = -1"
+            query.caretOffset = 0
+            asked = nil
+            query.explain(analyze: true)
+            try? await Task.sleep(for: .milliseconds(200))
+            check(
+                "Explain Analyze of a write on production asks for the connection's name",
+                asked?.requiredTypedName == config.name)
+            // With no way to ask, a production write does not run at all.
             query.onConfirmProduction = nil
+            let before = await count()
+            query.sql = "DELETE FROM smoke_features WHERE id = (SELECT min(id) FROM smoke_features)"
+            query.caretOffset = 0
+            query.run(all: true)
+            try? await Task.sleep(for: .milliseconds(300))
+            let after = await count()
+            check(
+                "a production write with no confirmation sheet attached does not run (\(query.statusText))",
+                before == after && !query.isRunning && query.errorBanner != nil)
+            query.errorBanner = nil
             await environment.save(config)
             check("the connection is back off production", !table.isProduction)
 
@@ -575,6 +595,65 @@ extension SmokeTest {
                     insertedFromJSON == 2 && jsonRows.count == 2 && jsonRows[0][0].text == "1.25"
                         && jsonRows[1][0].isNull)
             }
+
+            // MARK: Read-only is enforced by the server, not only by the keyword check
+            let beforeLock = await count()
+            await query.releaseHeldConnection()
+            var locked = config
+            locked.readOnly = true
+            await environment.save(locked)
+            await environment.invalidateSession(for: config.id)
+            if let lockedSession = environment.session(for: config.id) {
+                let refused: Bool
+                do {
+                    let (lease, connection) = try await lockedSession.lease()
+                    defer { Task { await lockedSession.release(lease) } }
+                    // Straight to the driver, past every client-side check.
+                    _ = try await connection.executeCollecting("INSERT INTO smoke_features (name) VALUES ('locked')")
+                    refused = false
+                } catch {
+                    refused = true
+                }
+                let afterLocked = await count()
+                check("the server refuses a write on a read-only connection", refused && afterLocked == beforeLock)
+                // Releasing resets the connection's session state, which clears the guard
+                // on the server; the next lease has to put it back before handing it out.
+                let refusedAgain: Bool
+                do {
+                    let (again, reused) = try await lockedSession.lease()
+                    do {
+                        _ = try await reused.executeCollecting("INSERT INTO smoke_features (name) VALUES ('locked2')")
+                        refusedAgain = false
+                    } catch {
+                        refusedAgain = true
+                    }
+                    await lockedSession.release(again)
+                } catch {
+                    refusedAgain = true
+                }
+                let afterRelease = await count()
+                check(
+                    "a re-leased connection is still read-only on the server",
+                    refusedAgain && afterRelease == beforeLock)
+                await lockedSession.setReadOnlyOverride(true)
+                let unlocked: Bool
+                do {
+                    let (lease, connection) = try await lockedSession.lease()
+                    defer { Task { await lockedSession.release(lease) } }
+                    _ = try await connection.executeCollecting("BEGIN")
+                    _ = try await connection.executeCollecting("INSERT INTO smoke_features (name) VALUES ('unlocked')")
+                    _ = try await connection.executeCollecting("ROLLBACK")
+                    unlocked = true
+                } catch {
+                    unlocked = false
+                }
+                check("unlocking with ⌘⇧L reaches the server too", unlocked)
+                await lockedSession.disconnect()
+            } else {
+                check("a read-only session opens", false)
+            }
+            await environment.save(config)
+            await environment.invalidateSession(for: config.id)
 
             // MARK: Cleanup
             try await sql(

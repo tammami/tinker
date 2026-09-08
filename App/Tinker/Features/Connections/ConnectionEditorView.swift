@@ -333,9 +333,11 @@ public struct ConnectionEditorView: View {
                 ssh.auth = .agent
             }
             if !jumpHost.isEmpty {
+                // The jump host takes the same key as the target: an agent is not available
+                // in this build, so `.agent` here would fail every jump-host connection.
                 ssh.jumpHost = Box(
                     SSHConfig(
-                        host: jumpHost, user: jumpUser.isEmpty ? NSUserName() : jumpUser, auth: .agent
+                        host: jumpHost, user: jumpUser.isEmpty ? NSUserName() : jumpUser, auth: ssh.auth
                     ))
             } else {
                 ssh.jumpHost = nil
@@ -347,32 +349,44 @@ public struct ConnectionEditorView: View {
         return result
     }
 
-    func storeSecrets(for config: ConnectionConfig) async {
-        if !password.isEmpty, let reference = config.passwordRef {
-            try? await environment.secrets.setSecret(password, for: reference)
+    /// Writes the typed secrets into `store`. On Save that is the Keychain, and a field the
+    /// user emptied has its item deleted so the old secret does not linger; Test Connection
+    /// uses an in-memory store instead, so a cancelled sheet leaves nothing behind.
+    func storeSecrets(for config: ConnectionConfig, in store: any SecretStore, deletingCleared: Bool) async {
+        let passwordRef = SecretRef.forConnection(config.id, field: SecretField.password.rawValue)
+        if !password.isEmpty {
+            try? await store.setSecret(password, for: passwordRef)
+        } else if deletingCleared {
+            try? await store.deleteSecret(for: passwordRef)
         }
+        let sshPasswordRef = SecretRef.forConnection(config.id, field: SecretField.sshPassword.rawValue)
         if useSSH, sshAuthKind == .password, !sshPassword.isEmpty {
-            try? await environment.secrets.setSecret(
-                sshPassword,
-                for: SecretRef.forConnection(config.id, field: SecretField.sshPassword.rawValue)
-            )
+            try? await store.setSecret(sshPassword, for: sshPasswordRef)
+        } else if deletingCleared {
+            try? await store.deleteSecret(for: sshPasswordRef)
         }
+        let passphraseRef = SecretRef.forConnection(config.id, field: SecretField.sshPassphrase.rawValue)
         if useSSH, sshAuthKind == .key, !sshPassphrase.isEmpty {
-            try? await environment.secrets.setSecret(
-                sshPassphrase,
-                for: SecretRef.forConnection(config.id, field: SecretField.sshPassphrase.rawValue)
-            )
+            try? await store.setSecret(sshPassphrase, for: passphraseRef)
+        } else if deletingCleared {
+            try? await store.deleteSecret(for: passphraseRef)
         }
     }
 
+    /// A field still being typed in commits its text when it stops being first responder,
+    /// which a click on Save does not do by itself: the value typed last (the database,
+    /// as it happens) would be missing from what is saved. So editing ends first, and the
+    /// config is read on the next turn of the run loop, once the field has written back.
     func save() {
-        if let error = validate() {
-            validationError = error
-            return
-        }
-        let result = buildConfig()
-        Task {
-            await storeSecrets(for: result)
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        Task { @MainActor in
+            await Task.yield()
+            if let error = validate() {
+                validationError = error
+                return
+            }
+            let result = buildConfig()
+            await storeSecrets(for: result, in: environment.secrets, deletingCleared: !isNew)
             onSave(result)
         }
     }
@@ -388,11 +402,13 @@ public struct ConnectionEditorView: View {
         defer { isTesting = false }
 
         let candidate = buildConfig()
-        await storeSecrets(for: candidate)
+        // The typed secrets, in memory only: nothing reaches the Keychain until Save.
+        let scratch = EphemeralSecretStore()
+        await storeSecrets(for: candidate, in: scratch, deletingCleared: false)
         let session = ConnectionSession(
             config: candidate,
             registry: environment.registry,
-            secrets: environment.secrets,
+            secrets: scratch,
             tunnelProvider: environment.tunnelProvider
         )
         let recorder = TestLogRecorder()

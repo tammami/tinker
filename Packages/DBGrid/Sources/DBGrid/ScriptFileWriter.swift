@@ -24,7 +24,7 @@ public final class ScriptFileWriter {
         self.url = url
         self.dialect = dialect
         isCompressed = compress
-        FileManager.default.createFile(atPath: url.path, contents: nil)
+        try FileManager.default.createPrivateFile(at: url)
         handle = try FileHandle(forWritingTo: url)
         if compress { deflater = try GzipDeflater() }
     }

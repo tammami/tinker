@@ -73,7 +73,8 @@ public struct StructureView: View {
         // loaded" forever.
         // Collations are read by the column detail panel when it appears, not here.
         .task(id: controller.table.id) { await controller.load() }
-        .refreshable { await controller.load(force: true) }
+        // A refresh reads the server again but never throws away what the user has typed.
+        .refreshable { await controller.load(force: true, keepingEdits: true) }
         .sheet(isPresented: isPreviewPresented) {
             DDLPreviewView(
                 statements: controller.pendingStatements,
@@ -350,7 +351,12 @@ struct ColumnsPane: View {
                     value: spec.length,
                     enabled: choice?.takesLength ?? true,
                     label: "\(column.name) length"
-                ) { spec, value in spec.length = value }
+                ) { spec, value in
+                    // The scale lives in the type text beside the precision; clearing the
+                    // precision alone would lose it, so an empty length waits for a number.
+                    guard value != nil || spec.decimals == nil else { return }
+                    spec.length = value
+                }
             }
             Cell(width: widths[4]) {
                 numberField(
@@ -413,12 +419,18 @@ struct ColumnsPane: View {
                 get: { known ? base : spec.base },
                 set: { newBase in
                     updateType(index) { spec in
+                        guard spec.base.lowercased() != newBase.lowercased() else { return }
                         spec.base = newBase
                         let choice = ColumnTypeCatalog.choice(named: newBase, dialect: controller.dialect)
                         if let choice {
                             if !choice.takesLength { spec.length = nil }
                             if !choice.takesDecimals { spec.decimals = nil }
                         }
+                        // A modifier belongs to the type it was read with: `unsigned` means
+                        // nothing on a varchar, `without time zone` nothing on text. The
+                        // new type starts with its own first choice, or none.
+                        spec.suffix = choice?.suffixes.first ?? ""
+                        spec.array = ""
                         if !spec.isEnumeration { spec.values = [] }
                     }
                 }
@@ -547,6 +559,23 @@ struct ColumnDetailPanel: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                }
+            }
+
+            if let choice = ColumnTypeCatalog.choice(named: spec.base, dialect: dialect), !choice.suffixes.isEmpty {
+                // `unsigned` on MySQL numbers, the time zone on PostgreSQL times: the words
+                // the type takes after its length, offered rather than typed.
+                FieldRow(label: "Modifier") {
+                    BarPopUp(
+                        items: choice.suffixes.map { BarPopUp.Item(id: $0, title: $0.isEmpty ? "none" : $0) },
+                        selection: Binding(
+                            get: { spec.suffix.lowercased() },
+                            set: { value in updateType { $0.suffix = value } }
+                        )
+                    )
+                    .frame(maxWidth: .infinity)
+                    .disabled(!isEditing)
+                    .accessibilityLabel("type modifier")
                 }
             }
 

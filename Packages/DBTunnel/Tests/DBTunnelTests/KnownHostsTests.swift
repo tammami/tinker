@@ -48,11 +48,27 @@ final class KnownHostsTests: XCTestCase {
         XCTAssertEqual(KnownHostsFile(path: path).entries().count, 1)
     }
 
-    func testHandlesMarkersAndMultipleHostsPerLine() throws {
+    func testHandlesMultipleHostsPerLine() throws {
         let (line, key) = try makeKeyLine(host: "a.example,b.example")
         let file = KnownHostsFile(path: path)
-        try ("@cert-authority " + line).write(toFile: path, atomically: true, encoding: .utf8)
+        try line.write(toFile: path, atomically: true, encoding: .utf8)
         XCTAssertEqual(file.keys(forHost: "b.example", port: 22), [key])
+    }
+
+    /// A certificate authority signs host certificates; it is not itself a host key, so
+    /// it must never be offered as one. A revoked key must never be trusted, and must be
+    /// reported as revoked so the server presenting it is refused.
+    func testMarkersAreHonoured() throws {
+        let (authority, _) = try makeKeyLine(host: "db.example")
+        let (revokedLine, revokedKey) = try makeKeyLine(host: "db.example")
+        let (trustedLine, trustedKey) = try makeKeyLine(host: "db.example")
+        let contents = "@cert-authority \(authority)\n@revoked \(revokedLine)\n\(trustedLine)\n"
+        try contents.write(toFile: path, atomically: true, encoding: .utf8)
+        let file = KnownHostsFile(path: path)
+        XCTAssertEqual(file.entries().count, 3)
+        XCTAssertEqual(file.keys(forHost: "db.example", port: 22), [trustedKey])
+        XCTAssertEqual(file.revokedKeys(forHost: "db.example", port: 22), [revokedKey])
+        XCTAssertTrue(file.knows(host: "db.example", port: 22))
     }
 
     func testNonDefaultPortsUseTheBracketForm() throws {

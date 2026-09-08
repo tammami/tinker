@@ -90,6 +90,8 @@ public struct ExportView: View {
                             Toggle("Include header row", isOn: $options.includeHeader)
                             TextField("NULL as", text: $options.nullText, prompt: Text("empty"))
                             Toggle("UTF-8 byte-order mark (for Excel)", isOn: $options.writeByteOrderMark)
+                            Toggle("Keep spreadsheets from running cells as formulas", isOn: $options.guardFormulas)
+                                .help("A value starting with =, +, - or @ gets a leading apostrophe")
                         case .xlsx:
                             Toggle("Include header row", isOn: $options.includeHeader)
                             Text(

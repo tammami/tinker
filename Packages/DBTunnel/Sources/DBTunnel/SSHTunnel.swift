@@ -169,6 +169,7 @@ public struct SSHTunnelProvider: TunnelProvider {
     /// and is only reachable from an explicit checkbox with a warning.
     static func hostKeyValidator(for config: SSHConfig) throws -> SSHHostKeyValidator {
         let file = KnownHostsFile()
+        let revoked = Set(file.revokedKeys(forHost: config.host, port: config.port))
         switch config.knownHostsPolicy {
         case .ignore:
             return .acceptAnything()
@@ -181,18 +182,29 @@ public struct SSHTunnelProvider: TunnelProvider {
                         + "Connect once with ssh, or set the host-key policy to accept new hosts."
                 )
             }
-            return .trustedKeys(Set(keys))
+            return .custom(RevocationAwareHostKeyValidator(trusted: Set(keys), revoked: revoked, recordingTo: nil))
         case .acceptNew:
             let keys = file.keys(forHost: config.host, port: config.port)
-            if !keys.isEmpty { return .trustedKeys(Set(keys)) }
-            return .custom(RecordingHostKeyValidator(file: file, host: config.host, port: config.port))
+            if !keys.isEmpty {
+                return .custom(RevocationAwareHostKeyValidator(trusted: Set(keys), revoked: revoked, recordingTo: nil))
+            }
+            return .custom(
+                RevocationAwareHostKeyValidator(
+                    trusted: [], revoked: revoked,
+                    recordingTo: RecordingHostKeyValidator(file: file, host: config.host, port: config.port)))
         }
     }
 
     static func mapError(_ error: any Error, config: SSHConfig, stage: TunnelStage) -> DBError {
         if let dbError = error as? DBError { return dbError }
         let text = String(reflecting: error)
-        if error is InvalidHostKey {
+        if error is RevokedHostKey || text.contains("RevokedHostKey") {
+            return .tunnelFailed(
+                stage: .ssh,
+                underlying: "The host key of \(config.host) is marked @revoked in \(KnownHostsFile.defaultPath)"
+            )
+        }
+        if error is InvalidHostKey || error is UntrustedHostKey {
             return .tunnelFailed(
                 stage: .ssh,
                 underlying: "The host key of \(config.host) does not match \(KnownHostsFile.defaultPath)"
@@ -207,6 +219,43 @@ public struct SSHTunnelProvider: TunnelProvider {
         return .tunnelFailed(stage: stage, underlying: text)
     }
 }
+
+/// Refuses a key `known_hosts` marks `@revoked`, whatever the policy; otherwise accepts a
+/// trusted key, or — with a recorder — a first sighting, as `accept-new` does.
+final class RevocationAwareHostKeyValidator: NIOSSHClientServerAuthenticationDelegate, @unchecked Sendable {
+    private let trusted: Set<NIOSSHPublicKey>
+    private let revoked: Set<NIOSSHPublicKey>
+    private let recorder: RecordingHostKeyValidator?
+
+    init(trusted: Set<NIOSSHPublicKey>, revoked: Set<NIOSSHPublicKey>, recordingTo recorder: RecordingHostKeyValidator?)
+    {
+        self.trusted = trusted
+        self.revoked = revoked
+        self.recorder = recorder
+    }
+
+    func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
+        if revoked.contains(hostKey) {
+            validationCompletePromise.fail(RevokedHostKey())
+            return
+        }
+        if trusted.contains(hostKey) {
+            validationCompletePromise.succeed(())
+            return
+        }
+        if let recorder {
+            recorder.validateHostKey(hostKey: hostKey, validationCompletePromise: validationCompletePromise)
+            return
+        }
+        validationCompletePromise.fail(UntrustedHostKey())
+    }
+}
+
+/// The server presented a key `known_hosts` marks `@revoked`.
+struct RevokedHostKey: Error {}
+
+/// The server presented a key that is neither trusted nor, under this policy, recordable.
+struct UntrustedHostKey: Error {}
 
 /// Accepts a host key that has never been seen and writes it to `known_hosts`,
 /// which is what OpenSSH's `StrictHostKeyChecking accept-new` does.

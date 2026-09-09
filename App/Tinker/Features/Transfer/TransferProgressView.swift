@@ -37,6 +37,20 @@ struct TransferProgressView: View {
             if !controller.failures.isEmpty {
                 failureList
             }
+            if !controller.notes.isEmpty {
+                notesList
+            }
+        }
+    }
+
+    /// What a cross-engine transfer could not carry, named so nothing is assumed to have crossed.
+    private var notesList: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+            Label("Left behind on the way across engines", systemImage: Icon.warning)
+                .font(.caption.weight(.semibold)).foregroundStyle(.orange)
+            ForEach(Array(controller.notes.enumerated()), id: \.offset) { _, note in
+                Text(note).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            }
         }
     }
 

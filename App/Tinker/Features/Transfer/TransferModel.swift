@@ -130,6 +130,8 @@ public final class TransferController {
     public private(set) var failures: [ScriptExecutionFailure] = []
     /// What was done, once finished, in one sentence.
     public private(set) var summary: String?
+    /// What a cross-engine transfer left behind, one line each; empty on the same engine.
+    public private(set) var notes: [String] = []
     /// Why it stopped, verbatim from the server or the file system.
     public private(set) var errorText: String?
     /// The file a dump wrote, for Reveal in Finder.
@@ -158,6 +160,7 @@ public final class TransferController {
         fraction = nil
         failures = []
         summary = nil
+        notes = []
         errorText = nil
         writtenURL = nil
         syncReports = []
@@ -166,6 +169,11 @@ public final class TransferController {
 
     /// The session for a schema on a connection: the connection's own, or one on the
     /// schema's database when that is another PostgreSQL database.
+    /// The engine a stored connection speaks, or nil for a connection that is gone.
+    private func dialect(of connectionID: UUID) -> SQLDialect? {
+        environment.connections.first { $0.id == connectionID }?.dialect
+    }
+
     private func session(_ connectionID: UUID, database: String?) throws -> ConnectionSession {
         guard let session = environment.session(for: connectionID, database: database) else {
             throw DBError.notConnected
@@ -316,7 +324,10 @@ public final class TransferController {
         options: DumpOptions
     ) {
         begin()
-        let dialect = request.source.dialect
+        let sourceDialect = request.source.dialect
+        // The target's own engine: a paste may cross engines, and everything written on
+        // the target is written in its terms.
+        let dialect = self.dialect(of: request.targetConnectionID) ?? sourceDialect
         task = Task { [weak self] in
             guard let self else { return }
             do {
@@ -360,12 +371,14 @@ public final class TransferController {
                     ? (try? await source.introspector.routines(in: request.source.schema)) ?? [] : []
                 let selection = DumpSelection(schema: request.source.schema, tables: tables, routines: routines)
                 let outcome = try await TransferRunner.run(
-                    selection, from: source, to: destination, dialect: dialect, options: options, renaming: renaming
+                    selection, from: source, to: destination, dialect: sourceDialect, targetDialect: dialect,
+                    options: options, renaming: renaming
                 ) { progress in
                     Task { @MainActor [weak self] in self?.show(progress) }
                 }
                 failures = outcome.execution.failures
                 summary = Self.summary(of: outcome.execution, prefix: "Pasted")
+                notes = outcome.dump.notes
                 fraction = 1
                 phase = outcome.execution.failures.isEmpty ? .finished : .failed
             } catch let error as ScriptExecutionError {
@@ -434,11 +447,12 @@ public final class TransferController {
         pairs: [(source: TableRef, target: TableRef)],
         sourceConnectionID: UUID,
         targetConnectionID: UUID,
-        dialect: SQLDialect,
         options: DataSyncOptions,
         apply: Bool
     ) {
         begin()
+        let sourceDialect = dialect(of: sourceConnectionID) ?? .postgresql
+        let dialect = self.dialect(of: targetConnectionID) ?? sourceDialect
         task = Task { [weak self] in
             guard let self else { return }
             do {
@@ -460,7 +474,7 @@ public final class TransferController {
                         if apply { await targetSession.invalidateIntrospection() }
                     }
                 }
-                let synchronizer = DataSynchronizer(dialect: dialect, options: options)
+                let synchronizer = DataSynchronizer(dialect: dialect, sourceDialect: sourceDialect, options: options)
                 let reports = try await synchronizer.run(
                     pairs, source: source, target: target, writer: writerLease?.1
                 ) { progress in
@@ -505,9 +519,11 @@ public final class TransferController {
 
     public func compareStructure(
         sourceSchema: SchemaRef, sourceConnectionID: UUID, targetSchema: SchemaRef, targetConnectionID: UUID,
-        dialect: SQLDialect, tables: Set<String>?
+        tables: Set<String>?
     ) {
         begin()
+        let sourceDialect = dialect(of: sourceConnectionID) ?? .postgresql
+        let dialect = self.dialect(of: targetConnectionID) ?? sourceDialect
         task = Task { [weak self] in
             guard let self else { return }
             do {
@@ -524,7 +540,7 @@ public final class TransferController {
                         await targetSession.release(targetLease)
                     }
                 }
-                let result = try await SchemaSynchronizer(dialect: dialect).compare(
+                let result = try await SchemaSynchronizer(dialect: dialect, sourceDialect: sourceDialect).compare(
                     sourceSchema: sourceSchema, targetSchema: targetSchema, tables: tables,
                     source: source.introspector, target: target.introspector
                 ) { table in
@@ -551,9 +567,9 @@ public final class TransferController {
     }
 
     /// Runs generated DDL on the target, one statement at a time, stopping at the first refusal.
-    public func runStatements(_ statements: [GeneratedDDL], connectionID: UUID, database: String?, dialect: SQLDialect)
-    {
+    public func runStatements(_ statements: [GeneratedDDL], connectionID: UUID, database: String?) {
         begin()
+        let dialect = self.dialect(of: connectionID) ?? .postgresql
         task = Task { [weak self] in
             guard let self else { return }
             do {

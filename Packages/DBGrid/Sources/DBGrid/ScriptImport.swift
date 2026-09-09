@@ -120,23 +120,25 @@ public struct TransferOutcome: Sendable, Hashable {
 /// Copies objects from one connection straight into another — Navicat's copy and
 /// paste — by piping the dumper into the executor with nothing on disk in between.
 ///
-/// The two connections may be on different servers; they only have to speak the same
-/// dialect. Rows go through the bounded channel a batch at a time, so a table of any
-/// size crosses with the memory of one batch.
+/// The two connections may be on different servers and speak different dialects: the
+/// dumper reads in the source's and writes in the target's (`SchemaTranslator` carries the
+/// structure across). Rows go through the bounded channel a batch at a time, so a table of
+/// any size crosses with the memory of one batch.
 public enum TransferRunner {
     public static func run(
         _ selection: DumpSelection,
         from source: any SQLConnection,
         to target: any SQLConnection,
         dialect: SQLDialect,
+        targetDialect: SQLDialect? = nil,
         options: DumpOptions,
         renaming: DumpRenaming,
         execution: ScriptExecutionOptions = ScriptExecutionOptions(),
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> TransferOutcome {
         let channel = ScriptChannel()
-        let dumper = DatabaseDumper(dialect: dialect, options: options, renaming: renaming)
-        let executor = ScriptExecutor(dialect: dialect, options: execution)
+        let dumper = DatabaseDumper(dialect: dialect, targetDialect: targetDialect, options: options, renaming: renaming)
+        let executor = ScriptExecutor(dialect: targetDialect ?? dialect, options: execution)
         let shared = TransferState()
 
         return try await withThrowingTaskGroup(of: Either.self) { group in

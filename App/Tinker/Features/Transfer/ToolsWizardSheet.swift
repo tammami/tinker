@@ -224,20 +224,24 @@ struct ToolsWizardSheet: View {
         _source = State(
             initialValue: EndpointModel(environment: environment, connectionID: firstConnection, schema: request.schema)
         )
+        // The other endpoint starts on the nearest connection of the same engine, but any
+        // connection can be chosen: the tools translate between engines.
         let dialect = environment.connections.first { $0.id == firstConnection }?.dialect
         let other =
-            environment.connections.first { $0.id != firstConnection && $0.dialect == dialect }?.id ?? firstConnection
+            environment.connections.first { $0.id != firstConnection && $0.dialect == dialect }?.id
+            ?? environment.connections.first { $0.id != firstConnection }?.id ?? firstConnection
         _target = State(initialValue: EndpointModel(environment: environment, connectionID: other, schema: nil))
         _controller = State(initialValue: TransferController(environment: environment))
     }
 
     private var kind: ToolKind { request.kind }
     private var dialect: SQLDialect { source.dialect }
+    /// The engine everything on the target is written for.
+    private var targetDialect: SQLDialect { targetIsFile ? source.dialect : target.dialect }
+    private var isCrossEngine: Bool { !targetIsFile && source.dialect != target.dialect }
 
-    /// Connections of the source's kind only; the tools never cross engines.
-    private var candidateConnections: [ConnectionConfig] {
-        environment.connections.filter { $0.dialect == dialect }
-    }
+    /// Every stored connection: the tools carry structure and rows between engines.
+    private var candidateConnections: [ConnectionConfig] { environment.connections }
 
     private var baseTables: [TableInfo] { source.tables.filter { $0.kind.isEditable } }
     private var views: [TableInfo] { source.tables.filter { !$0.kind.isEditable } }
@@ -396,7 +400,14 @@ struct ToolsWizardSheet: View {
                 FieldRow(label: "Connection", labelWidth: 84) {
                     Picker("", selection: $model.connectionID) {
                         Text("Choose…").tag(UUID?.none)
-                        ForEach(candidateConnections) { config in Text(config.name).tag(UUID?.some(config.id)) }
+                        ForEach(candidateConnections) { config in
+                            Label {
+                                Text(config.name)
+                            } icon: {
+                                EngineMark(dialect: config.dialect, size: 14)
+                            }
+                            .tag(UUID?.some(config.id))
+                        }
                     }
                     .labelsHidden()
                     .onChange(of: model.connectionID) { _, _ in Task { await model.loadConnection() } }
@@ -547,11 +558,18 @@ struct ToolsWizardSheet: View {
             .frame(maxWidth: 320)
             Toggle("DROP … IF EXISTS before each object", isOn: $dropFirst)
             Text(
-                dialect == .postgresql
+                targetDialect == .postgresql
                     ? "Rows travel as COPY blocks; on the same server a table of any size crosses with the memory of one batch."
                     : "Rows travel as INSERT batches with foreign key checks off while loading."
             )
             .font(.caption).foregroundStyle(.secondary)
+            if isCrossEngine {
+                Label(
+                    "\(source.dialect.displayName) → \(target.dialect.displayName): tables are rebuilt in \(target.dialect.displayName)'s types with their keys and indexes. Views, routines, triggers and check constraints are written in \(source.dialect.displayName)'s SQL and stay behind; the result lists them.",
+                    systemImage: Icon.warning
+                )
+                .font(.caption).foregroundStyle(.orange)
+            }
         case .dataSync:
             Toggle("Insert rows the target lacks", isOn: $syncOptions.insert)
             Toggle("Update rows that differ", isOn: $syncOptions.update)
@@ -813,8 +831,7 @@ struct ToolsWizardSheet: View {
                 Button {
                     let statements = result.statements(
                         includingDestructive: includeDestructive, droppingExtraTables: dropExtraTables)
-                    controller.runStatements(
-                        statements, connectionID: targetID, database: target.database, dialect: dialect)
+                    controller.runStatements(statements, connectionID: targetID, database: target.database)
                 } label: {
                     Label("Run on Target", systemImage: Icon.run)
                 }
@@ -858,7 +875,7 @@ struct ToolsWizardSheet: View {
         guard let sourceID = source.connectionID, let sourceRef = source.schemaRef, let config = source.config else {
             return
         }
-        var options = DumpOptions.preferred(for: dialect)
+        var options = DumpOptions.preferred(for: targetDialect)
         options.content = content
         options.includeDrop = dropFirst
         options.includeViews = allViews || !selectedViews.isEmpty
@@ -892,7 +909,7 @@ struct ToolsWizardSheet: View {
         else { return }
         let pairs = chosenTables.map { (source: $0.ref, target: TableRef(schema: targetRef, name: $0.name)) }
         controller.synchronizeData(
-            pairs: pairs, sourceConnectionID: sourceID, targetConnectionID: targetID, dialect: dialect,
+            pairs: pairs, sourceConnectionID: sourceID, targetConnectionID: targetID,
             options: syncOptions, apply: apply)
     }
 
@@ -903,6 +920,6 @@ struct ToolsWizardSheet: View {
         controller.compareStructure(
             sourceSchema: sourceRef, sourceConnectionID: sourceID, targetSchema: targetRef,
             targetConnectionID: targetID,
-            dialect: dialect, tables: allTables ? nil : selectedTables)
+            tables: allTables ? nil : selectedTables)
     }
 }

@@ -45,15 +45,15 @@ struct PasteSheet: View {
         _tableName = State(initialValue: request.source.tables?.count == 1 ? request.source.tables?[0].name ?? "" : "")
     }
 
-    private var dialect: SQLDialect { request.source.dialect }
+    /// The target's engine: the paste is written in its terms, whatever the source speaks.
+    private var dialect: SQLDialect { targetConfig?.dialect ?? request.source.dialect }
     /// True when the database is the schema — MySQL and SQLite — so there is no schema row to pick.
     private var isFlat: Bool { !dialect.hasSchemaLayer }
     private var isSingleTable: Bool { request.source.tables?.count == 1 }
+    private var isCrossEngine: Bool { dialect != request.source.dialect }
 
-    /// Connections of the same kind: pasting a PostgreSQL table into MySQL makes no sense.
-    private var candidateConnections: [ConnectionConfig] {
-        environment.connections.filter { $0.dialect == dialect }
-    }
+    /// Every stored connection: a paste may cross engines.
+    private var candidateConnections: [ConnectionConfig] { environment.connections }
 
     private var targetConfig: ConnectionConfig? { environment.connections.first { $0.id == targetConnectionID } }
 
@@ -112,9 +112,23 @@ struct PasteSheet: View {
                 Form {
                     Section("Where") {
                         Picker("Connection", selection: $targetConnectionID) {
-                            ForEach(candidateConnections) { config in Text(config.name).tag(config.id) }
+                            ForEach(candidateConnections) { config in
+                                Label {
+                                    Text(config.name)
+                                } icon: {
+                                    EngineMark(dialect: config.dialect, size: 14)
+                                }
+                                .tag(config.id)
+                            }
                         }
                         .onChange(of: targetConnectionID) { _, _ in Task { await loadTargets() } }
+                        if isCrossEngine {
+                            Label(
+                                "\(request.source.dialect.displayName) → \(dialect.displayName): tables are rebuilt in \(dialect.displayName)'s types with keys and indexes; views, triggers and check constraints stay behind.",
+                                systemImage: Icon.warning
+                            )
+                            .font(.caption).foregroundStyle(.orange)
+                        }
                         databaseRow
                         if !isFlat { schemaRow }
                         if isSingleTable {

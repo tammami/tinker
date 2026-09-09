@@ -91,11 +91,17 @@ public struct SchemaSyncResult: Sendable, Hashable {
 /// that would make the second match the first — Navicat's structure synchronisation.
 ///
 /// Views, routines and triggers are not compared: the data transfer carries those whole.
+/// Across engines the source's definitions are first carried into the target's terms by
+/// `SchemaTranslator`, so a MySQL `int` compares equal to a PostgreSQL `integer`.
 public struct SchemaSynchronizer: Sendable {
+    /// The target's dialect: what the statements are written in.
     public let dialect: SQLDialect
+    /// The source's dialect; the same as `dialect` unless the comparison crosses engines.
+    public let sourceDialect: SQLDialect
 
-    public init(dialect: SQLDialect) {
+    public init(dialect: SQLDialect, sourceDialect: SQLDialect? = nil) {
         self.dialect = dialect
+        self.sourceDialect = sourceDialect ?? dialect
     }
 
     /// - Parameter tables: source table names to compare, or nil for all of them.
@@ -117,9 +123,13 @@ public struct SchemaSynchronizer: Sendable {
         for info in sourceTables {
             try Task.checkCancellation()
             progress(info.name)
-            let definition = try await TableDefinitionLoader.load(info, introspector: source)
+            let loaded = try await TableDefinitionLoader.load(info, introspector: source)
+            let crossing = sourceDialect != dialect
+            var definition = SchemaTranslator.translate(loaded, from: sourceDialect, to: dialect, into: targetSchema).definition
+            if crossing { definition = SchemaTranslator.comparable(definition) }
             if let match = targetByName[info.name] {
-                let targetDefinition = try await TableDefinitionLoader.load(match, introspector: target)
+                var targetDefinition = try await TableDefinitionLoader.load(match, introspector: target)
+                if crossing { targetDefinition = SchemaTranslator.comparable(targetDefinition) }
                 let compared = sync.compare(source: definition, target: targetDefinition)
                 result.items.append(
                     SchemaSyncItem(

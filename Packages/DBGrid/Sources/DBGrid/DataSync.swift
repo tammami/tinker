@@ -79,13 +79,18 @@ public struct DataSyncProgress: Sendable, Hashable {
 /// the target's rows are still being read on the second — in batched transactions, and
 /// every `UPDATE` and `DELETE` is by key and checked to have touched exactly what it meant.
 public struct DataSynchronizer: Sendable {
+    /// The target's dialect: what the changes are written in.
     public let dialect: SQLDialect
+    /// The source's dialect, for reading its rows; the same as `dialect` unless the
+    /// synchronisation crosses engines.
+    public let sourceDialect: SQLDialect
     public let options: DataSyncOptions
 
     private static let progressInterval: Duration = .milliseconds(250)
 
-    public init(dialect: SQLDialect, options: DataSyncOptions = DataSyncOptions()) {
+    public init(dialect: SQLDialect, sourceDialect: SQLDialect? = nil, options: DataSyncOptions = DataSyncOptions()) {
         self.dialect = dialect
+        self.sourceDialect = sourceDialect ?? dialect
         self.options = options
     }
 
@@ -161,15 +166,19 @@ public struct DataSynchronizer: Sendable {
         let keyIndexes = key.compactMap { name in shared.firstIndex { $0.name == name } }
         let valueIndexes = shared.indices.filter { !keyIndexes.contains($0) }
         let columnList = shared.map { Identifier.quote($0.name, dialect: dialect) }.joined(separator: ", ")
-        let order = key.map { name -> String in
-            let column = shared.first { $0.name == name }
-            return Self.binaryOrder(
-                Identifier.quote(name, dialect: dialect), isText: column?.kind == .string, dialect: dialect)
-        }.joined(separator: ", ")
+        func keyOrder(_ side: SQLDialect) -> String {
+            key.map { name -> String in
+                let column = shared.first { $0.name == name }
+                return Self.binaryOrder(
+                    Identifier.quote(name, dialect: side), isText: column?.kind == .string, dialect: side)
+            }.joined(separator: ", ")
+        }
+        let order = keyOrder(dialect)
+        let sourceColumnList = shared.map { Identifier.quote($0.name, dialect: sourceDialect) }.joined(separator: ", ")
 
         var sourceRows = RowCursor(
             source.execute(
-                "SELECT \(columnList) FROM \(Identifier.qualified(report.source, dialect: dialect)) ORDER BY \(order)",
+                "SELECT \(sourceColumnList) FROM \(Identifier.qualified(report.source, dialect: sourceDialect)) ORDER BY \(keyOrder(sourceDialect))",
                 parameters: []))
         var targetRows = RowCursor(
             target.execute(
@@ -227,7 +236,9 @@ public struct DataSynchronizer: Sendable {
                 try checkOrder(rightKey, previous: &lastRightKey, side: "target")
                 switch Self.compare(leftKey, rightKey) {
                 case .orderedSame:
-                    let changed = valueIndexes.filter { leftRow[$0] != rightRow[$0] }
+                    // Compared by value rather than by case: across engines the same number
+                    // arrives as `.decimal("1.50")` on one side and `.double(1.5)` on the other.
+                    let changed = valueIndexes.filter { Self.compareValue(leftRow[$0], rightRow[$0]) != .orderedSame }
                     if !changed.isEmpty {
                         report.updates += 1
                         note(
@@ -313,6 +324,8 @@ public struct DataSynchronizer: Sendable {
         case let (.string(x), .string(y)): return order(Array(x.utf8), Array(y.utf8))
         case let (.bytes(x), .bytes(y)): return order(Array(x), Array(y))
         case let (.bool(x), .bool(y)): return order(x ? 1 : 0, y ? 1 : 0)
+        case let (.bool(x), .int(y)): return order(x ? 1 : 0, y)
+        case let (.int(x), .bool(y)): return order(x, y ? 1 : 0)
         case let (.uuid(x), .uuid(y)): return order(x.uuidString, y.uuidString)
         default:
             if let x = Decimal(string: a.text ?? ""), let y = Decimal(string: b.text ?? ""),

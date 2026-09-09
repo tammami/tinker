@@ -54,7 +54,18 @@ extension DBValue {
             let text = SQLLiteral.quoteString(value.serverText, dialect: dialect)
             switch dialect {
             case .postgresql: return value.hasTimeZone ? "\(text)::timestamptz" : "\(text)::timestamp"
-            case .mysql: return "TIMESTAMP \(text)"
+            case .mysql:
+                // MySQL reads a zone offset only as `±HH:MM`; PostgreSQL writes `+07`.
+                guard let offset = value.time.tzOffsetSeconds else { return "TIMESTAMP \(text)" }
+                let sign = offset < 0 ? "-" : "+"
+                let hours = abs(offset) / 3_600
+                let minutes = (abs(offset) % 3_600) / 60
+                var time = DBTime(
+                    hour: value.time.hour, minute: value.time.minute, second: value.time.second,
+                    microsecond: value.time.microsecond
+                ).description
+                time += String(format: "%@%02d:%02d", sign, hours, minutes)
+                return "TIMESTAMP \(SQLLiteral.quoteString("\(value.date) \(time)", dialect: dialect))"
             case .sqlite: return text
             }
         case let .uuid(value):
@@ -69,10 +80,9 @@ extension DBValue {
             case .sqlite: return text
             }
         case let .array(items):
-            // Arrays are PostgreSQL-only; in MySQL the closest honest rendering is JSON text.
+            // Arrays are PostgreSQL-only; elsewhere the closest honest rendering is a JSON array.
             guard dialect == .postgresql else {
-                return SQLLiteral.quoteString(
-                    "[\(items.map { $0.text ?? "null" }.joined(separator: ","))]", dialect: dialect)
+                return SQLLiteral.quoteString(SQLLiteral.jsonArray(items), dialect: dialect)
             }
             return "ARRAY[\(items.map { $0.sqlLiteral(dialect: dialect) }.joined(separator: ", "))]"
         case let .raw(typeName, text, bytes):
@@ -126,6 +136,39 @@ public enum SQLLiteral {
         case .postgresql: return "'\\x\(hex)'::bytea"
         case .mysql, .sqlite: return hex.isEmpty ? "X''" : "X'\(hex)'"
         }
+    }
+
+    /// The values as a JSON array: numbers and booleans bare, everything else a JSON
+    /// string, NULL as `null`. What a PostgreSQL array becomes on an engine without arrays.
+    public static func jsonArray(_ items: [DBValue]) -> String {
+        let rendered = items.map { item -> String in
+            switch item {
+            case .null: return "null"
+            case let .bool(flag): return flag ? "true" : "false"
+            case .int, .uint, .double: return item.text ?? "null"
+            case let .array(nested): return jsonArray(nested)
+            case let .json(text): return text
+            default:
+                var escaped = "\""
+                for scalar in (item.text ?? "").unicodeScalars {
+                    switch scalar {
+                    case "\"": escaped += "\\\""
+                    case "\\": escaped += "\\\\"
+                    case "\n": escaped += "\\n"
+                    case "\r": escaped += "\\r"
+                    case "\t": escaped += "\\t"
+                    default:
+                        if scalar.value < 0x20 {
+                            escaped += String(format: "\\u%04x", scalar.value)
+                        } else {
+                            escaped.unicodeScalars.append(scalar)
+                        }
+                    }
+                }
+                return escaped + "\""
+            }
+        }
+        return "[" + rendered.joined(separator: ",") + "]"
     }
 
     /// `expression` cast to text, in the engine's own spelling. `CHAR` is not a SQLite

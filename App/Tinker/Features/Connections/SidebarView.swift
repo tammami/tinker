@@ -570,11 +570,11 @@ struct SidebarRow: View {
         pasteItem(connectionID: id, schema: ref)
     }
 
-    /// Paste what the clipboard holds into this schema; only offered for the same kind of server.
+    /// Paste what the clipboard holds into this schema, on any kind of server: the paste
+    /// carries the structure into the target's terms.
     @ViewBuilder
     func pasteItem(connectionID id: UUID, schema ref: SchemaRef) -> some View {
-        let dialect = workspace.environment.connections.first { $0.id == id }?.dialect ?? .postgresql
-        if let copied = workspace.objectClipboard, copied.dialect == dialect {
+        if let copied = workspace.objectClipboard {
             Button {
                 workspace.pendingPaste = PasteRequest(source: copied, targetConnectionID: id, targetSchema: ref)
             } label: {

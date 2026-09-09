@@ -112,6 +112,9 @@ public struct DumpOutcome: Sendable, Hashable {
     public var rows: Int64 = 0
     public var statements = 0
     public var duration: Duration = .zero
+    /// What a cross-engine dump left behind, one line each: a view whose SQL is the
+    /// source's, a check constraint, a default the target cannot read.
+    public var notes: [String] = []
 
     public init() {}
 }
@@ -123,7 +126,13 @@ public struct DumpOutcome: Sendable, Hashable {
 /// any size costs one batch of rows. The same chunks go to a file or straight to
 /// another connection, which is how copy and paste between servers works.
 public struct DatabaseDumper: Sendable {
+    /// The engine the objects are read from.
     public let dialect: SQLDialect
+    /// The engine the script is written for. When it differs from `dialect` the structure
+    /// is rebuilt in the target's terms through `SchemaTranslator`, the rows are spelled in
+    /// the target's literals, and views, routines and triggers — which are the source's own
+    /// SQL — are left out and named in the outcome's notes.
+    public let targetDialect: SQLDialect
     public let options: DumpOptions
     public let renaming: DumpRenaming
 
@@ -131,11 +140,17 @@ public struct DatabaseDumper: Sendable {
     /// An `INSERT` or a COPY batch is flushed at this many bytes whatever the row count.
     private static let batchBytes = 512 * 1_024
 
-    public init(dialect: SQLDialect, options: DumpOptions, renaming: DumpRenaming = .none) {
+    public init(
+        dialect: SQLDialect, targetDialect: SQLDialect? = nil, options: DumpOptions, renaming: DumpRenaming = .none
+    ) {
         self.dialect = dialect
+        self.targetDialect = targetDialect ?? dialect
         self.options = options
         self.renaming = renaming
     }
+
+    /// True when the dump crosses engines.
+    public var isCrossEngine: Bool { dialect != targetDialect }
 
     /// The comment lines at the top of a dump file.
     public static func header(server: String, database: String, dialect: SQLDialect, options: DumpOptions) -> [String] {
@@ -209,7 +224,7 @@ public struct DatabaseDumper: Sendable {
         state.tableCount = baseTables.count
 
         // MARK: Prelude
-        switch dialect {
+        switch targetDialect {
         case .postgresql:
             try await emit("SET client_encoding = 'UTF8'")
             try await emit("SET standard_conforming_strings = on")
@@ -240,7 +255,7 @@ public struct DatabaseDumper: Sendable {
         // MARK: Structure
         if options.content.includesStructure {
             state.stage = "Structure"
-            if dialect == .postgresql {
+            if dialect == .postgresql, !isCrossEngine {
                 var seenTypes: Set<String> = []
                 for table in ordered {
                     for column in columnsByTable[table.ref] ?? [] where column.enumLabels != nil {
@@ -260,11 +275,24 @@ public struct DatabaseDumper: Sendable {
                 state.currentTable = table.name
                 let target = targetName(table.ref, selection)
                 if options.includeDrop {
-                    try await emit("DROP TABLE IF EXISTS \(target)" + (dialect == .postgresql ? " CASCADE" : ""))
+                    try await emit("DROP TABLE IF EXISTS \(target)" + (targetDialect == .postgresql ? " CASCADE" : ""))
                 }
-                let ddl = try await introspector.tableDDL(table.ref)
-                for statement in StatementSplitter.split(rewrite(ddl, selection), dialect: dialect) {
-                    try await emit(statement.text)
+                if isCrossEngine {
+                    // The server's own DDL is the source's SQL; the target gets the
+                    // definition rebuilt in its terms.
+                    let definition = try await TableDefinitionLoader.load(table, introspector: introspector)
+                    var translation = SchemaTranslator.translate(
+                        definition, from: dialect, to: targetDialect, into: targetSchema(selection))
+                    translation.definition.ref = targetRef(table.ref, selection)
+                    outcome.notes.append(contentsOf: translation.notes)
+                    for statement in DDLGenerator(dialect: targetDialect).create(translation.definition) {
+                        try await emit(statement.sql)
+                    }
+                } else {
+                    let ddl = try await introspector.tableDDL(table.ref)
+                    for statement in StatementSplitter.split(rewrite(ddl, selection), dialect: dialect) {
+                        try await emit(statement.text)
+                    }
                 }
                 report()
             }
@@ -286,7 +314,7 @@ public struct DatabaseDumper: Sendable {
                     report()
                 }
                 outcome.statements += rows.statements
-                if dialect == .postgresql {
+                if targetDialect == .postgresql {
                     for column in columns where column.isAutoIncrement {
                         let target = targetName(table.ref, selection)
                         let name = Identifier.quote(column.name, dialect: .postgresql)
@@ -304,7 +332,15 @@ public struct DatabaseDumper: Sendable {
         }
 
         // MARK: Views, routines, triggers — after the data so nothing fires while it loads.
-        if options.content.includesStructure {
+        if options.content.includesStructure, isCrossEngine {
+            if options.includeViews, !views.isEmpty {
+                outcome.notes.append(
+                    "\(views.count) view\(views.count == 1 ? "" : "s") not carried: a view is written in \(dialect.displayName)'s SQL")
+            }
+            if options.includeRoutines, !selection.routines.isEmpty {
+                outcome.notes.append("\(selection.routines.count) routine\(selection.routines.count == 1 ? "" : "s") not carried across engines")
+            }
+        } else if options.content.includesStructure {
             if options.includeViews, !views.isEmpty, let server = introspector.server {
                 state.stage = "Views"
                 for view in views {
@@ -360,7 +396,7 @@ public struct DatabaseDumper: Sendable {
         }
 
         // MARK: Epilogue
-        switch dialect {
+        switch targetDialect {
         case .mysql:
             try await emit("SET UNIQUE_CHECKS = 1")
             try await emit("SET FOREIGN_KEY_CHECKS = 1")
@@ -389,9 +425,10 @@ public struct DatabaseDumper: Sendable {
     ) async throws -> (statements: Int, rows: Int64) {
         let sourceName = Identifier.qualified(table.ref, dialect: dialect)
         let target = targetName(table.ref, selection)
-        let columnList = columns.map { Identifier.quote($0.name, dialect: dialect) }.joined(separator: ", ")
-        let sql = "SELECT \(columnList) FROM \(sourceName)"
-        let useCopy = dialect == .postgresql && options.dataStyle == .copy
+        let sourceColumnList = columns.map { Identifier.quote($0.name, dialect: dialect) }.joined(separator: ", ")
+        let columnList = columns.map { Identifier.quote($0.name, dialect: targetDialect) }.joined(separator: ", ")
+        let sql = "SELECT \(sourceColumnList) FROM \(sourceName)"
+        let useCopy = targetDialect == .postgresql && options.dataStyle == .copy
         var statements = 0
         var rows: Int64 = 0
 
@@ -434,7 +471,7 @@ public struct DatabaseDumper: Sendable {
                 } else {
                     if batchRows > 0 { batch.append(contentsOf: ",\n".utf8) }
                     batch.append(contentsOf: "(".utf8)
-                    batch.append(contentsOf: row.map { $0.sqlLiteral(dialect: dialect) }.joined(separator: ", ").utf8)
+                    batch.append(contentsOf: row.map { $0.sqlLiteral(dialect: targetDialect) }.joined(separator: ", ").utf8)
                     batch.append(contentsOf: ")".utf8)
                 }
                 batchRows += 1
@@ -494,7 +531,7 @@ public struct DatabaseDumper: Sendable {
     }
 
     private func targetName(_ table: TableRef, _ selection: DumpSelection) -> String {
-        Identifier.qualified(targetRef(table, selection), dialect: dialect)
+        Identifier.qualified(targetRef(table, selection), dialect: targetDialect)
     }
 
     /// Server DDL with the source schema and renamed tables replaced by their targets.

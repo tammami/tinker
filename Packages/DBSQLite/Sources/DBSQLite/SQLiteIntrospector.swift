@@ -132,9 +132,10 @@ public struct SQLiteIntrospector: SchemaIntrospector {
                 isNullable: (Self.integer(field(row, "notnull")) ?? 0) == 0 && !(isKey && singleIntegerKey),
                 defaultExpression: field(row, "dflt_value").text,
                 isPrimaryKey: isKey,
-                // An INTEGER PRIMARY KEY is the rowid and assigns itself; AUTOINCREMENT only
-                // changes how. Anything else in SQLite never auto-increments.
-                isAutoIncrement: isKey && singleIntegerKey && (declaresAutoincrement || true),
+                // Only a declared AUTOINCREMENT counts, as the DDL says. A plain INTEGER
+                // PRIMARY KEY is the rowid and assigns itself too, but reporting it as
+                // auto-increment would make every comparison against another engine differ.
+                isAutoIncrement: isKey && singleIntegerKey && declaresAutoincrement,
                 isGenerated: hidden == 2 || hidden == 3,
                 collation: nil
             )

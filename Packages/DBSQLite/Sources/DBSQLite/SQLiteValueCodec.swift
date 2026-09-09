@@ -1,4 +1,5 @@
 import DBCore
+import DBSQL
 import Foundation
 import SQLite3
 
@@ -174,8 +175,7 @@ enum SQLiteValueCodec {
             return bindText(uuid.uuidString.lowercased(), to: statement, at: index)
         case let .array(items):
             // SQLite has no arrays; a JSON array is the closest thing it will store.
-            let rendered = "[" + items.map { $0.text.map { "\"\($0)\"" } ?? "null" }.joined(separator: ",") + "]"
-            return bindText(rendered, to: statement, at: index)
+            return bindText(SQLLiteral.jsonArray(items), to: statement, at: index)
         case let .raw(_, text, bytes):
             if let text { return bindText(text, to: statement, at: index) }
             if let bytes { return bindBlob(bytes, to: statement, at: index) }

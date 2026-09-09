@@ -1058,6 +1058,14 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
                 .filter { $0.lowercased().hasPrefix(lowered) }
                 .sorted()
                 .map { CompletionCandidate(text: $0, kind: .keyword) }
+        // The engine's functions, once a letter is typed: `DA` offers DATE, DATE_FORMAT,
+        // DAY, DAYNAME… with their signatures, the way a person looks for them.
+        let functions =
+            lowered.isEmpty
+            ? []
+            : SQLFunctionCatalog.matching(prefix: lowered, dialect: dialect)
+                .sorted { $0.name.lowercased() < $1.name.lowercased() }
+                .map { CompletionCandidate(function: $0) }
 
         var ranked: [CompletionCandidate]
         switch context.expecting {
@@ -1065,7 +1073,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             ranked = completionTables.filter(matches) + completionSchemas.filter(matches)
             if ranked.isEmpty { ranked = keywords }
         case .columns:
-            ranked = columnCandidates(for: context.tables, matching: lowered) + keywords
+            ranked = columnCandidates(for: context.tables, matching: lowered) + functions + keywords
         case let .qualified(qualifier):
             if let mention = context.table(for: qualifier) {
                 ranked = columnCandidates(for: [mention], matching: lowered)
@@ -1079,7 +1087,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
                 ranked = columnCandidates(for: [SQLTableMention(name: qualifier)], matching: lowered)
             }
         case .any:
-            ranked = lowered.isEmpty ? [] : keywords + completionTables.filter(matches)
+            ranked = lowered.isEmpty ? [] : functions + keywords + completionTables.filter(matches)
         }
         // Tables and columns come before keywords, so the cap never hides what the context asked for.
         return Array(ranked.prefix(60))

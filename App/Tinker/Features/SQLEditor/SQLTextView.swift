@@ -34,11 +34,30 @@ public struct CompletionCandidate: Identifiable, Hashable, Sendable {
     public let text: String
     public let detail: String?
     public let kind: Kind
+    /// What goes into the editor when the candidate is chosen; `text` when nil. A function
+    /// inserts `DATE()` while the list shows `DATE`.
+    public let insertion: String?
+    /// How far back from the end of the insertion the caret lands: 1 for `DATE()`, so the
+    /// argument can be typed at once.
+    public let caretShift: Int
 
-    public init(text: String, detail: String? = nil, kind: Kind) {
+    public init(text: String, detail: String? = nil, kind: Kind, insertion: String? = nil, caretShift: Int = 0) {
         self.text = text
         self.detail = detail
         self.kind = kind
+        self.insertion = insertion
+        self.caretShift = caretShift
+    }
+
+    /// A function from the catalog: shown with its signature, inserted with its parentheses.
+    public init(function: SQLFunction) {
+        self.init(
+            text: function.name,
+            detail: "\(function.signature)  ·  \(function.category.rawValue)",
+            kind: .function,
+            insertion: function.insertion,
+            caretShift: function.takesNoParentheses ? 0 : 1
+        )
     }
 
     public var symbolName: String {
@@ -400,15 +419,21 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         guard let textView else { return }
         // A qualified prefix keeps its qualifier: `u.na` becomes `u.name`, not `name`.
         let typed = (textView.string as NSString).substring(with: range)
+        let inserted = candidate.insertion ?? candidate.text
         let replacement: String
         if let dot = typed.lastIndex(of: ".") {
-            replacement = String(typed[typed.startIndex ... dot]) + candidate.text
+            replacement = String(typed[typed.startIndex ... dot]) + inserted
         } else {
-            replacement = candidate.text
+            replacement = inserted
         }
         guard textView.shouldChangeText(in: range, replacementString: replacement) else { return }
         textView.replaceCharacters(in: range, with: replacement)
         textView.didChangeText()
+        if candidate.caretShift > 0 {
+            // `DATE()` with the caret between the parentheses, ready for the argument.
+            let end = range.location + (replacement as NSString).length
+            textView.setSelectedRange(NSRange(location: max(range.location, end - candidate.caretShift), length: 0))
+        }
     }
 
     public func textViewDidChangeSelection(_ notification: Notification) {
@@ -446,10 +471,18 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         storage.beginEditing()
         storage.setAttributes([.font: font, .foregroundColor: NSColor.textColor], range: full)
 
-        for token in SQLTokenizer.tokenize(source, dialect: dialect) {
+        let tokens = SQLTokenizer.tokenize(source, dialect: dialect)
+        let functionNames = SQLFunctionCatalog.names(for: dialect)
+        for (index, token) in tokens.enumerated() {
             let range = NSRange(location: token.utf16Range.lowerBound, length: token.utf16Range.count)
             guard NSMaxRange(range) <= storage.length else { continue }
             switch token.kind {
+            case .identifier where functionNames.contains(token.text.lowercased()):
+                // A known function is one the engine documents, followed by its parentheses.
+                let next = tokens[(index + 1)...].first { $0.kind != .whitespace }
+                if next?.text == "(" {
+                    storage.addAttribute(.foregroundColor, value: NSColor.systemIndigo, range: range)
+                }
             case .keyword:
                 storage.addAttributes(
                     [

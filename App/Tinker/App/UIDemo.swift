@@ -151,13 +151,16 @@ enum UIDemo {
                         query.selection = GridSelection(row: 0, column: 1)
                     }
                 }
-            case "completion", "completion-columns":
+            case "completion", "completion-columns", "completion-functions":
                 // `completion` shows the tables offered after FROM with nothing typed;
-                // `completion-columns` the first table's columns after `t.`.
+                // `completion-columns` the first table's columns after `t.`;
+                // `completion-functions` the date functions offered for `DA` in a select list.
                 let sql =
-                    item == "completion"
-                    ? "SELECT * FROM "
-                    : "SELECT * FROM \(preferred?.name ?? "orders") t WHERE t."
+                    switch item {
+                    case "completion": "SELECT * FROM "
+                    case "completion-functions": "SELECT id, DA"
+                    default: "SELECT * FROM \(preferred?.name ?? "orders") t WHERE t."
+                    }
                 let tab = controller.newQueryTab(connectionID: config.id, sql: sql)
                 if let query = controller.queryController(for: tab) {
                     await query.loadSessionChoices()

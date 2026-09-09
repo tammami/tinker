@@ -160,7 +160,7 @@ public struct MySQLIntrospector: SchemaIntrospector {
                 nativeType: columnType,
                 kind: Self.kind(dataType: row[3].text ?? "", columnType: columnType, decoder: decoder),
                 isNullable: (row[4].text ?? "YES").uppercased() == "YES",
-                defaultExpression: row[5].text,
+                defaultExpression: Self.defaultExpression(row[5].text, extra: extra),
                 isPrimaryKey: (row[6].text ?? "").uppercased() == "PRI",
                 isAutoIncrement: extra.contains("auto_increment"),
                 isGenerated: !generated.isEmpty || extra.contains("generated"),
@@ -170,6 +170,19 @@ public struct MySQLIntrospector: SchemaIntrospector {
                 enumLabels: enumLabels
             )
         }
+    }
+
+    /// `COLUMN_DEFAULT` as it can be written back: `information_schema` stores a string
+    /// default bare (`plain`, not `'plain'`) and an expression default without its
+    /// parentheses, marking the latter `DEFAULT_GENERATED` in `EXTRA`. A number, NULL and
+    /// `CURRENT_TIMESTAMP` stay as they are.
+    static func defaultExpression(_ raw: String?, extra: String) -> String? {
+        guard let raw else { return nil }
+        let upper = raw.uppercased()
+        if upper == "NULL" || upper.hasPrefix("CURRENT_TIMESTAMP") || upper == "NOW()" { return raw }
+        if extra.contains("default_generated") { return raw.hasPrefix("(") ? raw : "(\(raw))" }
+        if Double(raw) != nil { return raw }
+        return SQLLiteral.quoteString(raw, dialect: .mysql)
     }
 
     /// The value kind a declared type produces, from `information_schema` rather than a

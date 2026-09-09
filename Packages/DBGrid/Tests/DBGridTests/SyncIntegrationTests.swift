@@ -1,6 +1,7 @@
 import DBCore
 import DBMySQL
 import DBPostgres
+import DBSQLite
 import DBSQL
 import DBTestKit
 import Logging
@@ -19,16 +20,18 @@ final class SyncIntegrationTests: XCTestCase {
     }
 
     static var registry: DriverRegistry {
-        DriverRegistry([.postgresql: PostgresDriver.self, .mysql: MySQLDriver.self])
+        DriverRegistry([.postgresql: PostgresDriver.self, .mysql: MySQLDriver.self, .sqlite: SQLiteDriver.self])
     }
 
     func withSession(_ body: (ConnectionSession, TestServer, SQLDialect) async throws -> Void) async throws {
+        let sqlite = try TestEnvironment.servers(for: .sqlite)
+        if !sqlite.isEmpty { try await SQLiteFixtures.prepare() }
         let all =
             ((try? TestEnvironment.servers(for: .postgresql)) ?? [])
-            + ((try? TestEnvironment.servers(for: .mysql)) ?? [])
+            + ((try? TestEnvironment.servers(for: .mysql)) ?? []) + sqlite
         if all.isEmpty { throw XCTSkip("no test server configured") }
         for server in all {
-            let dialect: SQLDialect = server.engine == .postgresql ? .postgresql : .mysql
+            let dialect = server.engine.dialect
             let config = ConnectionConfig(
                 name: "sync-test", dialect: dialect, host: server.host, port: server.port, user: server.user,
                 database: server.database)
@@ -51,10 +54,7 @@ final class SyncIntegrationTests: XCTestCase {
         }
     }
 
-    func schema(_ server: TestServer) -> SchemaRef {
-        server.engine == .postgresql
-            ? SchemaRef(database: server.database, schema: "public") : SchemaRef.mysql(server.database)
-    }
+    func schema(_ server: TestServer) -> SchemaRef { server.fixtureSchema }
 
     func run(_ statements: [String], on connection: any SQLConnection) async throws {
         for statement in statements { _ = try await connection.executeCollecting(statement) }
@@ -148,7 +148,11 @@ final class SyncIntegrationTests: XCTestCase {
             }
             await drop(on: source)
             // MySQL's default collation folds case, so b and B could not both be keys.
-            let keyType = dialect == .postgresql ? "text" : "varchar(50) COLLATE utf8mb4_bin"
+            let keyType =
+                switch dialect {
+                case .postgresql, .sqlite: "text"
+                case .mysql: "varchar(50) COLLATE utf8mb4_bin"
+                }
             let textType = dialect == .postgresql ? "text" : "varchar(50)"
             for name in ["sync_src", "sync_dst"] {
                 try await run(
@@ -198,8 +202,11 @@ final class SyncIntegrationTests: XCTestCase {
 
             // Against a target schema where the table is missing, a create is generated.
             let missing =
-                dialect == .postgresql
-                ? SchemaRef(database: ref.database, schema: "sync_missing_schema") : SchemaRef.mysql("sync_missing_db")
+                switch dialect {
+                case .postgresql: SchemaRef(database: ref.database, schema: "sync_missing_schema")
+                case .mysql: SchemaRef.mysql("sync_missing_db")
+                case .sqlite: SchemaRef(database: ref.database, schema: "sync_missing_schema")
+                }
             let created = try await SchemaSynchronizer(dialect: dialect).compare(
                 sourceSchema: ref, targetSchema: missing, tables: ["sync_only_src"],
                 source: connection.introspector, target: connection.introspector)

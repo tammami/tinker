@@ -6,12 +6,15 @@ import XCTest
 public enum TestEngine: String, Sendable, Hashable, CaseIterable {
     case postgresql
     case mysql
+    /// A temporary database file the suite creates for itself; nothing to configure.
+    case sqlite
 
     /// Environment variable holding the single primary test URL (SPEC §17.1).
     public var primaryVariable: String {
         switch self {
         case .postgresql: "TINKER_TEST_PG_URL"
         case .mysql: "TINKER_TEST_MYSQL_URL"
+        case .sqlite: "TINKER_TEST_SQLITE_DISABLED"
         }
     }
 
@@ -20,6 +23,7 @@ public enum TestEngine: String, Sendable, Hashable, CaseIterable {
         switch self {
         case .postgresql: "TINKER_TEST_PG_URLS"
         case .mysql: "TINKER_TEST_MYSQL_URLS"
+        case .sqlite: ""
         }
     }
 
@@ -28,6 +32,16 @@ public enum TestEngine: String, Sendable, Hashable, CaseIterable {
         switch self {
         case .postgresql: ["postgres", "postgresql"]
         case .mysql: ["mysql", "mariadb"]
+        case .sqlite: ["file", "sqlite"]
+        }
+    }
+
+    /// The dialect a driver for this engine speaks.
+    public var dialect: SQLDialect {
+        switch self {
+        case .postgresql: .postgresql
+        case .mysql: .mysql
+        case .sqlite: .sqlite
         }
     }
 }
@@ -40,10 +54,31 @@ public struct TestServer: Sendable, Hashable {
     public let source: String
 
     public var host: String { url.host ?? "" }
-    public var port: Int { url.port ?? (engine == .postgresql ? 5432 : 3306) }
+    public var port: Int {
+        if let port = url.port { return port }
+        return switch engine {
+        case .postgresql: 5_432
+        case .mysql: 3_306
+        case .sqlite: 0
+        }
+    }
     public var user: String { url.user ?? "" }
     public var password: String? { url.password }
-    public var database: String { TestEnvironment.databaseName(in: url) }
+    /// The database name — or, for SQLite, the path of the file.
+    public var database: String { engine == .sqlite ? url.path : TestEnvironment.databaseName(in: url) }
+
+    /// The schema every fixture table lives in on this server: `public` on PostgreSQL,
+    /// the database's own name on MySQL, `main` on SQLite.
+    public var fixtureSchema: SchemaRef {
+        switch engine {
+        case .postgresql: SchemaRef(database: database, schema: "public")
+        case .mysql: SchemaRef.mysql(database)
+        case .sqlite: SchemaRef.sqlite
+        }
+    }
+
+    /// A fixture table on this server.
+    public func table(_ name: String) -> TableRef { TableRef(schema: fixtureSchema, name: name) }
 
     /// URL with the password replaced by `***`, safe for logs.
     public var redactedDescription: String {
@@ -90,6 +125,12 @@ public enum TestEnvironment {
         for engine: TestEngine,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) throws -> [TestServer] {
+        if engine == .sqlite {
+            // Always available: a file of its own for this process. Set the variable to
+            // anything to leave SQLite out of a run.
+            if let disabled = environment[engine.primaryVariable], !disabled.isEmpty { return [] }
+            return [TestServer(engine: .sqlite, url: sqliteDatabaseURL, source: "temporary file")]
+        }
         var result: [TestServer] = []
         if let primary = environment[engine.primaryVariable]?.trimmingCharacters(in: .whitespaces), !primary.isEmpty {
             result.append(try validate(primary, variable: engine.primaryVariable, engine: engine))
@@ -115,6 +156,32 @@ public enum TestEnvironment {
             throw XCTSkip("\(engine.primaryVariable) not set — skipping \(engine.rawValue) integration tests")
         }
         return servers
+    }
+
+    /// The SQLite database every suite in this process shares, under the temporary
+    /// directory. Created empty on first use; the suites load the fixtures into it.
+    public static let sqliteDatabaseURL: URL = {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tinker-tests-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("tinker_test.sqlite")
+    }()
+
+    /// The fixture scripts for an engine, in load order, from `testenv/fixtures/<engine>`
+    /// next to this source tree.
+    public static func fixtureScripts(for engine: TestEngine) throws -> [URL] {
+        var root = URL(fileURLWithPath: #filePath)
+        // …/Packages/DBTestKit/Sources/DBTestKit/TestEnvironment.swift → repository root.
+        for _ in 0 ..< 5 { root.deleteLastPathComponent() }
+        let folder =
+            switch engine {
+            case .postgresql: "pg"
+            case .mysql: "mysql"
+            case .sqlite: "sqlite"
+            }
+        let directory = root.appendingPathComponent("testenv/fixtures/\(folder)", isDirectory: true)
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        return files.filter { $0.pathExtension == "sql" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
     /// Human-readable summary of what is configured, for the CI log.
@@ -186,7 +253,7 @@ extension TestServer {
     ) -> ResolvedConnectionConfig {
         ResolvedConnectionConfig(
             configID: UUID(),
-            dialect: engine == .postgresql ? .postgresql : .mysql,
+            dialect: engine.dialect,
             host: host,
             port: port,
             user: user,

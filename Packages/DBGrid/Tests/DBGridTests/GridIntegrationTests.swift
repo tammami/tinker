@@ -1,6 +1,7 @@
 import DBCore
 import DBMySQL
 import DBPostgres
+import DBSQLite
 import DBSQL
 import DBTestKit
 import Logging
@@ -22,17 +23,20 @@ final class GridIntegrationTests: XCTestCase {
         return logger
     }
 
-    /// Every configured server of either engine. Skips only when neither is configured.
+    /// Every configured server of every engine. SQLite is a temporary file and is always
+    /// there, so this never skips.
     static var registry: DriverRegistry {
-        DriverRegistry([.postgresql: PostgresDriver.self, .mysql: MySQLDriver.self])
+        DriverRegistry([.postgresql: PostgresDriver.self, .mysql: MySQLDriver.self, .sqlite: SQLiteDriver.self])
     }
 
-    func allServers() throws -> [TestServer] {
+    func allServers() async throws -> [TestServer] {
         let postgres = (try? TestEnvironment.servers(for: .postgresql)) ?? []
         let mysql = (try? TestEnvironment.servers(for: .mysql)) ?? []
-        let all = postgres + mysql
+        let sqlite = try TestEnvironment.servers(for: .sqlite)
+        if !sqlite.isEmpty { try await SQLiteFixtures.prepare() }
+        let all = postgres + mysql + sqlite
         if all.isEmpty {
-            throw XCTSkip("neither TINKER_TEST_PG_URL nor TINKER_TEST_MYSQL_URL is set")
+            throw XCTSkip("no test server is configured and SQLite is disabled")
         }
         return all
     }
@@ -40,8 +44,8 @@ final class GridIntegrationTests: XCTestCase {
     func withSession(
         _ body: (ConnectionSession, TestServer) async throws -> Void
     ) async throws {
-        for server in try allServers() {
-            let dialect: SQLDialect = server.engine == .postgresql ? .postgresql : .mysql
+        for server in try await allServers() {
+            let dialect = server.engine.dialect
             let config = ConnectionConfig(
                 name: "grid-test", dialect: dialect,
                 host: server.host, port: server.port, user: server.user,
@@ -89,9 +93,16 @@ final class GridIntegrationTests: XCTestCase {
     /// A table reference for whichever engine the session speaks: MySQL has no schema
     /// layer, so its pseudo-schema is the database's own name.
     func table(_ name: String, in server: TestServer) -> TableRef {
-        server.engine == .postgresql
-            ? TableRef(database: server.database, schema: "public", name: name)
-            : TableRef(schema: SchemaRef.mysql(server.database), name: name)
+        server.table(name)
+    }
+
+    /// The statement for the server's engine.
+    func sql(_ server: TestServer, pg: String, mysql: String, sqlite: String) -> String {
+        switch server.engine {
+        case .postgresql: pg
+        case .mysql: mysql
+        case .sqlite: sqlite
+        }
     }
 
     // MARK: - Paging
@@ -201,9 +212,11 @@ final class GridIntegrationTests: XCTestCase {
             let (setupLease, setup) = try await session.lease()
             _ = try await setup.executeCollecting("DROP TABLE IF EXISTS grid_edit_probe")
             _ = try await setup.executeCollecting(
-                server.engine == .postgresql
-                    ? "CREATE TABLE grid_edit_probe (id integer PRIMARY KEY, name text, age integer)"
-                    : "CREATE TABLE grid_edit_probe (id INT PRIMARY KEY, name VARCHAR(50), age INT)"
+                self.sql(
+                    server,
+                    pg: "CREATE TABLE grid_edit_probe (id integer PRIMARY KEY, name text, age integer)",
+                    mysql: "CREATE TABLE grid_edit_probe (id INT PRIMARY KEY, name VARCHAR(50), age INT)",
+                    sqlite: "CREATE TABLE grid_edit_probe (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
             )
             _ = try await setup.executeCollecting(
                 "INSERT INTO grid_edit_probe VALUES (1, 'a', 29), (2, 'b', 41)"
@@ -246,9 +259,11 @@ final class GridIntegrationTests: XCTestCase {
             let (setupLease, setup) = try await session.lease()
             _ = try await setup.executeCollecting("DROP TABLE IF EXISTS grid_conflict_probe")
             _ = try await setup.executeCollecting(
-                server.engine == .postgresql
-                    ? "CREATE TABLE grid_conflict_probe (id integer PRIMARY KEY, name text)"
-                    : "CREATE TABLE grid_conflict_probe (id INT PRIMARY KEY, name VARCHAR(50))"
+                self.sql(
+                    server,
+                    pg: "CREATE TABLE grid_conflict_probe (id integer PRIMARY KEY, name text)",
+                    mysql: "CREATE TABLE grid_conflict_probe (id INT PRIMARY KEY, name VARCHAR(50))",
+                    sqlite: "CREATE TABLE grid_conflict_probe (id INTEGER PRIMARY KEY, name TEXT)")
             )
             _ = try await setup.executeCollecting(
                 "INSERT INTO grid_conflict_probe VALUES (1, 'original'), (2, 'other')"
@@ -300,19 +315,26 @@ final class GridIntegrationTests: XCTestCase {
             let (setupLease, setup) = try await session.lease()
             _ = try await setup.executeCollecting("DROP TABLE IF EXISTS grid_insert_probe")
             _ = try await setup.executeCollecting(
-                server.engine == .postgresql
-                    ? """
+                self.sql(
+                    server,
+                    pg: """
                     CREATE TABLE grid_insert_probe (
                         id integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
                         name text NOT NULL DEFAULT 'unnamed'
                     )
-                    """
-                    : """
+                    """,
+                    mysql: """
                     CREATE TABLE grid_insert_probe (
                         id INT AUTO_INCREMENT PRIMARY KEY,
                         name VARCHAR(50) NOT NULL DEFAULT 'unnamed'
                     )
-                    """
+                    """,
+                    sqlite: """
+                    CREATE TABLE grid_insert_probe (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL DEFAULT 'unnamed'
+                    )
+                    """)
             )
             _ = try await setup.executeCollecting("INSERT INTO grid_insert_probe (name) VALUES ('first')")
             await session.release(setupLease)
@@ -351,10 +373,11 @@ final class GridIntegrationTests: XCTestCase {
             composite.setValue(.string("editor"), row: 0, column: 2)
             let compositeStatements = try composite.pendingStatements()
             XCTAssertEqual(compositeStatements.count, 1)
-            let expectedPredicate =
-                server.engine == .postgresql
-                ? "\"org_id\" = $2 AND \"user_id\" = $3"
-                : "`org_id` = ? AND `user_id` = ?"
+            let expectedPredicate = self.sql(
+                server,
+                pg: "\"org_id\" = $2 AND \"user_id\" = $3",
+                mysql: "`org_id` = ? AND `user_id` = ?",
+                sqlite: "\"org_id\" = ? AND \"user_id\" = ?")
             XCTAssertTrue(
                 compositeStatements[0].sql.contains(expectedPredicate),
                 compositeStatements[0].sql
@@ -475,7 +498,8 @@ extension GridIntegrationTests {
                 "SELECT id, label, price, active FROM \(name) ORDER BY id")
             XCTAssertEqual(rows.rows.count, 3)
             XCTAssertEqual(rows.rows[0][1], .string("Pen, blue"))
-            XCTAssertEqual(rows.rows[0][2].text, "1.50")
+            // SQLite has no decimal type: NUMERIC(10,2) stores the REAL 1.5 and hands it back.
+            XCTAssertEqual(rows.rows[0][2].text, dialect == .sqlite ? "1.5" : "1.50")
             XCTAssertEqual(rows.rows[1][2], .null)
             XCTAssertEqual(rows.rows[2][1], .null)
             XCTAssertTrue(["true", "1"].contains(rows.rows[2][3].text ?? ""), "\(rows.rows[2][3])")

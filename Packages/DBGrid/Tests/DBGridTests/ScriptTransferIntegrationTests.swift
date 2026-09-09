@@ -1,6 +1,7 @@
 import DBCore
 import DBMySQL
 import DBPostgres
+import DBSQLite
 import DBSQL
 import DBTestKit
 import Logging
@@ -18,20 +19,22 @@ final class ScriptTransferIntegrationTests: XCTestCase {
     }
 
     static var registry: DriverRegistry {
-        DriverRegistry([.postgresql: PostgresDriver.self, .mysql: MySQLDriver.self])
+        DriverRegistry([.postgresql: PostgresDriver.self, .mysql: MySQLDriver.self, .sqlite: SQLiteDriver.self])
     }
 
-    func allServers() throws -> [TestServer] {
+    func allServers() async throws -> [TestServer] {
+        let sqlite = try TestEnvironment.servers(for: .sqlite)
+        if !sqlite.isEmpty { try await SQLiteFixtures.prepare() }
         let all =
             ((try? TestEnvironment.servers(for: .postgresql)) ?? [])
-            + ((try? TestEnvironment.servers(for: .mysql)) ?? [])
-        if all.isEmpty { throw XCTSkip("neither TINKER_TEST_PG_URL nor TINKER_TEST_MYSQL_URL is set") }
+            + ((try? TestEnvironment.servers(for: .mysql)) ?? []) + sqlite
+        if all.isEmpty { throw XCTSkip("no test server is configured and SQLite is disabled") }
         return all
     }
 
     func withSession(_ body: (ConnectionSession, TestServer, SQLDialect) async throws -> Void) async throws {
-        for server in try allServers() {
-            let dialect: SQLDialect = server.engine == .postgresql ? .postgresql : .mysql
+        for server in try await allServers() {
+            let dialect = server.engine.dialect
             let config = ConnectionConfig(
                 name: "transfer-test", dialect: dialect, host: server.host, port: server.port, user: server.user,
                 database: server.database)
@@ -54,10 +57,7 @@ final class ScriptTransferIntegrationTests: XCTestCase {
         }
     }
 
-    func schema(_ server: TestServer) -> SchemaRef {
-        server.engine == .postgresql
-            ? SchemaRef(database: server.database, schema: "public") : SchemaRef.mysql(server.database)
-    }
+    func schema(_ server: TestServer) -> SchemaRef { server.fixtureSchema }
 
     func run(_ statements: [String], on connection: any SQLConnection) async throws {
         for statement in statements { _ = try await connection.executeCollecting(statement) }
@@ -129,6 +129,34 @@ final class ScriptTransferIntegrationTests: XCTestCase {
                         (2, NULL, NULL, NULL, 0),
                         (3, 'tab\\there', X'DEADBEEF', -0.0001, NULL),
                         (1, 'ünïcödé — 日本語', NULL, 99999999.9999, 1)
+                    """,
+                ], on: connection)
+        case .sqlite:
+            try await run(
+                [
+                    "CREATE TABLE xfer_parent (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, kind TEXT DEFAULT 'plain')",
+                    """
+                    CREATE TABLE xfer_child (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        parent_id INTEGER NOT NULL,
+                        note TEXT,
+                        payload BLOB,
+                        amount DECIMAL(12,4),
+                        flag BOOLEAN,
+                        created DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        CONSTRAINT xfer_child_parent FOREIGN KEY (parent_id) REFERENCES xfer_parent(id)
+                    )
+                    """,
+                    "CREATE INDEX xfer_child_note_idx ON xfer_child (note)",
+                    "CREATE VIEW xfer_view AS SELECT p.name, count(c.id) AS children FROM xfer_parent p LEFT JOIN xfer_child c ON c.parent_id = p.id GROUP BY p.name",
+                    // SQLite knows no escapes inside a literal: control characters come from char().
+                    "INSERT INTO xfer_parent (name) VALUES ('Ada'), ('Grace'), ('Line' || char(10) || 'Break' || char(9) || 'Tab\\Slash ''quote''')",
+                    """
+                    INSERT INTO xfer_child (parent_id, note, payload, amount, flag) VALUES
+                        (1, 'first', X'00FF10', '12.5000', 1),
+                        (2, NULL, NULL, NULL, 0),
+                        (3, 'tab' || char(9) || 'here', X'DEADBEEF', '-0.0001', NULL),
+                        (1, 'ünïcödé — 日本語', NULL, '99999999.9999', 1)
                     """,
                 ], on: connection)
         }
@@ -291,6 +319,12 @@ final class ScriptTransferIntegrationTests: XCTestCase {
                         "SET SESSION cte_max_recursion_depth = \(rows + 10)",
                         "INSERT INTO xfer_big WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < \(rows)) SELECT n, CONCAT('row ', n), n * 1.5 FROM s",
                     ], on: connection)
+            case .sqlite:
+                try await run(
+                    [
+                        "CREATE TABLE xfer_big (id INTEGER PRIMARY KEY, label TEXT, amount NUMERIC(10,2))",
+                        "INSERT INTO xfer_big WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < \(rows)) SELECT n, 'row ' || n, n * 1.5 FROM s",
+                    ], on: connection)
             }
             let url = FileManager.default.temporaryDirectory.appendingPathComponent(
                 "xfer-big-\(UUID().uuidString).sql.gz")
@@ -362,7 +396,9 @@ final class ScriptTransferIntegrationTests: XCTestCase {
             } catch let ScriptExecutionError.stopped(failure, outcome) {
                 XCTAssertEqual(failure.line, 3)
                 XCTAssertEqual(failure.statementNumber, 3)
-                XCTAssertTrue(failure.message.lowercased().contains("duplicate"), failure.message)
+                // Each engine's own words for the same violation.
+                let expectedWords = dialect == .sqlite ? "unique constraint failed" : "duplicate"
+                XCTAssertTrue(failure.message.lowercased().contains(expectedWords), failure.message)
                 XCTAssertEqual(outcome.statements, 2)
             }
             // MySQL's DDL commits on its own; PostgreSQL rolled the table back with the batch.
@@ -442,6 +478,27 @@ final class ScriptTransferIntegrationTests: XCTestCase {
                     /*!40000 ALTER TABLE `xfer_script` ENABLE KEYS */;
                     UNLOCK TABLES;
                     /*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;
+                    """
+            case .sqlite:
+                // What `sqlite3 file .dump` writes, with a trigger: its body holds
+                // semicolons and a CASE … END, and must arrive as one statement.
+                script = """
+                    PRAGMA foreign_keys=OFF;
+                    BEGIN TRANSACTION;
+                    CREATE TABLE xfer_script (
+                      id INTEGER NOT NULL,
+                      name TEXT,
+                      note TEXT,
+                      PRIMARY KEY (id)
+                    );
+                    INSERT INTO xfer_script VALUES(1,'Monas',NULL);
+                    INSERT INTO xfer_script VALUES(2,'Kota' || char(9) || 'Tua','line' || char(10) || 'break');
+                    INSERT INTO xfer_script VALUES(3,'Back\\slash','');
+                    CREATE TRIGGER xfer_script_touch AFTER UPDATE ON xfer_script
+                    BEGIN
+                      UPDATE xfer_script SET note = CASE WHEN NEW.note IS NULL THEN '' ELSE NEW.note END WHERE id = NEW.id;
+                    END;
+                    COMMIT;
                     """
             }
             let url = FileManager.default.temporaryDirectory.appendingPathComponent(

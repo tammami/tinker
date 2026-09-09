@@ -1,12 +1,12 @@
 # Tinker
 
-**A native macOS client for PostgreSQL and MySQL that treats your data like production data. Because it is.**
+**A native macOS client for PostgreSQL, MySQL and SQLite that treats your data like production data. Because it is.**
 
 ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-1d1d1f?style=flat-square&logo=apple&logoColor=white)
 ![Architecture](https://img.shields.io/badge/arch-Apple%20Silicon-1d1d1f?style=flat-square)
 ![Swift](https://img.shields.io/badge/Swift-6%20%C2%B7%20strict%20concurrency-F05138?style=flat-square&logo=swift&logoColor=white)
 ![UI](https://img.shields.io/badge/UI-SwiftUI%20%2B%20AppKit-0A84FF?style=flat-square)
-![Engines](https://img.shields.io/badge/engines-PostgreSQL%20%C2%B7%20MySQL%20%C2%B7%20MariaDB-336791?style=flat-square)
+![Engines](https://img.shields.io/badge/engines-PostgreSQL%20%C2%B7%20MySQL%20%C2%B7%20MariaDB%20%C2%B7%20SQLite-336791?style=flat-square)
 ![Tests](https://img.shields.io/badge/tests-300%2B%20%C2%B7%20integration%20against%20real%20servers-2ea44f?style=flat-square)
 ![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-8250df?style=flat-square)
 
@@ -36,6 +36,7 @@ Most database clients optimise for the demo: a pretty grid, a few hundred rows, 
 - **SSH tunnels** with password, key file and jump-host auth, pure Swift over NIO.
 - **TLS by default** for new connections. The negotiated transport is verified and shown in the status bar.
 - Passwords live in the Keychain and nowhere else. A test greps the store file to prove it.
+- **SQLite is a file, so it opens like one.** Drop a `.sqlite` or `.db` file on the window, open it from Finder, or pick it from the File menu, and it is a connection: tables, structure, queries, export and dump, the same as any server. Foreign keys are enforced by default, read-only holds on the file itself, and `lower()`/`upper()` fold more than ASCII.
 
 ### A data grid that scales
 - AppKit `NSTableView`, server-side paging, one page in memory at a time.
@@ -72,6 +73,7 @@ App/Tinker            SwiftUI shell, AppKit grid and editor, menus, commands
 ├── DBSQL             Statement splitter, tokenizer, quoting, formatter, filter compiler
 ├── DBPostgres        SQLDriver over postgres-nio (PostgresClient, binary results)
 ├── DBMySQL           SQLDriver over mysql-nio (prepared-statement protocol, text fallback)
+├── DBSQLite          SQLDriver over the system libsqlite3, one dedicated thread per file
 ├── DBTunnel          SSH port forwarding over Citadel, known-hosts, TLS helpers
 ├── DBStore           Connection store, Keychain, query history, settings
 ├── DBTestKit         Fixtures, env-var server resolution, skip-with-reason helpers
@@ -95,7 +97,7 @@ A few load-bearing decisions, each recorded as an ADR in [`DECISIONS.md`](DECISI
 
 - macOS 14 Sonoma or later, Apple Silicon
 - Xcode 16 or later
-- A local PostgreSQL and/or MySQL server you already run. Tinker's tests never install, start or reconfigure a database, and never use Docker.
+- A local PostgreSQL and/or MySQL server you already run. Tinker's tests never install, start or reconfigure a database, and never use Docker. The SQLite suite needs nothing at all: it creates a temporary database file of its own and always runs.
 
 ### Build and run
 
@@ -126,7 +128,7 @@ export TINKER_TEST_MYSQL_URL='mysql://tinker_test:tinker_test@127.0.0.1:3306/tin
 Scripts/ci.sh
 ```
 
-The suite refuses to run against any database not named `tinker_test` or any superuser account. Engines without a URL are skipped with a visible warning and reported in the coverage summary. A skipped test is never counted as a pass. See [`testenv/README.md`](testenv/README.md) for SSH and multi-server setups.
+The suite refuses to run against any database not named `tinker_test` or any superuser account. Engines without a URL are skipped with a visible warning and reported in the coverage summary. The grid, transfer and sync suites also run against SQLite on every invocation, so the shared data path is exercised even on a machine with no server. A skipped test is never counted as a pass. See [`testenv/README.md`](testenv/README.md) for SSH and multi-server setups.
 
 ### Release
 
@@ -176,7 +178,9 @@ A feature is done when the build is warning-free under strict concurrency, the t
 
 ## Scope
 
-Version 0.1 targets PostgreSQL and MySQL/MariaDB on Apple Silicon. Redis, MongoDB, SQL Server, Oracle, SQLite, cloud sync, collaboration and ER modelling are explicitly out of scope and are neither built nor stubbed.
+Version 0.1 targets PostgreSQL, MySQL/MariaDB and SQLite on Apple Silicon. Redis, MongoDB, SQL Server, Oracle, cloud sync, collaboration and ER modelling are explicitly out of scope and are neither built nor stubbed.
+
+SQLite has no server, so some panes say so instead of pretending: there are no users or sessions to manage, no stored routines, and no profiler. A column change SQLite's `ALTER TABLE` cannot express is applied the way SQLite's own documentation prescribes, by rebuilding the table inside one transaction.
 
 Signed and notarized distribution is implemented in `Scripts/release.sh` but requires a Developer ID certificate that has not yet been exercised in this repository. The script fails loudly rather than skipping the step.
 
@@ -191,6 +195,7 @@ Signed and notarized distribution is implemented in `Scripts/release.sh` but req
 | SSH | [orlandos-nl/Citadel](https://github.com/orlandos-nl/Citadel) |
 | Logging | [apple/swift-log](https://github.com/apple/swift-log) |
 | Updates | [sparkle-project/Sparkle](https://github.com/sparkle-project/Sparkle) |
+| SQLite | the `libsqlite3` macOS ships, through the system `SQLite3` module |
 
 Nothing else is added without an ADR.
 

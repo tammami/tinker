@@ -324,3 +324,30 @@ Date: 2026-09-07
 **Decision.** Dumps state the assumption rather than switch modes: the MySQL dump header carries `-- Literals assume the default sql_mode (backslash escapes); restore with NO_BACKSLASH_ESCAPES off.` A `SET sql_mode` at the top of a dump would silently change the target session's mode for everything that follows, which is worse than a documented assumption.
 
 **Consequences.** Restoring into a `NO_BACKSLASH_ESCAPES` session remains the user's call, and the header tells them. Import through Tinker itself runs on a fresh connection whose mode the reset in ADR-0032 puts back to the server default.
+
+## ADR-0036 — SQLite moves into scope, over the system library, on a thread of its own
+Date: 2026-09-09
+
+**Context.** SPEC §1 listed SQLite as out of scope for v0.1. The user asked for it, with the Navicat behaviour of dropping a file on the app and having it open. SQLite has no network protocol: it is a C library that blocks the calling thread, its connections are bound to one thread at a time (`THREADSAFE=2` on macOS), and `sqlite3_interrupt` is the one call permitted from another thread. Apple ships `libsqlite3` 3.51 with column metadata, `dbstat`, JSON and FTS5 compiled in, but without ICU. Adding a SwiftPM SQLite package would have meant a second copy of the library in the process for no gain.
+
+**Decision.** `DBSQLite` uses the system `SQLite3` module directly, the way `DBStore` already does; no new dependency. Each `SQLiteConnection` is an actor whose executor is a dedicated `Thread`, so SQLite's blocking calls never occupy the cooperative pool and every call on a handle happens on one thread. `cancelCurrent()` is nonisolated and calls `sqlite3_interrupt`, because waiting for the actor would mean waiting for the statement being cancelled. The statement timeout is a progress handler. `SQLDialect` gained `.sqlite` and the helpers `hasSchemaLayer`, `isFileBased`, `hasMultipleDatabases` and `hasUserAccounts`, so the App decides on properties rather than on `== .mysql`. SPEC §1, §2.1, §3, §7.3, §16 and §17.1 were amended.
+
+**Consequences.** Every `switch` over the dialect is exhaustive on purpose, so a fourth engine will break the build in the right places. The fixture for SQLite is a temporary file the suites create, which makes the grid, transfer and sync suites run on every machine with no setup. Attached databases are listed but otherwise out of scope.
+
+## ADR-0037 — What SQLite cannot do is reported, not imitated
+Date: 2026-09-09
+
+**Context.** SQLite has no exact decimal (numeric affinity keeps fifteen digits in a REAL), no `ALTER COLUMN`, no comments, no stored routines, no users, no sessions, no profiler, and its built-in `lower()`/`upper()` and `LIKE` fold ASCII only. The other two drivers promise exact decimals and server-held state, and the UI is built on those promises.
+
+**Decision.** The driver reports what the file holds: a `DECIMAL` column arrives as `.double`, an undeclared column takes the storage class of its first value, and text in a `DATE` column that does not read as a date stays text. A column change the engine cannot express is generated as SQLite's own documented rebuild (`sqliteRebuild` in `DDLGenerator`), run inside one transaction by `DDLExecutor`, which is transactional for SQLite as it is for PostgreSQL. `lower()` and `upper()` are overridden per connection with Swift's Unicode folding, and the quick-search filter uses them on SQLite; this is what SQLite's own ICU extension does. Users, sessions, routines and the profiler are hidden or answer with a one-line message in the driver's words rather than an empty pane.
+
+**Consequences.** A `NUMERIC(12,4)` column edited in the grid round-trips through a REAL, which is SQLite's behaviour and now visibly so. A rebuild rewrites the whole table; the preview shows every statement it is made of. Filters generated for SQLite only run on Tinker's own connections, which is the only place they run.
+
+## ADR-0038 — A SQLite file opens as a connection, wherever it comes from
+Date: 2026-09-09
+
+**Context.** The point of SQLite support was the Navicat gesture: a file lands on the app and is usable. Tinker's model is connections in a store, with a Keychain entry for the password; a file has neither password nor host.
+
+**Decision.** `SQLiteFileOpener` is the one path for a dropped file, a Finder open (`NSApplicationDelegate` with document types declared in `App/Info.plist`, merged into the generated plist, rank Alternate so Tinker offers itself without claiming `.db`) and File › Open SQLite Database…. A file that already has a connection reuses it; any other becomes a saved connection named after the file, selected and expanded at once. A file with a database extension but no SQLite header opens the connection editor instead, whose validation names the problem. A `.sql` file dropped alongside opens as a query tab on the active connection, as ⌘O does. The connection's `database` field is the absolute path; `host`, `port` and `user` are empty and the sidebar and status bar show the path in their place.
+
+**Consequences.** A moved or deleted file leaves a connection that fails with `No such file: …` and the hint to choose the file again; nothing is created silently. The editor's New… button creates an empty database through SQLite itself so the header is right from the first byte.

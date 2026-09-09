@@ -2,8 +2,8 @@
 
 Version: 0.1 (MVP scope)
 Target: macOS, Apple Silicon only
-Databases in scope: PostgreSQL, MySQL/MariaDB
-Explicitly out of scope for v0.1: Redis, MongoDB, SQL Server, Oracle, SQLite, cloud sync, collaboration, ER modeling, scheduler, server monitor.
+Databases in scope: PostgreSQL, MySQL/MariaDB, SQLite (added 2026-09-09, Phase 10)
+Explicitly out of scope for v0.1: Redis, MongoDB, SQL Server, Oracle, cloud sync, collaboration, ER modeling, scheduler, server monitor.
 
 This document is the source of truth. Where this spec is silent, follow `CLAUDE.md` conventions. Where this spec conflicts with a library's idiom, this spec wins unless the conflict makes the feature impossible; in that case stop and report before deviating.
 
@@ -49,6 +49,7 @@ Target user: an individual developer working daily against dev/staging/prod data
 |---|---|---|
 | PostgreSQL driver | `vapor/postgres-nio` | Use `PostgresClient` (structured concurrency API), not `PostgresConnection` directly |
 | MySQL driver | `vapor/mysql-nio` | If auth or type coverage proves insufficient, escalate; fallback is `libmysqlclient` via C module (see §7.3) |
+| SQLite driver | the system `SQLite3` module (`libsqlite3` shipped with macOS) | No package. One dedicated thread per open file (ADR-0036) |
 | SSH tunnel | `orlandos-nl/Citadel` | Pure Swift SSH on NIO. Needs `direct-tcpip` channel forwarding. Fallback: libssh2 via C module |
 | SQL parsing/highlighting | `ChimeHQ/SwiftTreeSitter` + `tree-sitter-sql` grammar | Highlighting and statement boundary detection only |
 | Logging | `apple/swift-log` | Single logger per subsystem |
@@ -72,6 +73,7 @@ Tinker/
 │   ├── DBCore/                (protocols, value model, errors, session; NO UI, NO driver deps)
 │   ├── DBPostgres/            (SQLDriver impl for PostgreSQL)
 │   ├── DBMySQL/               (SQLDriver impl for MySQL/MariaDB)
+│   ├── DBSQLite/              (SQLDriver impl for SQLite database files)
 │   ├── DBTunnel/              (SSH tunnel, TLS helpers)
 │   ├── DBStore/               (connection store, Keychain, history, settings persistence)
 │   ├── DBSQL/                 (SQL text utilities: statement splitter, identifier quoting, DDL/DML generators, highlighting adapter)
@@ -275,12 +277,23 @@ Drivers do not split statements. `DBSQL.StatementSplitter` splits user SQL into 
 - `affectedRows` and `lastInsertID` populated from OK packet.
 - Escalation rule: if `mysql-nio` cannot satisfy the auth or type list above after a genuine attempt, write the gap in DECISIONS.md and implement the driver over `libmysqlclient` via a system-library SwiftPM target instead. Do not ship a driver that fails MySQL 8 default auth.
 
+**SQLite (`DBSQLite`)**
+- A connection is a file: `ConnectionConfig.database` holds the path; `host`, `port`, `user`, password, TLS and SSH are empty and the editor does not show them. The file is refused unless it starts with the SQLite 3 header (or is empty); a missing file is an error unless the `sqliteCreateIfMissing` option is set.
+- Threading: every `sqlite3*` call for one file runs on one dedicated thread (a `SerialExecutor` over a `Thread`), never on the cooperative pool. Cancel is `sqlite3_interrupt` from any thread; the stream then throws `.cancelled`. The statement timeout is a progress handler and throws `.timeout`.
+- Type mapping: the storage class of each cell decides (`INTEGER`→int, `REAL`→double, `TEXT`→string, `BLOB`→bytes, `NULL`→null), refined by the declared type when the value fits: `BOOL*`→bool, `DATE`/`TIME`/`DATETIME`/`TIMESTAMP`→date/time/timestamp when the text is ISO-8601, `JSON`→json, `UUID`→uuid. Numeric affinity (`DECIMAL`, `NUMERIC`) stores a REAL with fifteen significant digits, and the driver reports the REAL it finds; there is no exact decimal in SQLite and the driver must not invent one. An undeclared column is typed by its first value.
+- `affectedRows` is the difference in `sqlite3_total_changes` across the statement, reported only for INSERT/UPDATE/DELETE/REPLACE (`sqlite3_changes` is not reset by DDL). `lastInsertID` from `sqlite3_last_insert_rowid` for INSERT/REPLACE. `INSERT … RETURNING` is used by the grid (3.35+).
+- Errors: `sqlite3_errmsg` verbatim, the extended result code in `ServerError.code`, and `sqlite3_error_offset` converted from bytes to a one-based character position.
+- Session state: `PRAGMA foreign_keys = ON` on connect (option `sqliteForeignKeys`), re-applied by `resetSessionState` after a `PRAGMA`/`ATTACH`. The read-only guard is `PRAGMA query_only`, held by the file. `lower()`/`upper()` are overridden on the connection with Unicode case folding, because Apple's SQLite has no ICU and the built-ins fold ASCII only; the grid's quick search relies on it.
+- Introspection: `PRAGMA database_list` (databases), one pseudo-schema `main` per database (`SchemaRef.sqlite`), `sqlite_master` and the `pragma_*` table-valued functions for tables, columns (`table_xinfo`), indexes, foreign keys and the primary key; `sqlite_stat1` for row estimates (nil until `ANALYZE`); `dbstat` for sizes when compiled in; check constraints, foreign-key names, partial-index predicates and trigger timing are read from the DDL text, which is the only place SQLite keeps them. No routines, no partitioning, no comments, no users, no sessions beyond the connection's own; the `ServerIntrospector` reports pragmas and compile options as the "variables".
+- Structure changes SQLite's `ALTER TABLE` cannot express (type, nullability, default, key or constraint changes, column order) are generated as the rebuild procedure from SQLite's documentation — `PRAGMA defer_foreign_keys`, create the new table, copy, drop, rename, recreate indexes and triggers — and run in one transaction. `DDLGenerator.sqliteNeedsRebuild(from:to:)` says when.
+- Dumps carry `PRAGMA foreign_keys = OFF/ON` around INSERT batches; there is no COPY. Both statement splitters treat `CREATE TRIGGER … BEGIN … END` as one statement (a bare `BEGIN` is a transaction).
+
 ### 7.4 Server version
 
 ```swift
 public struct ServerVersion: Sendable, Hashable {
     public let major: Int, minor: Int, patch: Int
-    public let flavor: Flavor       // .postgresql, .mysql, .mariadb, .percona, .aurora, .unknown
+    public let flavor: Flavor       // .postgresql, .mysql, .mariadb, .percona, .aurora, .sqlite, .unknown
     public let rawString: String
 }
 ```
@@ -760,7 +773,13 @@ Each phase lists deliverables and acceptance criteria. Do not reorder.
 - Tests: a diff unit suite per dialect covering every column attribute, primary-key add/drop/change, index add/drop including method and partial predicate, foreign-key actions, check constraints and triggers; integration tests that run the generated DDL against the local PG and MySQL and read it back through introspection, asserting the round trip; a failure test asserting PostgreSQL rolls back and that MySQL's partial-commit warning names the right statements.
 - Accept: §15b.5 criteria, on PostgreSQL and MySQL.
 
-Deferred to v0.2 (do not build now, do not stub): import, data transfer, backup/restore, EXPLAIN visual, saved queries/snippets, editing of multi-table results, client-cert TLS, Redis, other engines.
+### Phase 10 — SQLite (added 2026-09-09)
+- `DBSQLite` per §7.3; `SQLDialect.sqlite` handled everywhere the other two are (every `switch` over the dialect stays exhaustive, and the App branches on `hasSchemaLayer` / `isFileBased` / `hasUserAccounts` rather than on `== .mysql`).
+- A database file opens as a connection: dropped on the window, opened from Finder (document types for `.sqlite`, `.sqlite3`, `.db`, `.db3`, `.s3db`, `.sl3`), or chosen from File › Open SQLite Database… (⌥⌘O). A file that already has a connection reuses it; otherwise a connection named after the file is saved. The connection editor has a file mode with Choose… and New….
+- Tests: the SQLite suite runs against a temporary database file the suite creates itself, so it never skips and needs no environment variable (`TINKER_TEST_SQLITE_DISABLED` leaves it out); the grid, transfer and sync suites run against SQLite alongside the configured servers. Fixtures in `testenv/fixtures/sqlite/` mirror the other engines' where SQLite can.
+- Accept: every §12.6 and §13.3 criterion that a file can meet, on the SQLite fixture; the rebuild of a column change verified by reading the table back; a trigger body imported whole; `EXPLAIN QUERY PLAN` recognised as read-only.
+
+Deferred to v0.2 (do not build now, do not stub): import, data transfer, backup/restore, EXPLAIN visual, saved queries/snippets, editing of multi-table results, client-cert TLS, Redis, other engines, attached SQLite databases beyond listing them.
 
 ---
 
@@ -772,6 +791,7 @@ Deferred to v0.2 (do not build now, do not stub): import, data transfer, backup/
 ### 17.1 Test environment (no Docker)
 
 - The developer's existing local PostgreSQL and MySQL are the primary targets. `testenv/prepare.sh` only creates the isolated `tinker_test` database and user on them; it never modifies server configuration, other databases, or global settings.
+- SQLite needs no server and no preparation: `TestEnvironment.servers(for: .sqlite)` returns a temporary file under the process's temporary directory, and each suite loads `testenv/fixtures/sqlite/*.sql` into it once per process.
 - All servers are supplied purely through environment variables:
   - `TINKER_TEST_PG_URL` / `TINKER_TEST_PG_URLS`
   - `TINKER_TEST_MYSQL_URL` / `TINKER_TEST_MYSQL_URLS`

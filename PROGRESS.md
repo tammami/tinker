@@ -436,3 +436,84 @@ panes), plus Phase 9 in §16 and ADR-0029/0030.
 - **Profile on PostgreSQL** is a message rather than a measurement, by choice.
 - Paging and the Objects list have no integration test of their own; they are covered by
   unit tests over a fixture loader and by hand against the local servers.
+
+---
+
+## Phase 10 — SQLite (2026-09-09)
+
+SPEC gained SQLite in §1, §2.1, §3, §7.3, §16 (Phase 10) and §17.1, plus ADR-0036…0038.
+Asked for by the user as "support sqlite, drag the file like Navicat".
+
+### Done
+
+- **`DBSQLite`**, a driver over the system `SQLite3` module: `SQLiteDriver` (header check,
+  create-if-missing option, `createDatabase(at:)`, `connectionConfig(forFileAt:)`),
+  `SQLiteConnection` (an actor on its own thread, streaming rows in SPEC §4 batches,
+  `sqlite3_interrupt` cancel, progress-handler timeout, `RETURNING`, transactions read from
+  `sqlite3_get_autocommit` so a typed `BEGIN` counts), `SQLiteValueCodec` (storage class
+  first, declared type as refinement; ISO-8601 parsing without `Foundation.Date`),
+  `SQLiteIntrospector` (pragmas, `sqlite_master`, `sqlite_stat1`, `dbstat`, DDL-text
+  reading for checks, constraint names, partial predicates and triggers; `ServerIntrospector`
+  with pragmas and compile options as variables).
+- **`SQLDialect.sqlite`** through every package: quoting, literals (no type keywords, `X''`
+  bytes, `9e999` for infinity), `?` placeholders, backtick tokens, a SQLite keyword set,
+  `CAST(… AS TEXT)`, `lower()`-folded quick search, `DEFAULT VALUES`/`RETURNING` in DML,
+  `EXPLAIN QUERY PLAN`, `VACUUM`/`REINDEX`, a `CREATE TABLE … AS SELECT … WHERE 0` duplicate
+  that says what it loses, `DROP VIEW IF EXISTS` before `CREATE VIEW`, `COLLATE BINARY` for
+  the sync merge, `PRAGMA foreign_keys` around dumps and imports, user operations that
+  throw. `DDLGenerator` writes an inline `INTEGER PRIMARY KEY AUTOINCREMENT`, schema-scoped
+  indexes and triggers, and the documented table rebuild for anything `ALTER TABLE` cannot
+  do. Both splitters keep `CREATE TRIGGER … BEGIN … END` whole.
+- **App**: `SQLiteDriver` registered; `EngineMark` feather; the sidebar treats `main` as
+  MySQL's pseudo-schema; the connection editor has a file mode (Choose…/New…, no
+  host/TLS/SSH); status bar and subtitles show the path and "Local file"; query tab session
+  pickers, status pane (pragmas) and profile note; Users, routines and the profiler are not
+  offered. `SQLiteFileOpener` handles drop on the window, Finder open
+  (`TinkerAppDelegate`, `App/Info.plist` document types merged into the generated plist) and
+  File › Open SQLite Database… (⌥⌘O). `dbcli` takes `sqlite:///path`.
+- **Tests**: `TestEngine.sqlite` is a temporary file and always runs; fixtures in
+  `testenv/fixtures/sqlite/` (the million-row `big_table` loads in about a second through a
+  recursive CTE). The grid, transfer and sync integration suites now run on SQLite on every
+  invocation, so a machine with no server still exercises the shared data path.
+
+### Tests
+
+- `SQLiteIntegrationTests` (32): version and local transport; a missing file is refused
+  unless creation is asked for; a text file is refused by its header; `createDatabase`
+  writes the header and refuses to overwrite; every declared type arrives as its kind;
+  NULLs; extremes and Unicode; a 1 MB string and JSON 50 deep; text that does not fit its
+  declared type keeps its storage class; event order and batching (500/500/200); affected
+  rows, last insert id and silent DDL (`sqlite3_changes` is not reset by DDL — found by the
+  transfer suite reporting 600,250 rows for 200,000); parameters bound not interpolated;
+  errors verbatim with code and character position (multi-byte checked); usable after an
+  error; interrupt cancels within a second and the consuming task's cancellation stops the
+  statement; timeout; transactions; introspection snapshot (estimate 1,000,000 from
+  `sqlite_stat1`, sizes from `dbstat`, a missing schema holds nothing); column details;
+  keys, indexes and foreign keys with their DDL names and actions; DDL from SQLite itself
+  with indexes; checks and triggers parsed from DDL; server reads say what a file has;
+  foreign keys enforced by default and optional; `lower('ÖRLD Straße')`; read-only held by
+  the file through `ConnectionSession` (`WITH … INSERT` refused, unlock works); a column
+  type change rebuilt in one transaction and read back; 200,000 rows streamed in ≥400
+  batches; spatial text parses.
+- `SQLiteCodecTests` (4): declared-type reduction, temporal parsing, error offsets,
+  DDL-text reading.
+- `SQLiteDialectTests` in DBSQL (10): identifiers, literals, tokens, the trigger-body
+  splitter, `EXPLAIN QUERY PLAN`, table operations, DML, the quick-search filter, views,
+  and the SQLite `CREATE TABLE`.
+- `ScriptStreamTests.testSQLiteTriggerBodiesHoldTheirSemicolonsAndBackticksAreNames`.
+- Grid (13), transfer (5) and sync (3) integration suites on SQLite, alongside the servers.
+- Full run: **577 tests, 0 failures, 1 skipped** (the pre-existing PostgreSQL trust-auth
+  skip). `Scripts/ci.sh --skip-app` green; the app builds with zero warnings.
+- Verified in the app: a file opened through Finder became the connection "Northwind
+  Lite" (feather mark, `main`, 13 tables, `~100000` estimate on the analysed table); the
+  `orders` table tab, its Structure tab, a query with aggregates on the `main` session, and
+  the Objects list with sizes from `dbstat`.
+
+### Not done
+
+- Attached databases show in the sidebar but nothing else targets them.
+- The headless smoke test and the feature pass stay PostgreSQL-first.
+- `TransferModel`'s "create the target database" emits the server engines' statements; on
+  SQLite a new database is a new file, which the transfer wizard does not offer.
+- No prepare step exists for SQLite because none is needed; `testenv/README.md` is
+  unchanged.

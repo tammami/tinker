@@ -82,6 +82,10 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     /// there every write goes through the commit sheet, whatever the checkbox says.
     public var autoCommitsEdits: Bool { autoCommit && !isProduction }
 
+    /// Whether statements commit as they run. Never on a production connection: there a
+    /// write is held in a transaction until Commit, so a mistake can still be rolled back.
+    public var commitsAutomatically: Bool { autoCommit && !isProduction }
+
     /// Set by the tab view: shows a confirmation sheet before statements run on production.
     @ObservationIgnored public var onConfirmProduction: ((DestructiveConfirmation) -> Void)?
 
@@ -697,7 +701,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             await session.applyReadOnlyGuard(to: heldConnection)
             // Auto-commit was turned off after this connection was taken: the next statement
             // is the first of a transaction, so one is opened here rather than never.
-            if !autoCommit, !isInTransaction {
+            if !commitsAutomatically, !isInTransaction {
                 try await heldConnection.beginTransaction()
                 isInTransaction = true
             }
@@ -709,7 +713,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         // closes — so that COMMIT reaches the same connection the statements ran on.
         heldLease = lease
         heldConnection = connection
-        if !autoCommit {
+        if !commitsAutomatically {
             try await connection.beginTransaction()
             isInTransaction = true
         }

@@ -188,13 +188,20 @@ public struct QueryTabView: View {
             // Bound to the property itself: a checkbox whose binding only changes its value
             // later, on another turn of the run loop, snaps back to what it read and never
             // shows the click. The commit that turning it on may owe happens after.
-            Toggle("Auto-commit", isOn: $controller.autoCommit)
-                .toggleStyle(.checkbox)
-                .onChange(of: controller.autoCommit) { _, enabled in
-                    tab.autoCommit = enabled
-                    Task { await controller.setAutoCommit(enabled) }
-                }
-                .help("Off holds a transaction open until you commit or roll back")
+            if controller.isProduction {
+                // Production never auto-commits: every write waits for Commit, so the
+                // checkbox would only promise something the tab does not do.
+                Badge(text: "MANUAL COMMIT", color: .red)
+                    .help("A production connection holds every write in a transaction until you commit or roll back")
+            } else {
+                Toggle("Auto-commit", isOn: $controller.autoCommit)
+                    .toggleStyle(.checkbox)
+                    .onChange(of: controller.autoCommit) { _, enabled in
+                        tab.autoCommit = enabled
+                        Task { await controller.setAutoCommit(enabled) }
+                    }
+                    .help("Off holds a transaction open until you commit or roll back")
+            }
 
             if controller.isInTransaction {
                 Badge(text: "TRANSACTION OPEN", color: .orange)

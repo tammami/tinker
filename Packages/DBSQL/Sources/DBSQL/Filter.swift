@@ -181,7 +181,7 @@ public enum FilterCompiler {
                     default: "%\(escaped)"
                     }
                 // Casting to text lets the same filter work on numeric and date columns.
-                let lhs = dialect == .postgresql ? "\(column)::text" : "CAST(\(column) AS CHAR)"
+                let lhs = SQLLiteral.textCast(column, dialect: dialect)
                 add("\(lhs) LIKE \(placeholder(.string(pattern))) ESCAPE '!'", rule: rule)
             case .inList:
                 guard !rule.values.isEmpty else { continue }
@@ -201,9 +201,17 @@ public enum FilterCompiler {
                 let pattern = "%\(escapeLikePattern(text))%"
                 let parts = targets.map { name -> String in
                     let quoted = Identifier.quote(name, dialect: dialect)
-                    let lhs = dialect == .postgresql ? "\(quoted)::text" : "CAST(\(quoted) AS CHAR)"
-                    let op = dialect == .postgresql ? "ILIKE" : "LIKE"
-                    return "\(lhs) \(op) \(placeholder(.string(pattern))) ESCAPE '!'"
+                    let lhs = SQLLiteral.textCast(quoted, dialect: dialect)
+                    switch dialect {
+                    case .postgresql:
+                        return "\(lhs) ILIKE \(placeholder(.string(pattern))) ESCAPE '!'"
+                    case .mysql:
+                        // The collation folds case already.
+                        return "\(lhs) LIKE \(placeholder(.string(pattern))) ESCAPE '!'"
+                    case .sqlite:
+                        // LIKE folds ASCII only; the driver's lower() knows the rest.
+                        return "lower(\(lhs)) LIKE lower(\(placeholder(.string(pattern)))) ESCAPE '!'"
+                    }
                 }
                 add("(" + parts.joined(separator: " OR ") + ")", rule: rule)
             }

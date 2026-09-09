@@ -143,7 +143,7 @@ public struct DatabaseDumper: Sendable {
         formatter.formatOptions = [.withInternetDateTime]
         var lines = [
             "Tinker dump",
-            "Server: \(server) (\(dialect == .postgresql ? "PostgreSQL" : "MySQL"))",
+            "Server: \(server) (\(dialect.displayName))",
             "Database: \(database)",
             "Written: \(formatter.string(from: Date()))",
             "Content: \(options.content.title)",
@@ -221,6 +221,10 @@ public struct DatabaseDumper: Sendable {
             try await emit("SET FOREIGN_KEY_CHECKS = 0")
             try await emit("SET UNIQUE_CHECKS = 0")
             try await emit("SET sql_mode = 'NO_AUTO_VALUE_ON_ZERO'")
+        case .sqlite:
+            // Tables arrive in dependency order, but a cycle or a self-reference would
+            // still trip the checks; the importer turns them back on at the end.
+            try await emit("PRAGMA foreign_keys = OFF")
         }
 
         // MARK: Order
@@ -334,6 +338,9 @@ public struct DatabaseDumper: Sendable {
                         // MySQL has no CREATE OR REPLACE for routines.
                         let qualified = Identifier.qualify([target.database, routine.name], dialect: .mysql)
                         try await emit("DROP \(verb) IF EXISTS \(qualified)")
+                    case .sqlite:
+                        // SQLite has no stored routines; nothing is ever listed here.
+                        continue
                     }
                     try await emit(portable(rewrite(definition, selection)))
                 }
@@ -353,9 +360,14 @@ public struct DatabaseDumper: Sendable {
         }
 
         // MARK: Epilogue
-        if dialect == .mysql {
+        switch dialect {
+        case .mysql:
             try await emit("SET UNIQUE_CHECKS = 1")
             try await emit("SET FOREIGN_KEY_CHECKS = 1")
+        case .sqlite:
+            try await emit("PRAGMA foreign_keys = ON")
+        case .postgresql:
+            break
         }
         state.stage = "Done"
         state.currentTable = nil
@@ -487,9 +499,9 @@ public struct DatabaseDumper: Sendable {
 
     /// Server DDL with the source schema and renamed tables replaced by their targets.
     func rewrite(_ sql: String, _ selection: DumpSelection) -> String {
-        let sourceQualifier = dialect == .postgresql ? selection.schema.schema : selection.schema.database
+        let sourceQualifier = dialect == .mysql ? selection.schema.database : selection.schema.schema
         let target = targetSchema(selection)
-        let targetQualifier = dialect == .postgresql ? target.schema : target.database
+        let targetQualifier = dialect == .mysql ? target.database : target.schema
         guard sourceQualifier != targetQualifier || !renaming.tableNames.isEmpty else { return sql }
 
         let tokens = SQLTokenizer.tokenize(sql, dialect: dialect)
@@ -585,6 +597,13 @@ public struct DatabaseDumper: Sendable {
                 "DROP TRIGGER IF EXISTS \(name)",
                 "CREATE TRIGGER \(name) \(timing) \(events) ON \(target) FOR EACH ROW \(portable(rewrite(body, selection)))",
             ]
+        case .sqlite:
+            // The body is the trigger's own `BEGIN … END` block, kept verbatim.
+            guard let body = trigger.body else { return [] }
+            let name = Identifier.quote(trigger.name, dialect: .sqlite)
+            var statement = "CREATE TRIGGER \(name) \(timing) \(events) ON \(target) FOR EACH ROW"
+            if let condition = trigger.condition, !condition.isEmpty { statement += " WHEN (\(condition))" }
+            return ["DROP TRIGGER IF EXISTS \(name)", "\(statement)\n\(rewrite(body, selection))"]
         }
     }
 

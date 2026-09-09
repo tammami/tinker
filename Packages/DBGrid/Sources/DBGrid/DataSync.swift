@@ -284,6 +284,7 @@ public struct DataSynchronizer: Sendable {
         switch dialect {
         case .postgresql: return "\(column) COLLATE \"C\""
         case .mysql: return "CAST(\(column) AS BINARY)"
+        case .sqlite: return "\(column) COLLATE BINARY"
         }
     }
 

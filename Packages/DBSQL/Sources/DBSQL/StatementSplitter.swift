@@ -91,6 +91,8 @@ public struct SQLStatement: Sendable, Hashable, Identifiable {
             "ANALYZE", "ANALYSE", "VERBOSE", "COSTS", "SETTINGS", "BUFFERS", "WAL", "TIMING", "SUMMARY",
             "FORMAT", "JSON", "XML", "YAML", "TEXT", "TREE", "TRADITIONAL", "TRUE", "FALSE", "ON", "OFF",
             "GENERIC_PLAN", "MEMORY", "SERIALIZE", "NONE", "BINARY",
+            // SQLite: `EXPLAIN QUERY PLAN <statement>`.
+            "QUERY", "PLAN",
         ]
         var runs = false
         var index = 1
@@ -161,13 +163,17 @@ public struct SQLStatement: Sendable, Hashable, Identifiable {
 /// Drivers never split; this is the only splitter, and the app executes the statements it
 /// returns one at a time on the same connection (SPEC §7.2). It understands string
 /// literals, quoted identifiers, line and block comments, PostgreSQL dollar-quoted bodies
-/// and nested block comments, and the MySQL client's `DELIMITER` directive, so pasted dumps
-/// containing stored procedures split correctly.
+/// and nested block comments, the MySQL client's `DELIMITER` directive, and SQLite's
+/// `CREATE TRIGGER … BEGIN … END` blocks, so pasted dumps containing stored procedures and
+/// triggers split correctly.
 public enum StatementSplitter {
     public static func split(_ sql: String, dialect: SQLDialect) -> [SQLStatement] {
         var statements: [SQLStatement] = []
         var scanner = SQLScanner(sql)
         var delimiter = ";"
+        /// SQLite: how many `BEGIN`/`CASE` blocks of a trigger body are open. A semicolon
+        /// inside one belongs to the body, not to the script.
+        var blockDepth = 0
         var statementStart = scanner.index
         var statementStartUTF16 = scanner.utf16Offset
         var statementStartLine = scanner.line
@@ -217,7 +223,12 @@ public enum StatementSplitter {
                 continue
             }
 
-            if matchesDelimiter(scanner, delimiter) {
+            if dialect == .sqlite, let delta = sqliteBlockDelta(&scanner, statementStart: statementStart, depth: blockDepth) {
+                blockDepth = max(0, blockDepth + delta)
+                continue
+            }
+
+            if blockDepth == 0, matchesDelimiter(scanner, delimiter) {
                 let end = scanner.index
                 let endUTF16 = scanner.utf16Offset
                 scanner.advance(delimiter.unicodeScalars.count)
@@ -232,6 +243,54 @@ public enum StatementSplitter {
         }
         flush(end: scanner.index, endUTF16: scanner.utf16Offset, terminator: nil)
         return statements
+    }
+
+    /// SQLite trigger bodies: consumes the word under the cursor when it is one, and says
+    /// how it changes the block depth — `BEGIN` and `CASE` open a block, `END` closes one.
+    /// A `BEGIN` only opens a block inside a `CREATE TRIGGER`; on its own it starts a
+    /// transaction and is a statement like any other. Returns nil when the cursor is not
+    /// on a word.
+    private static func sqliteBlockDelta(_ scanner: inout SQLScanner, statementStart: Int, depth: Int) -> Int? {
+        guard let scalar = scanner.peek(), SQLScanner.isIdentifierScalar(scalar), !(scalar.value >= 0x30 && scalar.value <= 0x39)
+        else { return nil }
+        if scanner.index > 0, let previous = scanner.peek(-1), SQLScanner.isIdentifierScalar(previous) { return nil }
+        var word = String.UnicodeScalarView()
+        while let next = scanner.peek(), SQLScanner.isIdentifierScalar(next) {
+            word.append(next)
+            scanner.advance()
+        }
+        switch String(word).uppercased() {
+        case "BEGIN", "CASE":
+            if depth > 0 { return 1 }
+            return isSQLiteTriggerStatement(scanner.text(from: statementStart)) ? 1 : 0
+        case "END":
+            return depth > 0 ? -1 : 0
+        default:
+            return 0
+        }
+    }
+
+    /// True when the text so far opens with `CREATE [TEMP|TEMPORARY] TRIGGER`.
+    static func isSQLiteTriggerStatement(_ text: String) -> Bool {
+        var words: [String] = []
+        var scanner = SQLScanner(text)
+        while !scanner.isAtEnd, words.count < 3 {
+            if scanner.consumeQuotedOrComment(dialect: .sqlite) != nil { continue }
+            guard let scalar = scanner.peek() else { break }
+            if SQLScanner.isIdentifierScalar(scalar) {
+                var word = String.UnicodeScalarView()
+                while let next = scanner.peek(), SQLScanner.isIdentifierScalar(next) {
+                    word.append(next)
+                    scanner.advance()
+                }
+                words.append(String(word).uppercased())
+            } else {
+                scanner.advance()
+            }
+        }
+        guard words.first == "CREATE", words.count >= 2 else { return false }
+        if words[1] == "TRIGGER" { return true }
+        return words.count >= 3 && (words[1] == "TEMP" || words[1] == "TEMPORARY") && words[2] == "TRIGGER"
     }
 
     /// The statement containing `utf16Offset`, for "run the statement under the cursor".

@@ -20,18 +20,26 @@ public struct TransportInfo: Sendable, Hashable {
     public var protocolVersion: String?
     /// The negotiated cipher suite; nil when unknown or unencrypted.
     public var cipher: String?
+    /// True when there is no wire at all: the database is a file this process reads
+    /// directly, so "encrypted" and "not encrypted" both describe nothing.
+    public var isLocalFile: Bool
 
-    public init(isEncrypted: Bool, protocolVersion: String? = nil, cipher: String? = nil) {
+    public init(isEncrypted: Bool, protocolVersion: String? = nil, cipher: String? = nil, isLocalFile: Bool = false) {
         self.isEncrypted = isEncrypted
         self.protocolVersion = protocolVersion
         self.cipher = cipher
+        self.isLocalFile = isLocalFile
     }
 
     /// The transport of a connection that never asked: treated as unencrypted.
     public static let plaintext = TransportInfo(isEncrypted: false)
 
+    /// The transport of a database file opened in-process: nothing travels a network.
+    public static let localFile = TransportInfo(isEncrypted: false, isLocalFile: true)
+
     /// One line for a tooltip: "TLSv1.3, TLS_AES_256_GCM_SHA384" or "Not encrypted".
     public var summary: String {
+        if isLocalFile { return "Local file, no network connection" }
         guard isEncrypted else { return "Not encrypted" }
         let detail = [protocolVersion, cipher].compactMap { $0 }.joined(separator: ", ")
         return detail.isEmpty ? "Encrypted" : detail

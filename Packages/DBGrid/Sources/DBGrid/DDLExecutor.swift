@@ -43,8 +43,8 @@ public actor DDLExecutor {
         self.dialect = dialect
     }
 
-    /// True when the engine can undo a failed run. MySQL cannot.
-    public nonisolated var isTransactional: Bool { dialect == .postgresql }
+    /// True when the engine can undo a failed run. MySQL cannot; PostgreSQL and SQLite can.
+    public nonisolated var isTransactional: Bool { dialect != .mysql }
 
     public func run(_ statements: [GeneratedDDL]) async throws -> DDLExecutionResult {
         guard !statements.isEmpty else { return DDLExecutionResult(applied: []) }

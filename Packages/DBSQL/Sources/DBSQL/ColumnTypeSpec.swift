@@ -257,6 +257,7 @@ public enum ColumnTypeCatalog {
         switch dialect {
         case .mysql: mysql
         case .postgresql: postgresql
+        case .sqlite: sqlite
         }
     }
 
@@ -268,6 +269,25 @@ public enum ColumnTypeCatalog {
 
     static let unsignedChoices = ["", "unsigned", "unsigned zerofill"]
     static let zoneChoices = ["without time zone", "with time zone"]
+
+    /// SQLite stores by affinity, so the names are conventions rather than types; these
+    /// are the ones its documentation lists, plus the aliases the app reads specially.
+    static let sqlite: [ColumnTypeChoice] = [
+        ColumnTypeChoice("integer"),
+        ColumnTypeChoice("real"),
+        ColumnTypeChoice("text"),
+        ColumnTypeChoice("blob"),
+        ColumnTypeChoice("numeric", takesLength: true, takesDecimals: true),
+        ColumnTypeChoice("boolean"),
+        ColumnTypeChoice("varchar", takesLength: true),
+        ColumnTypeChoice("date"),
+        ColumnTypeChoice("time"),
+        ColumnTypeChoice("datetime"),
+        ColumnTypeChoice("timestamp"),
+        ColumnTypeChoice("json"),
+        ColumnTypeChoice("uuid"),
+        ColumnTypeChoice("any"),
+    ]
 
     static let mysql: [ColumnTypeChoice] = [
         ColumnTypeChoice("tinyint", takesLength: true, suffixes: unsignedChoices),

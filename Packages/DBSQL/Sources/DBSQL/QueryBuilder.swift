@@ -362,9 +362,14 @@ public struct QueryBuilderModel: Sendable, Hashable, Codable {
     }
 
     /// `CREATE VIEW name AS <select>`; `OR REPLACE` so re-running after a change works.
+    /// SQLite has no `OR REPLACE` for views, so it drops the old one first.
     public func createViewSQL(name: TableRef, dialect: SQLDialect) -> String? {
         guard let select = sql(dialect: dialect) else { return nil }
-        return "CREATE OR REPLACE VIEW \(Identifier.qualified(name, dialect: dialect)) AS\n\(select)"
+        let qualified = Identifier.qualified(name, dialect: dialect)
+        if dialect == .sqlite {
+            return "DROP VIEW IF EXISTS \(qualified);\nCREATE VIEW \(qualified) AS\n\(select)"
+        }
+        return "CREATE OR REPLACE VIEW \(qualified) AS\n\(select)"
     }
 
     private static func render(
@@ -399,7 +404,7 @@ public struct QueryBuilderModel: Sendable, Hashable, Codable {
                     case .endsWith: "%\(escaped)"
                     default: "%\(escaped)%"
                     }
-                let lhs = dialect == .postgresql ? "\(column)::text" : "CAST(\(column) AS CHAR)"
+                let lhs = SQLLiteral.textCast(column, dialect: dialect)
                 text = "\(lhs) LIKE \(DBValue.string(pattern).sqlLiteral(dialect: dialect)) ESCAPE '!'"
             case .inList:
                 let items = condition.values.filter { !($0.text ?? "").isEmpty }

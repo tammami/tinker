@@ -133,15 +133,16 @@ public struct DMLGenerator: Sendable {
     /// `INSERT INTO t (cols…) VALUES (…)`, listing only the columns the user filled so
     /// every other column takes its server-side default.
     ///
-    /// PostgreSQL appends `RETURNING *` so the new row can be shown without a second
-    /// round trip; MySQL reads `lastInsertID` from the OK packet instead.
+    /// PostgreSQL and SQLite append `RETURNING *` so the new row can be shown without a
+    /// second round trip; MySQL reads `lastInsertID` from the OK packet instead.
     public func insert(values: [String: DBValue], returnRow: Bool = true) throws -> GeneratedStatement {
+        let returning = returnRow && Self.supportsReturning(dialect) ? " RETURNING *" : ""
         guard !values.isEmpty else {
             // An all-defaults row is still a legitimate insert.
             let sql =
-                dialect == .postgresql
-                ? "INSERT INTO \(qualifiedTable) DEFAULT VALUES" + (returnRow ? " RETURNING *" : "")
-                : "INSERT INTO \(qualifiedTable) () VALUES ()"
+                dialect == .mysql
+                ? "INSERT INTO \(qualifiedTable) () VALUES ()"
+                : "INSERT INTO \(qualifiedTable) DEFAULT VALUES" + returning
             return GeneratedStatement(
                 kind: .insert, sql: sql, parameters: [],
                 table: table, expectsSingleRow: true
@@ -151,13 +152,16 @@ public struct DMLGenerator: Sendable {
         let columns = values.keys.sorted()
         let columnList = columns.map { Identifier.quote($0, dialect: dialect) }.joined(separator: ", ")
         let placeholders = columns.map { parameters.bind(values[$0] ?? .null) }.joined(separator: ", ")
-        var sql = "INSERT INTO \(qualifiedTable) (\(columnList)) VALUES (\(placeholders))"
-        if returnRow, dialect == .postgresql { sql += " RETURNING *" }
+        let sql = "INSERT INTO \(qualifiedTable) (\(columnList)) VALUES (\(placeholders))" + returning
         return GeneratedStatement(
             kind: .insert, sql: sql, parameters: parameters.values,
             table: table, expectsSingleRow: true
         )
     }
+
+    /// Whether `INSERT … RETURNING` exists: PostgreSQL always, SQLite since 3.35 (2021),
+    /// which is older than any macOS this app runs on.
+    static func supportsReturning(_ dialect: SQLDialect) -> Bool { dialect != .mysql }
 
     /// `SELECT * FROM t WHERE identity…`, used to refetch a row after an insert.
     public func selectByIdentity(_ identity: [String: DBValue]) throws -> GeneratedStatement {

@@ -95,6 +95,31 @@ final class ScriptStreamTests: XCTestCase {
             ])
     }
 
+    func testSQLiteTriggerBodiesHoldTheirSemicolonsAndBackticksAreNames() {
+        let script = """
+            PRAGMA foreign_keys=OFF;
+            CREATE TRIGGER t_after AFTER INSERT ON t
+            BEGIN
+              UPDATE t SET n = CASE WHEN NEW.n IS NULL THEN 0 ELSE NEW.n END WHERE id = NEW.id;
+              INSERT INTO `log;x` VALUES ('a; b');
+            END;
+            BEGIN;
+            INSERT INTO t VALUES (1);
+            COMMIT;
+            """
+        assertStable(
+            script, dialect: .sqlite,
+            expected: [
+                .statement("PRAGMA foreign_keys=OFF", line: 1),
+                .statement(
+                    "CREATE TRIGGER t_after AFTER INSERT ON t\nBEGIN\n  UPDATE t SET n = CASE WHEN NEW.n IS NULL THEN 0 ELSE NEW.n END WHERE id = NEW.id;\n  INSERT INTO `log;x` VALUES ('a; b');\nEND",
+                    line: 2),
+                .statement("BEGIN", line: 7),
+                .statement("INSERT INTO t VALUES (1)", line: 8),
+                .statement("COMMIT", line: 9),
+            ])
+    }
+
     func testCopyBlocksPassTheirRowsThroughUntouched() {
         let script = """
             \\restrict abc

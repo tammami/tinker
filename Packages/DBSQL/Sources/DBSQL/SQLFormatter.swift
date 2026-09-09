@@ -78,7 +78,7 @@ public enum SQLTokenizer {
                 continue
             }
 
-            if scalar == "?", dialect == .mysql {
+            if scalar == "?", dialect != .postgresql {
                 scanner.advance()
                 tokens.append(SQLToken(kind: .parameter, text: "?", utf16Range: startUTF16 ..< scanner.utf16Offset))
                 continue
@@ -171,6 +171,8 @@ public enum SQLTokenizer {
         "SCHEMA", "SELECT", "SET", "SHOW", "SIMILAR", "SOME", "TABLE", "TEMPORARY", "THEN", "TRIGGER",
         "TRUE", "TRUNCATE", "UNBOUNDED", "UNION", "UNIQUE", "UNLOGGED", "UPDATE", "USING", "VACUUM",
         "VALUES", "VIEW", "WHEN", "WHERE", "WINDOW", "WITH", "WITHOUT",
+        // SQLite
+        "ATTACH", "AUTOINCREMENT", "DETACH", "GLOB", "PRAGMA", "REINDEX", "STRICT", "VIRTUAL",
     ]
 }
 

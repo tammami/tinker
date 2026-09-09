@@ -3,7 +3,7 @@ import Foundation
 /// Names a schema: a PostgreSQL namespace inside a database, or a MySQL database.
 public struct SchemaRef: Sendable, Hashable, Codable, Identifiable, CustomStringConvertible {
     public let database: String
-    /// PostgreSQL namespace. MySQL uses ``SchemaRef/mysqlPseudoSchema``.
+    /// PostgreSQL namespace. MySQL and SQLite use a pseudo-schema (``SchemaRef/mysql(_:)``, ``SchemaRef/sqlite``).
     public let schema: String
 
     public init(database: String, schema: String) {
@@ -14,6 +14,25 @@ public struct SchemaRef: Sendable, Hashable, Codable, Identifiable, CustomString
     /// MySQL has no schema layer; its single pseudo-schema carries the database's own name.
     public static func mysql(_ database: String) -> SchemaRef {
         SchemaRef(database: database, schema: database)
+    }
+
+    /// SQLite's one schema. A database file is opened as `main`, and every table in it
+    /// lives there; the pseudo-schema carries that name on both levels.
+    public static let sqliteMainSchema = "main"
+
+    /// SQLite's single pseudo-schema, `main.main`.
+    public static var sqlite: SchemaRef {
+        SchemaRef(database: sqliteMainSchema, schema: sqliteMainSchema)
+    }
+
+    /// The pseudo-schema of a dialect without a schema layer — MySQL's database, or
+    /// SQLite's `main` — and nil for a dialect whose schemas come from the catalog.
+    public static func pseudoSchema(_ dialect: SQLDialect, database: String) -> SchemaRef? {
+        switch dialect {
+        case .postgresql: nil
+        case .mysql: mysql(database)
+        case .sqlite: sqlite
+        }
     }
 
     public var id: String { "\(database).\(schema)" }

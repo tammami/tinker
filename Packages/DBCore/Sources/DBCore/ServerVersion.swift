@@ -3,7 +3,7 @@ import Foundation
 /// Which server product is on the other end. Introspection queries branch on this
 /// where catalogs differ.
 public enum ServerFlavor: String, Sendable, Hashable, Codable, CaseIterable {
-    case postgresql, mysql, mariadb, percona, aurora, unknown
+    case postgresql, mysql, mariadb, percona, aurora, sqlite, unknown
 }
 
 /// The server's version, parsed and in its original spelling.

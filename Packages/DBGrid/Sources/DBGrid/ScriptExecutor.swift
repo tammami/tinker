@@ -250,6 +250,10 @@ public struct ScriptExecutor: Sendable {
                     _ = try? await connection.executeCollecting("SET UNIQUE_CHECKS = 1")
                     _ = try? await connection.executeCollecting("SET FOREIGN_KEY_CHECKS = 1")
                 }
+            case .sqlite:
+                if options.disableForeignKeyChecks {
+                    _ = try? await connection.executeCollecting("PRAGMA foreign_keys = ON")
+                }
             }
         }
 
@@ -274,9 +278,17 @@ public struct ScriptExecutor: Sendable {
         }
 
         do {
-            if dialect == .mysql, options.disableForeignKeyChecks {
-                _ = try await connection.executeCollecting("SET FOREIGN_KEY_CHECKS = 0")
-                _ = try await connection.executeCollecting("SET UNIQUE_CHECKS = 0")
+            if options.disableForeignKeyChecks {
+                switch dialect {
+                case .mysql:
+                    _ = try await connection.executeCollecting("SET FOREIGN_KEY_CHECKS = 0")
+                    _ = try await connection.executeCollecting("SET UNIQUE_CHECKS = 0")
+                case .sqlite:
+                    // A no-op inside a transaction, so it runs before the batches begin.
+                    _ = try await connection.executeCollecting("PRAGMA foreign_keys = OFF")
+                case .postgresql:
+                    break
+                }
             }
 
             while let chunk = try await channel.next() {

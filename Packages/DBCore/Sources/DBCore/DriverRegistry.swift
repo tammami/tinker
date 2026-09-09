@@ -33,6 +33,11 @@ public struct DriverRegistry: Sendable {
 
     /// The default port for a dialect, from its driver when one is registered.
     public func defaultPort(for dialect: SQLDialect) -> Int {
-        (try? driver(for: dialect).defaultPort) ?? (dialect == .postgresql ? 5432 : 3306)
+        if let port = try? driver(for: dialect).defaultPort { return port }
+        return switch dialect {
+        case .postgresql: 5_432
+        case .mysql: 3_306
+        case .sqlite: 0
+        }
     }
 }

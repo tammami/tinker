@@ -25,7 +25,8 @@ public struct TransportSummary: Sendable, Hashable {
     }
 
     /// True when every hop is protected: TLS on the wire, or an SSH tunnel around it.
-    public var isProtected: Bool { transport.isEncrypted || isTunnelled }
+    /// A database file read in-process has no hop to protect.
+    public var isProtected: Bool { transport.isEncrypted || isTunnelled || transport.isLocalFile }
 
     /// One line for the status bar tooltip.
     public var summary: String {
@@ -160,6 +161,7 @@ public actor ConnectionSession {
             switch config.dialect {
             case .postgresql: "SET default_transaction_read_only = \(isReadOnly ? "on" : "off")"
             case .mysql: "SET SESSION TRANSACTION READ \(isReadOnly ? "ONLY" : "WRITE")"
+            case .sqlite: "PRAGMA query_only = \(isReadOnly ? 1 : 0)"
             }
         do {
             _ = try await connection.executeCollecting(sql)

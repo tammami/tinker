@@ -93,7 +93,8 @@ struct SQLScanner {
             // set; either way the closing quote is what ends it, so one rule serves both.
             consumeQuoted(terminator: "\"", backslashEscapes: dialect == .mysql)
             return text(from: start)
-        case "`" where dialect == .mysql:
+        case "`" where dialect != .postgresql:
+            // MySQL's identifier quote, which SQLite accepts too.
             consumeQuoted(terminator: "`", backslashEscapes: false)
             return text(from: start)
         case "-" where peek(1) == "-":

@@ -9,7 +9,7 @@ public enum Identifier {
     /// Wraps `name` in the dialect's quotes, escaping any embedded quote character.
     public static func quote(_ name: String, dialect: SQLDialect) -> String {
         switch dialect {
-        case .postgresql:
+        case .postgresql, .sqlite:
             "\"\(name.replacingOccurrences(of: "\"", with: "\"\""))\""
         case .mysql:
             // A backtick is escaped by doubling it. MySQL forbids U+0000 in identifiers,
@@ -26,11 +26,16 @@ public enum Identifier {
     /// The qualified name a driver should use for a table.
     ///
     /// PostgreSQL qualifies with the schema; MySQL, whose schema layer is the database
-    /// itself, qualifies with the database.
+    /// itself, qualifies with the database. SQLite has one schema, `main`, and a table in
+    /// it is written bare; only a table in an attached database carries its schema.
     public static func qualified(_ table: TableRef, dialect: SQLDialect) -> String {
         switch dialect {
         case .postgresql: qualify([table.schema, table.name], dialect: dialect)
         case .mysql: qualify([table.database, table.name], dialect: dialect)
+        case .sqlite:
+            table.schema == SchemaRef.sqliteMainSchema || table.schema.isEmpty
+                ? quote(table.name, dialect: dialect)
+                : qualify([table.schema, table.name], dialect: dialect)
         }
     }
 
@@ -55,13 +60,29 @@ public enum Identifier {
             if !allowed { return true }
             if name.allSatisfy(\.isNumber) { return true }
             return reservedMySQL.contains(name.uppercased())
+        case .sqlite:
+            // SQLite keeps the case it is given and accepts [0-9a-zA-Z$_] unquoted, but
+            // a name may not start with a digit, and `sqlite_` names are the engine's own.
+            guard let first = name.first, first == "_" || first.isLetter else { return true }
+            let allowed = name.allSatisfy { $0 == "_" || $0 == "$" || $0.isLetter || $0.isNumber }
+            if !allowed { return true }
+            if name.lowercased().hasPrefix("sqlite_") { return true }
+            return reservedSQLite.contains(name.uppercased())
         }
     }
 
     /// Removes one layer of quoting, undoubling any escaped quote character.
     public static func unquote(_ text: String, dialect: SQLDialect) -> String {
-        let quoteCharacter: Character = dialect == .postgresql ? "\"" : "`"
-        guard text.count >= 2, text.first == quoteCharacter, text.last == quoteCharacter else { return text }
+        // SQLite accepts both its own double quotes and MySQL's backticks.
+        let quoteCharacters: [Character] =
+            switch dialect {
+            case .postgresql: ["\""]
+            case .mysql: ["`"]
+            case .sqlite: ["\"", "`"]
+            }
+        guard text.count >= 2, let quoteCharacter = text.first, quoteCharacters.contains(quoteCharacter),
+            text.last == quoteCharacter
+        else { return text }
         let inner = String(text.dropFirst().dropLast())
         return inner.replacingOccurrences(of: "\(quoteCharacter)\(quoteCharacter)", with: String(quoteCharacter))
     }
@@ -102,5 +123,25 @@ public enum Identifier {
         "TRIGGER", "TRUE", "UNION", "UNIQUE", "UNLOCK", "UNSIGNED", "UPDATE", "USAGE", "USE", "USING",
         "VALUES", "VARBINARY", "VARCHAR", "VARYING", "VIRTUAL", "WHEN", "WHERE", "WHILE", "WITH", "WRITE",
         "XOR", "ZEROFILL",
+    ]
+
+    /// SQLite's reserved words, from its own keyword list, minus the ones it lets through
+    /// as identifiers in the positions this app writes them.
+    static let reservedSQLite: Set<String> = [
+        "ABORT", "ACTION", "ADD", "AFTER", "ALL", "ALTER", "ALWAYS", "ANALYZE", "AND", "AS", "ASC", "ATTACH",
+        "AUTOINCREMENT", "BEFORE", "BEGIN", "BETWEEN", "BY", "CASCADE", "CASE", "CAST", "CHECK", "COLLATE",
+        "COLUMN", "COMMIT", "CONFLICT", "CONSTRAINT", "CREATE", "CROSS", "CURRENT", "CURRENT_DATE",
+        "CURRENT_TIME", "CURRENT_TIMESTAMP", "DATABASE", "DEFAULT", "DEFERRABLE", "DEFERRED", "DELETE", "DESC",
+        "DETACH", "DISTINCT", "DO", "DROP", "EACH", "ELSE", "END", "ESCAPE", "EXCEPT", "EXCLUDE", "EXCLUSIVE",
+        "EXISTS", "EXPLAIN", "FAIL", "FILTER", "FIRST", "FOLLOWING", "FOR", "FOREIGN", "FROM", "FULL",
+        "GENERATED", "GLOB", "GROUP", "GROUPS", "HAVING", "IF", "IGNORE", "IMMEDIATE", "IN", "INDEX", "INDEXED",
+        "INITIALLY", "INNER", "INSERT", "INSTEAD", "INTERSECT", "INTO", "IS", "ISNULL", "JOIN", "KEY", "LAST",
+        "LEFT", "LIKE", "LIMIT", "MATCH", "MATERIALIZED", "NATURAL", "NO", "NOT", "NOTHING", "NOTNULL", "NULL",
+        "NULLS", "OF", "OFFSET", "ON", "OR", "ORDER", "OTHERS", "OUTER", "OVER", "PARTITION", "PLAN", "PRAGMA",
+        "PRECEDING", "PRIMARY", "QUERY", "RAISE", "RANGE", "RECURSIVE", "REFERENCES", "REGEXP", "REINDEX",
+        "RELEASE", "RENAME", "REPLACE", "RESTRICT", "RETURNING", "RIGHT", "ROLLBACK", "ROW", "ROWS",
+        "SAVEPOINT", "SELECT", "SET", "TABLE", "TEMP", "TEMPORARY", "THEN", "TIES", "TO", "TRANSACTION",
+        "TRIGGER", "UNBOUNDED", "UNION", "UNIQUE", "UPDATE", "USING", "VACUUM", "VALUES", "VIEW", "VIRTUAL",
+        "WHEN", "WHERE", "WINDOW", "WITH", "WITHOUT",
     ]
 }

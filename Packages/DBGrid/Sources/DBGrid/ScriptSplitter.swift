@@ -36,6 +36,9 @@ public struct IncrementalStatementSplitter: Sendable {
     private var state = State.code
     private var hasCode = false
     private var delimiter: [UInt8] = [UInt8(ascii: ";")]
+    /// SQLite: open `BEGIN`/`CASE` blocks of a trigger body, inside which a semicolon
+    /// does not end the statement.
+    private var blockDepth = 0
     /// Absolute offset of `buffer[0]`.
     private var bufferOffset: Int64 = 0
     private var line = 1
@@ -239,7 +242,16 @@ public struct IncrementalStatementSplitter: Sendable {
                     }
                 }
 
-                if byte == delimiter[0] {
+                if dialect == .sqlite, isWordStart(at: cursor) {
+                    // A whole word is needed to know whether it opens or closes a block.
+                    guard let wordEnd = indexOfWordEnd(from: cursor) ?? (atEnd ? end : nil) else { break scanning }
+                    noteCode()
+                    blockDepth = max(0, blockDepth + sqliteBlockDelta(word: buffer[cursor ..< wordEnd]))
+                    cursor = wordEnd
+                    continue
+                }
+
+                if blockDepth == 0, byte == delimiter[0] {
                     guard have(delimiter.count) else { break scanning }
                     if matches(delimiter, at: cursor) {
                         let statementEnd = cursor
@@ -267,7 +279,7 @@ public struct IncrementalStatementSplitter: Sendable {
                     noteCode()
                     state = .doubleQuoted
                     cursor += 1
-                case UInt8(ascii: "`") where dialect == .mysql:
+                case UInt8(ascii: "`") where dialect != .postgresql:
                     noteCode()
                     state = .backticked
                     cursor += 1
@@ -334,6 +346,72 @@ public struct IncrementalStatementSplitter: Sendable {
     private mutating func beginStatement() {
         hasCode = false
         state = .code
+        blockDepth = 0
+    }
+
+    // MARK: - SQLite trigger bodies
+
+    private static func isIdentifierByte(_ byte: UInt8) -> Bool {
+        (byte >= 0x30 && byte <= 0x39) || (byte >= 0x41 && byte <= 0x5A) || (byte >= 0x61 && byte <= 0x7A)
+            || byte == UInt8(ascii: "_") || byte == UInt8(ascii: "$") || byte >= 0x80
+    }
+
+    /// True when a word begins at `position`: a letter not preceded by an identifier byte.
+    private func isWordStart(at position: Int) -> Bool {
+        let byte = buffer[position]
+        guard (byte >= 0x41 && byte <= 0x5A) || (byte >= 0x61 && byte <= 0x7A) else { return false }
+        return position == 0 || !Self.isIdentifierByte(buffer[position - 1])
+    }
+
+    /// The index just past the word starting at `start`, or nil when it runs off the buffer.
+    private func indexOfWordEnd(from start: Int) -> Int? {
+        var index = start
+        while index < buffer.count {
+            if !Self.isIdentifierByte(buffer[index]) { return index }
+            index += 1
+        }
+        return nil
+    }
+
+    /// How `word` changes the block depth of a SQLite trigger body. `BEGIN` opens a block
+    /// only inside a `CREATE TRIGGER`; alone it starts a transaction.
+    private func sqliteBlockDelta(word: ArraySlice<UInt8>) -> Int {
+        let upper = String(decoding: word, as: UTF8.self).uppercased()
+        switch upper {
+        case "BEGIN", "CASE":
+            if blockDepth > 0 { return 1 }
+            return isTriggerStatement() ? 1 : 0
+        case "END":
+            return blockDepth > 0 ? -1 : 0
+        default:
+            return 0
+        }
+    }
+
+    /// True when the statement being gathered opens with `CREATE [TEMP|TEMPORARY] TRIGGER`.
+    private func isTriggerStatement() -> Bool {
+        var words: [String] = []
+        var index = base
+        while index < cursor, words.count < 3 {
+            let byte = buffer[index]
+            if isWordStart(at: index), let end = indexOfWordEnd(from: index) {
+                words.append(String(decoding: buffer[index ..< min(end, cursor)], as: UTF8.self).uppercased())
+                index = end
+            } else if byte == UInt8(ascii: "-"), index + 1 < cursor, buffer[index + 1] == UInt8(ascii: "-") {
+                index = indexOfNewline(from: index).map { $0 + 1 } ?? cursor
+            } else if byte == UInt8(ascii: "/"), index + 1 < cursor, buffer[index + 1] == UInt8(ascii: "*") {
+                var probe = index + 2
+                while probe + 1 < cursor, !(buffer[probe] == UInt8(ascii: "*") && buffer[probe + 1] == UInt8(ascii: "/")) {
+                    probe += 1
+                }
+                index = min(probe + 2, cursor)
+            } else {
+                index += 1
+            }
+        }
+        guard words.first == "CREATE", words.count >= 2 else { return false }
+        if words[1] == "TRIGGER" { return true }
+        return words.count >= 3 && (words[1] == "TEMP" || words[1] == "TEMPORARY") && words[2] == "TRIGGER"
     }
 
     /// The statement gathered so far, or nil when it holds nothing to run.

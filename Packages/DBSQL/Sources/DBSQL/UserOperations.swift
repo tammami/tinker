@@ -62,11 +62,14 @@ public struct UserRequest: Sendable, Hashable {
 public enum UserOperationsError: Error, Hashable, CustomStringConvertible {
     case emptyName
     case emptyPassword
+    /// SQLite: a database file has no accounts, so nothing can be created or altered.
+    case noUserAccounts
 
     public var description: String {
         switch self {
         case .emptyName: "The user needs a name"
         case .emptyPassword: "A new user needs a password"
+        case .noUserAccounts: "SQLite has no user accounts; access to a database is access to its file"
         }
     }
 }
@@ -99,6 +102,8 @@ public enum UserOperations {
                 statements.append(
                     "GRANT ALL PRIVILEGES ON *.* TO \(account(request, dialect: dialect)) WITH GRANT OPTION")
             }
+        case .sqlite:
+            throw UserOperationsError.noUserAccounts
         }
         statements.append(contentsOf: grants(request, dialect: dialect))
         return statements
@@ -126,15 +131,20 @@ public enum UserOperations {
                     "ALTER USER \(account(request, dialect: dialect)) IDENTIFIED BY \(SQLLiteral.quoteString(password, dialect: dialect))"
                 )
             }
+        case .sqlite:
+            throw UserOperationsError.noUserAccounts
         }
         statements.append(contentsOf: grants(request, dialect: dialect))
         return statements
     }
 
+    /// SQLite has no accounts; the statement is a comment that says so, since the caller
+    /// shows and runs it as SQL and would otherwise have nothing to show.
     public static func drop(_ request: UserRequest, dialect: SQLDialect) -> String {
         switch dialect {
         case .postgresql: "DROP ROLE \(Identifier.quote(request.name, dialect: dialect))"
         case .mysql: "DROP USER \(account(request, dialect: dialect))"
+        case .sqlite: "-- SQLite has no user accounts"
         }
     }
 
@@ -162,6 +172,8 @@ public enum UserOperations {
             return [
                 "GRANT \(list) ON \(Identifier.quote(database, dialect: dialect)).* TO \(account(request, dialect: dialect))\(option)"
             ]
+        case .sqlite:
+            return []
         }
     }
 

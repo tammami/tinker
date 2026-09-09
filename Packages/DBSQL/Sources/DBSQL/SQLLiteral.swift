@@ -20,7 +20,12 @@ extension DBValue {
         case let .double(value):
             if value.isNaN || value.isInfinite {
                 let text = DBValue.canonicalDouble(value)
-                return dialect == .postgresql ? "'\(text)'::float8" : SQLLiteral.quoteString(text, dialect: dialect)
+                switch dialect {
+                case .postgresql: return "'\(text)'::float8"
+                // SQLite has no NaN; an infinity is spelled as a literal beyond its range.
+                case .sqlite: return value.isNaN ? "NULL" : (value < 0 ? "-9e999" : "9e999")
+                case .mysql: return SQLLiteral.quoteString(text, dialect: dialect)
+                }
             }
             return String(value)
         case let .decimal(value):
@@ -31,22 +36,38 @@ extension DBValue {
         case let .bytes(data):
             return SQLLiteral.byteLiteral(data, dialect: dialect)
         case let .date(value):
+            // SQLite has no date type: dates are the ISO text its date functions read.
             let text = SQLLiteral.quoteString(value.description, dialect: dialect)
-            return dialect == .postgresql ? "\(text)::date" : "DATE \(text)"
+            switch dialect {
+            case .postgresql: return "\(text)::date"
+            case .mysql: return "DATE \(text)"
+            case .sqlite: return text
+            }
         case let .time(value):
             let text = SQLLiteral.quoteString(value.description, dialect: dialect)
-            guard dialect == .postgresql else { return "TIME \(text)" }
-            return value.tzOffsetSeconds == nil ? "\(text)::time" : "\(text)::timetz"
+            switch dialect {
+            case .postgresql: return value.tzOffsetSeconds == nil ? "\(text)::time" : "\(text)::timetz"
+            case .mysql: return "TIME \(text)"
+            case .sqlite: return text
+            }
         case let .timestamp(value):
             let text = SQLLiteral.quoteString(value.serverText, dialect: dialect)
-            guard dialect == .postgresql else { return "TIMESTAMP \(text)" }
-            return value.hasTimeZone ? "\(text)::timestamptz" : "\(text)::timestamp"
+            switch dialect {
+            case .postgresql: return value.hasTimeZone ? "\(text)::timestamptz" : "\(text)::timestamp"
+            case .mysql: return "TIMESTAMP \(text)"
+            case .sqlite: return text
+            }
         case let .uuid(value):
             let text = SQLLiteral.quoteString(value.uuidString.lowercased(), dialect: dialect)
             return dialect == .postgresql ? "\(text)::uuid" : text
         case let .json(value):
             let text = SQLLiteral.quoteString(value, dialect: dialect)
-            return dialect == .postgresql ? "\(text)::jsonb" : "CAST(\(text) AS JSON)"
+            switch dialect {
+            case .postgresql: return "\(text)::jsonb"
+            case .mysql: return "CAST(\(text) AS JSON)"
+            // SQLite's JSON functions take text; there is no JSON type to cast to.
+            case .sqlite: return text
+            }
         case let .array(items):
             // Arrays are PostgreSQL-only; in MySQL the closest honest rendering is JSON text.
             guard dialect == .postgresql else {
@@ -80,7 +101,8 @@ public enum SQLLiteral {
     /// an escape by default, so both are escaped.
     public static func quoteString(_ value: String, dialect: SQLDialect) -> String {
         switch dialect {
-        case .postgresql:
+        case .postgresql, .sqlite:
+            // SQLite, like standard SQL, knows no backslash escapes at all.
             return "'\(value.replacingOccurrences(of: "'", with: "''"))'"
         case .mysql:
             var escaped = ""
@@ -102,11 +124,22 @@ public enum SQLLiteral {
         let hex = data.map { String(format: "%02x", $0) }.joined()
         switch dialect {
         case .postgresql: return "'\\x\(hex)'::bytea"
-        case .mysql: return hex.isEmpty ? "X''" : "X'\(hex)'"
+        case .mysql, .sqlite: return hex.isEmpty ? "X''" : "X'\(hex)'"
         }
     }
 
-    /// The placeholder for parameter `index` (one-based): `$1` in PostgreSQL, `?` in MySQL.
+    /// `expression` cast to text, in the engine's own spelling. `CHAR` is not a SQLite
+    /// type name — it would take numeric affinity — so SQLite casts to `TEXT`.
+    public static func textCast(_ expression: String, dialect: SQLDialect) -> String {
+        switch dialect {
+        case .postgresql: "\(expression)::text"
+        case .mysql: "CAST(\(expression) AS CHAR)"
+        case .sqlite: "CAST(\(expression) AS TEXT)"
+        }
+    }
+
+    /// The placeholder for parameter `index` (one-based): `$1` in PostgreSQL, `?` in
+    /// MySQL and SQLite.
     public static func placeholder(_ index: Int, dialect: SQLDialect) -> String {
         dialect == .postgresql ? "$\(index)" : "?"
     }
@@ -125,7 +158,7 @@ public enum SQLLiteral {
                 output += skipped
                 continue
             }
-            if dialect == .mysql, scalar == "?" {
+            if dialect != .postgresql, scalar == "?" {
                 scanner.advance()
                 output +=
                     nextParameter < parameters.count

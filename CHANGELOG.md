@@ -26,7 +26,22 @@ All notable changes to Tinker are recorded here. The format follows
 - The test suite runs against a temporary SQLite database on every invocation, with no
   server and no configuration.
 
+- **Data Transfer, Data Synchronization and Structure Synchronization work across
+  engines.** Any connection can be the source or the target: MySQL to PostgreSQL,
+  PostgreSQL to SQLite, and every other pairing. Tables are rebuilt in the target's own
+  types with their keys, indexes and defaults; rows travel in the target's literals; a
+  MySQL `int` compares equal to a PostgreSQL `integer` when structures are compared. What
+  cannot cross — views, routines, triggers and check constraints, which are written in the
+  source's SQL — stays behind and is listed by name when the transfer finishes.
+- **The SQL editor completes functions.** Type `DA` and the list offers `DATE`,
+  `DATE_FORMAT`, `DAY`, `DAYNAME`… with their signatures and categories, in the engine's
+  own spelling; choosing one inserts `DATE()` with the cursor inside the parentheses. The
+  catalog covers 281 MySQL, 291 PostgreSQL and 128 SQLite functions, and known functions
+  are coloured in the editor.
+
 ### Changed
+- A query tab on a production connection never auto-commits: the checkbox is replaced by a
+  "manual commit" mark, and every write waits in a transaction for Commit or Rollback.
 - Engine-specific panes say what an engine lacks instead of showing an empty page: SQLite
   has no users, sessions, stored routines or profiler, and the app says so.
 - The status bar shows "Local file" for a database opened in-process, where a server

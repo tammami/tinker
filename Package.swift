@@ -28,6 +28,7 @@ let package = Package(
         .library(name: "DBSQL", targets: ["DBSQL"]),
         .library(name: "DBPostgres", targets: ["DBPostgres"]),
         .library(name: "DBMySQL", targets: ["DBMySQL"]),
+        .library(name: "DBSQLite", targets: ["DBSQLite"]),
         .library(name: "DBTunnel", targets: ["DBTunnel"]),
         .library(name: "DBStore", targets: ["DBStore"]),
         .library(name: "DBGrid", targets: ["DBGrid"]),
@@ -76,6 +77,13 @@ let package = Package(
             swiftSettings: strict
         ),
         .target(
+            name: "DBSQLite",
+            // The system's libsqlite3, through the SQLite3 module macOS ships; no package.
+            dependencies: ["DBCore", "DBSQL"],
+            path: "Packages/DBSQLite/Sources/DBSQLite",
+            swiftSettings: strict
+        ),
+        .target(
             name: "DBTunnel",
             dependencies: [
                 "DBCore",
@@ -107,7 +115,7 @@ let package = Package(
 
         .executableTarget(
             name: "dbcli",
-            dependencies: ["DBCore", "DBSQL", "DBPostgres", "DBMySQL", "DBTunnel", "DBStore"],
+            dependencies: ["DBCore", "DBSQL", "DBPostgres", "DBMySQL", "DBSQLite", "DBTunnel", "DBStore"],
             path: "Tools/dbcli",
             swiftSettings: strict
         ),
@@ -140,6 +148,13 @@ let package = Package(
             swiftSettings: strict
         ),
         .testTarget(
+            name: "DBSQLiteTests",
+            // DBGrid is test-only here: the grid's data path is what a driver exists for.
+            dependencies: ["DBSQLite", "DBTestKit", "DBGrid"],
+            path: "Packages/DBSQLite/Tests/DBSQLiteTests",
+            swiftSettings: strict
+        ),
+        .testTarget(
             name: "DBTunnelTests",
             // DBPostgres is a *test-only* dependency here: the tunnel's acceptance
             // criterion is a real database reached through a real SSH forward, which is
@@ -160,7 +175,7 @@ let package = Package(
             // DBPostgres is a test-only dependency: the grid's acceptance criteria are
             // about a real million-row table, which needs a real driver. The DBGrid
             // library itself never imports one, and Scripts/ci.sh checks that.
-            dependencies: ["DBGrid", "DBTestKit", "DBPostgres", "DBMySQL"],
+            dependencies: ["DBGrid", "DBTestKit", "DBPostgres", "DBMySQL", "DBSQLite"],
             path: "Packages/DBGrid/Tests/DBGridTests",
             swiftSettings: strict
         ),

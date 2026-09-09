@@ -50,6 +50,7 @@ allowed_imports() {
         DBSQL)      echo "Foundation Logging DBCore" ;;
         DBPostgres) echo "Foundation Logging DBCore DBSQL PostgresNIO NIO NIOCore NIOPosix NIOSSL NIOConcurrencyHelpers" ;;
         DBMySQL)    echo "Foundation Logging DBCore DBSQL MySQLNIO NIO NIOCore NIOPosix NIOSSL NIOConcurrencyHelpers" ;;
+    DBSQLite)   echo "Foundation Logging DBCore DBSQL SQLite3" ;;
         DBTunnel)   echo "Foundation Logging DBCore Citadel Crypto NIO NIOCore NIOPosix NIOSSH" ;;
         DBStore)    echo "Foundation Logging DBCore SQLite3 Security" ;;
         DBGrid)     echo "Foundation Logging DBCore DBSQL os zlib" ;;
@@ -58,7 +59,7 @@ allowed_imports() {
     esac
 }
 lint_failed=0
-for module in DBCore DBSQL DBPostgres DBMySQL DBTunnel DBStore DBGrid DBTestKit; do
+for module in DBCore DBSQL DBPostgres DBMySQL DBSQLite DBTunnel DBStore DBGrid DBTestKit; do
     dir="Packages/$module/Sources/$module"
     [[ -d "$dir" ]] || continue
     allowed="$(allowed_imports "$module")"
@@ -135,6 +136,7 @@ grep -E "Test skipped" "$TEST_LOG" | sed -E 's/^.*: (Test skipped.*)$/    \1/' |
 echo
 echo "  PostgreSQL integration: $([[ $PG_SET == 1 ]] && echo "configured: ${TINKER_TEST_PG_URL:-<PG_URLS>}" | sed -E 's#://([^:@/]+):[^@]*@#://\1:***@#' || echo "NOT RUN (env unset)")"
 echo "  MySQL integration:      $([[ $MYSQL_SET == 1 ]] && echo "configured: ${TINKER_TEST_MYSQL_URL:-<MYSQL_URLS>}" | sed -E 's#://([^:@/]+):[^@]*@#://\1:***@#' || echo "NOT RUN (env unset)")"
+echo "  SQLite integration:     $([[ -n "${TINKER_TEST_SQLITE_DISABLED:-}" ]] && echo "NOT RUN (TINKER_TEST_SQLITE_DISABLED set)" || echo "ran against a temporary database file (no setup needed)")"
 echo "  engines that actually connected (reported by driver tests from Phase 1 on):"
 grep -E "server version" "$TEST_LOG" | sed "s/^/    /" | sort -u || echo "    none (no driver yet)"
 echo

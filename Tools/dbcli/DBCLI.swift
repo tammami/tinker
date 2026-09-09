@@ -9,6 +9,7 @@
 import DBCore
 import DBMySQL
 import DBPostgres
+import DBSQLite
 import DBSQL
 import DBTunnel
 import Foundation
@@ -88,6 +89,7 @@ struct DBCLI {
                 switch config.dialect {
                 case .postgresql: try await PostgresDriver.connect(config, logger: logger)
                 case .mysql: try await MySQLDriver.connect(config, logger: logger)
+                case .sqlite: try await SQLiteDriver.connect(config, logger: logger)
                 }
             defer { Task { await connection.close() } }
 
@@ -127,8 +129,11 @@ struct DBCLI {
 
     static func run(sql: String, on connection: any SQLConnection, options: Options) async throws {
         let dialect: SQLDialect =
-            await connection.serverVersion.flavor == .postgresql
-            ? .postgresql : .mysql
+            switch await connection.serverVersion.flavor {
+            case .postgresql: .postgresql
+            case .sqlite: .sqlite
+            case .mysql, .mariadb, .percona, .aurora, .unknown: .mysql
+            }
         let statements = StatementSplitter.split(sql, dialect: dialect)
         guard !statements.isEmpty else {
             standardError("no statements to run\n")
@@ -207,7 +212,8 @@ struct DBCLI {
 
     static func dumpSchema(_ connection: any SQLConnection, config: ResolvedConnectionConfig) async throws {
         let introspector = connection.introspector
-        let database = config.database ?? ""
+        // A SQLite connection's `database` is the file; the catalog calls it `main`.
+        let database = config.dialect == .sqlite ? SchemaRef.sqliteMainSchema : (config.database ?? "")
         var output: [String: Any] = [:]
         output["server"] = await connection.serverVersion.rawString
         output["databases"] = try await introspector.databases().map(\.name)
@@ -272,9 +278,17 @@ struct DBCLI {
             switch scheme {
             case "postgres", "postgresql", "pg": .postgresql
             case "mysql", "mariadb": .mysql
+            case "sqlite", "sqlite3", "file": .sqlite
             default: throw CLIError("Unsupported scheme \(scheme)")
             }
         var database = components.path
+        if dialect == .sqlite {
+            // `sqlite:///absolute/path.db` or `sqlite:relative.db`: the path is the database.
+            guard !database.isEmpty else { throw CLIError("A SQLite URL needs a file path: sqlite:///path/to/file.db") }
+            return ResolvedConnectionConfig(
+                configID: UUID(), dialect: .sqlite, host: "", port: 0, user: "", database: database,
+                tls: TLSConfig(mode: .disable))
+        }
         if database.hasPrefix("/") { database.removeFirst() }
 
         var options: [String: String] = [:]
@@ -294,7 +308,7 @@ struct DBCLI {
             configID: UUID(),
             dialect: dialect,
             host: components.host ?? "localhost",
-            port: components.port ?? (dialect == .postgresql ? 5432 : 3306),
+            port: components.port ?? (dialect == .postgresql ? 5_432 : 3_306),
             user: components.user ?? NSUserName(),
             password: components.password,
             database: database.isEmpty ? nil : database,
@@ -396,6 +410,7 @@ struct DBCLI {
             URL
               postgresql://user:password@host:5432/database?sslmode=require
               mysql://user:password@host:3306/database
+              sqlite:///path/to/file.db
             """)
     }
 }

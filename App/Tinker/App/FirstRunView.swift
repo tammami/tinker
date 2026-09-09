@@ -19,7 +19,7 @@ public struct FirstRunView: View {
                     .resizable()
                     .frame(width: 72, height: 72)
                 Text("Welcome to \(Product.name)").font(.title2.weight(.semibold))
-                Text("A native client for PostgreSQL and MySQL.")
+                Text("A native client for PostgreSQL, MySQL and SQLite.")
                     .foregroundStyle(.secondary)
                 Text(Product.credit).font(.caption).foregroundStyle(.tertiary)
             }

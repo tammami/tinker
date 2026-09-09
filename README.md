@@ -170,6 +170,8 @@ Tinker is specification-driven. Three documents carry the state of the project a
 
 Working rules for contributors, including the dependency direction, the concurrency model and the definition of done, are in [`CLAUDE.md`](CLAUDE.md).
 
+Release notes live in [`CHANGELOG.md`](CHANGELOG.md).
+
 ### Definition of done
 
 A feature is done when the build is warning-free under strict concurrency, the tests are green, the driver feature has an integration test that actually ran against a local server, and the performance criteria are measured with signposts rather than by eye.

@@ -13,6 +13,15 @@ public struct QueryTabView: View {
 
     @State private var resultPane: ResultPane = .result
 
+    /// What the session-database pop-up means on each engine.
+    private var sessionDatabaseHelp: String {
+        switch controller.dialect {
+        case .mysql: "The database unqualified names resolve against (USE)"
+        case .postgresql: "The schema unqualified names resolve against (search_path)"
+        case .sqlite: "The database file's one schema; unqualified names resolve in it"
+        }
+    }
+
     public var body: some View {
         VSplitView {
             VStack(spacing: 0) {
@@ -172,11 +181,7 @@ public struct QueryTabView: View {
                 )
             )
             .frame(width: 160)
-            .help(
-                controller.dialect == .mysql
-                    ? "The database unqualified names resolve against (USE)"
-                    : "The schema unqualified names resolve against (search_path)"
-            )
+            .help(sessionDatabaseHelp)
 
             BarDivider()
 

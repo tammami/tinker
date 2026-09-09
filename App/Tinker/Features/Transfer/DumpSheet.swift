@@ -50,12 +50,12 @@ struct DumpSheet: View {
             return tables.count == 1 ? "Dump “\(tables[0].name)”" : "Dump \(tables.count) tables"
         }
         if request.choosesSource { return "Dump Database" }
-        return dialect == .mysql ? "Dump database “\(schema.database)”" : "Dump schema “\(schema.schema)”"
+        return dialect.hasSchemaLayer ? "Dump schema “\(schema.schema)”" : "Dump database “\(schema.database)”"
     }
 
     private var sourceLine: String {
         let name = config?.name ?? "connection"
-        return dialect == .mysql ? "\(name) · \(schema.database)" : "\(name) · \(schema.database) · \(schema.schema)"
+        return dialect.hasSchemaLayer ? "\(name) · \(schema.database) · \(schema.schema)" : "\(name) · \(schema.database)"
     }
 
     private var chosenTables: [TableInfo] {
@@ -67,7 +67,7 @@ struct DumpSheet: View {
         if let tables = request.tables, tables.count == 1 {
             base = tables[0].name
         } else {
-            base = dialect == .mysql ? schema.database : "\(schema.database)_\(schema.schema)"
+            base = dialect.hasSchemaLayer ? "\(schema.database)_\(schema.schema)" : schema.database
         }
         return base + (compress ? ".sql.gz" : ".sql")
     }
@@ -94,7 +94,7 @@ struct DumpSheet: View {
                                 ForEach(DumpOptions.DataStyle.allCases) { style in Text(style.title).tag(style) }
                             }
                         }
-                        if options.content.includesData, options.dataStyle == .insert || dialect == .mysql {
+                        if options.content.includesData, options.dataStyle == .insert || dialect != .postgresql {
                             TextField("Rows per INSERT", value: $options.rowsPerInsert, format: .number)
                         }
                         Toggle("Compress with gzip (.sql.gz)", isOn: $compress)
@@ -213,7 +213,7 @@ struct DumpSheet: View {
                         }
                     }
                 }
-                if !endpoint.isMySQL {
+                if !endpoint.isFlat {
                     FieldRow(label: "Schema", labelWidth: 56) {
                         Picker("", selection: $endpoint.schema) {
                             ForEach(endpoint.schemas, id: \.self) { name in Text(name).tag(name) }
@@ -257,7 +257,7 @@ struct DumpSheet: View {
         // The panel may drop the double extension; the file's own name says what it is.
         if compress, url.pathExtension != "gz" { url = url.appendingPathExtension("gz") }
         var chosen = options
-        if dialect == .mysql { chosen.dataStyle = .insert }
+        if dialect != .postgresql { chosen.dataStyle = .insert }
         let resolved = DumpRequest(connectionID: connectionID, schema: schema, tables: request.tables)
         controller.dump(resolved, tables: chosenTables, options: chosen, compress: compress, to: url)
     }

@@ -139,14 +139,13 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         switch dialect {
         case .mysql: return session?.config.database
         case .postgresql: return "public"
+        case .sqlite: return SchemaRef.sqliteMainSchema
         }
     }
 
     private func schemaRef(_ schema: String) -> SchemaRef {
-        switch dialect {
-        case .mysql: SchemaRef.mysql(schema)
-        case .postgresql: SchemaRef(database: session?.config.database ?? "", schema: schema)
-        }
+        SchemaRef.pseudoSchema(dialect, database: schema)
+            ?? SchemaRef(database: session?.config.database ?? "", schema: schema)
     }
 
     /// Loads what autocomplete offers: the tables of the tab's schema or database, and the
@@ -159,7 +158,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         let database = session.config.database ?? ""
         var schemas: [String] = []
         switch dialect {
-        case .mysql:
+        case .mysql, .sqlite:
             if let databases = try? await session.introspection(.databases, load: { try await $0.databases() }) {
                 schemas = databases.map(\.name)
             }
@@ -422,6 +421,10 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         case .mysql:
             let schema = match.schema ?? sessionDatabase ?? database
             table = TableRef(schema: SchemaRef.mysql(schema), name: match.name)
+        case .sqlite:
+            // One schema, `main`, unless the statement names an attached database.
+            let schema = match.schema ?? SchemaRef.sqliteMainSchema
+            table = TableRef(database: schema, schema: schema, name: match.name)
         case .postgresql:
             table = TableRef(database: database, schema: match.schema ?? sessionDatabase ?? "public", name: match.name)
         }
@@ -720,13 +723,15 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     private func applySessionDatabase(on connection: any SQLConnection) async throws {
         guard let name = sessionDatabase, !name.isEmpty else { return }
         let quoted = Identifier.quote(name, dialect: dialect)
-        let sql =
-            switch dialect {
-            case .mysql: "USE \(quoted)"
-            // PostgreSQL cannot change database on an open connection; unqualified names
-            // resolve against the search path, which it can change.
-            case .postgresql: "SET search_path TO \(quoted)"
-            }
+        let sql: String
+        switch dialect {
+        case .mysql: sql = "USE \(quoted)"
+        // PostgreSQL cannot change database on an open connection; unqualified names
+        // resolve against the search path, which it can change.
+        case .postgresql: sql = "SET search_path TO \(quoted)"
+        // A SQLite connection is one file; unqualified names already resolve in `main`.
+        case .sqlite: return
+        }
         _ = try await connection.executeCollecting(sql)
     }
 
@@ -766,6 +771,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             result.profileNote =
                 "PostgreSQL has no profile that does not re-run the "
                 + "statement. Use EXPLAIN (ANALYZE) on a SELECT when you want its timings."
+        case .sqlite:
+            result.profileNote = "SQLite has no profiler. Use Explain for the query plan."
         }
     }
 
@@ -779,6 +786,16 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             case .postgresql:
                 """
                 SELECT * FROM pg_stat_database WHERE datname = current_database()
+                """
+            case .sqlite:
+                // No session counters in a file; the pragmas that describe it stand in.
+                """
+                SELECT 'page_size' AS name, page_size AS value FROM pragma_page_size
+                UNION ALL SELECT 'page_count', page_count FROM pragma_page_count
+                UNION ALL SELECT 'freelist_count', freelist_count FROM pragma_freelist_count
+                UNION ALL SELECT 'journal_mode', journal_mode FROM pragma_journal_mode
+                UNION ALL SELECT 'foreign_keys', foreign_keys FROM pragma_foreign_keys
+                UNION ALL SELECT 'encoding', encoding FROM pragma_encoding
                 """
             }
         do {
@@ -809,7 +826,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         do {
             _ = try await session.connect()
             switch dialect {
-            case .mysql:
+            case .mysql, .sqlite:
                 availableDatabases = try await session.introspection(.databases) {
                     try await $0.databases()
                 }.map(\.name)
@@ -825,9 +842,11 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             }
             if sessionDatabase == nil {
                 sessionDatabase =
-                    dialect == .mysql
-                    ? environment.connections.first { $0.id == connectionID }?.database
-                    : availableDatabases.first { $0 == "public" } ?? availableDatabases.first
+                    switch dialect {
+                    case .mysql: environment.connections.first { $0.id == connectionID }?.database
+                    case .sqlite: SchemaRef.sqliteMainSchema
+                    case .postgresql: availableDatabases.first { $0 == "public" } ?? availableDatabases.first
+                    }
             }
         } catch {
             statusText = (error as? DBError)?.errorDescription ?? String(describing: error)

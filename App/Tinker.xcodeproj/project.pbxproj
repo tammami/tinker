@@ -15,6 +15,7 @@
 		DB0000000000000000000104 /* DBTunnel in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000204 /* DBTunnel */; };
 		DB0000000000000000000105 /* DBPostgres in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000205 /* DBPostgres */; };
 		DB0000000000000000000106 /* DBMySQL in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000206 /* DBMySQL */; };
+		DB0000000000000000000107 /* DBSQLite in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000207 /* DBSQLite */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -58,6 +59,7 @@
 				DB0000000000000000000104 /* DBTunnel in Frameworks */,
 				DB0000000000000000000105 /* DBPostgres in Frameworks */,
 				DB0000000000000000000106 /* DBMySQL in Frameworks */,
+				DB0000000000000000000107 /* DBSQLite in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -116,6 +118,7 @@
 				DB0000000000000000000204 /* DBTunnel */,
 				DB0000000000000000000205 /* DBPostgres */,
 				DB0000000000000000000206 /* DBMySQL */,
+				DB0000000000000000000207 /* DBSQLite */,
 				DB0000000000000000000402 /* Sparkle */,
 			);
 			productName = Tinker;
@@ -361,19 +364,20 @@
 				CODE_SIGN_ENTITLEMENTS = Tinker/Resources/Tinker.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = F843PPA65P;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Tinker;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Tinker by ThinkFree";
 				INFOPLIST_KEY_SUEnableInstallerLauncherService = NO;
-				INFOPLIST_KEY_SUVerifyUpdateBeforeExtraction = YES;
 				INFOPLIST_KEY_SUFeedURL = "$(TINKER_APPCAST_URL)";
 				INFOPLIST_KEY_SUPublicEDKey = "$(TINKER_SPARKLE_PUBLIC_KEY)";
+				INFOPLIST_KEY_SUVerifyUpdateBeforeExtraction = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -395,19 +399,20 @@
 				CODE_SIGN_ENTITLEMENTS = Tinker/Resources/Tinker.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = F843PPA65P;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Tinker;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Tinker by ThinkFree";
 				INFOPLIST_KEY_SUEnableInstallerLauncherService = NO;
-				INFOPLIST_KEY_SUVerifyUpdateBeforeExtraction = YES;
 				INFOPLIST_KEY_SUFeedURL = "$(TINKER_APPCAST_URL)";
 				INFOPLIST_KEY_SUPublicEDKey = "$(TINKER_SPARKLE_PUBLIC_KEY)";
+				INFOPLIST_KEY_SUVerifyUpdateBeforeExtraction = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -527,6 +532,10 @@
 		DB0000000000000000000206 /* DBMySQL */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = DBMySQL;
+		};
+		DB0000000000000000000207 /* DBSQLite */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DBSQLite;
 		};
 		DB0000000000000000000402 /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;

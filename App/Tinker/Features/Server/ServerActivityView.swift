@@ -135,7 +135,7 @@ public final class ServerActivityController {
             let system: Set<String> = ["information_schema", "performance_schema", "mysql", "sys"]
             return ((try? await session.introspection(.databases) { try await $0.databases() }) ?? [])
                 .map(\.name).filter { !system.contains($0) }
-        case .postgresql:
+        case .postgresql, .sqlite:
             return ((try? await session.introspection(.databases) { try await $0.databases() }) ?? []).map(\.name)
         }
     }
@@ -232,7 +232,8 @@ public struct ServerActivityView: View {
                 }
                 BarDivider()
                 Picker("Pane", selection: $pane) {
-                    ForEach(Pane.allCases) { pane in
+                    // A SQLite file has no accounts, so there is no Users pane to show.
+                    ForEach(Pane.allCases.filter { $0 != .users || controller.dialect.hasUserAccounts }) { pane in
                         Label(pane.rawValue, systemImage: pane.icon).tag(pane)
                     }
                 }

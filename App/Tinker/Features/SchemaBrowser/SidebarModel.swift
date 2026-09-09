@@ -67,7 +67,9 @@ public final class SidebarModel {
             id: config.id.uuidString,
             kind: .connection(config.id),
             title: config.name,
-            subtitle: "\(config.user)@\(config.host)",
+            subtitle: config.dialect.isFileBased
+                ? ((config.database ?? "") as NSString).abbreviatingWithTildeInPath
+                : "\(config.user)@\(config.host)",
             symbolName: Icon.connection,
             children: childCache[config.id.uuidString] ?? []
         )
@@ -308,10 +310,10 @@ public final class SidebarModel {
             guard let session = environment.session(for: id, database: name) else { return [] }
             if session !== environment.session(for: id) { watchState(of: id, database: name, session: session) }
             _ = try await session.connect()
-            // MySQL has no schema layer: a database holds its tables directly, so the
-            // folders hang off the database row rather than off a schema of the same name.
-            if session.config.dialect == .mysql {
-                let ref = SchemaRef.mysql(name)
+            // MySQL and SQLite have no schema layer: a database holds its tables directly,
+            // so the folders hang off the database row rather than off a schema of the
+            // same name.
+            if let ref = SchemaRef.pseudoSchema(session.config.dialect, database: name) {
                 return try await children(
                     of: SidebarItem(
                         id: "\(item.id)/schema/\(name)",

@@ -82,11 +82,12 @@ final class EndpointModel {
 
     var config: ConnectionConfig? { environment.connections.first { $0.id == connectionID } }
     var dialect: SQLDialect { config?.dialect ?? .postgresql }
-    var isMySQL: Bool { dialect == .mysql }
+    /// True when the database is the schema — MySQL and SQLite — so there is no schema to pick.
+    var isFlat: Bool { !dialect.hasSchemaLayer }
 
     var schemaRef: SchemaRef? {
         guard connectionID != nil, !database.isEmpty else { return nil }
-        if isMySQL { return SchemaRef.mysql(database) }
+        if let pseudo = SchemaRef.pseudoSchema(dialect, database: database) { return pseudo }
         guard !schema.isEmpty else { return nil }
         return SchemaRef(database: database, schema: schema)
     }
@@ -96,7 +97,7 @@ final class EndpointModel {
         guard let config else { return "Choose a connection" }
         var parts = [config.name]
         if !database.isEmpty { parts.append(database) }
-        if !isMySQL, !schema.isEmpty { parts.append(schema) }
+        if !isFlat, !schema.isEmpty { parts.append(schema) }
         return parts.joined(separator: " · ")
     }
 
@@ -132,7 +133,7 @@ final class EndpointModel {
     /// Loads the schemas of the database (PostgreSQL) and then the objects of the schema.
     func loadDatabase() async {
         guard let connectionID, !database.isEmpty else { return }
-        if isMySQL {
+        if isFlat {
             schema = database
             await loadSchema()
             return
@@ -152,7 +153,7 @@ final class EndpointModel {
 
     func loadSchema() async {
         guard let connectionID, let ref = schemaRef,
-            let session = environment.session(for: connectionID, database: isMySQL ? nil : database)
+            let session = environment.session(for: connectionID, database: isFlat ? nil : database)
         else {
             tables = []
             routines = []
@@ -329,7 +330,7 @@ struct ToolsWizardSheet: View {
 
     private func endpointLine(_ endpoint: EndpointModel) -> String {
         guard !endpoint.database.isEmpty else { return "—" }
-        return endpoint.isMySQL || endpoint.schema.isEmpty
+        return endpoint.isFlat || endpoint.schema.isEmpty
             ? endpoint.database : "\(endpoint.database) · \(endpoint.schema)"
     }
 
@@ -408,7 +409,7 @@ struct ToolsWizardSheet: View {
                     .disabled(model.databases.isEmpty)
                     .onChange(of: model.database) { _, _ in Task { await model.loadDatabase() } }
                 }
-                if !model.isMySQL {
+                if !model.isFlat {
                     FieldRow(label: "Schema", labelWidth: 84) {
                         Picker("", selection: $model.schema) {
                             ForEach(model.schemas, id: \.self) { name in Text(name).tag(name) }
@@ -866,7 +867,7 @@ struct ToolsWizardSheet: View {
         if targetIsFile {
             let panel = NSSavePanel()
             panel.nameFieldStringValue =
-                (dialect == .mysql ? sourceRef.database : "\(sourceRef.database)_\(sourceRef.schema)")
+                (dialect.hasSchemaLayer ? "\(sourceRef.database)_\(sourceRef.schema)" : sourceRef.database)
                 + (compress ? ".sql.gz" : ".sql")
             panel.canCreateDirectories = true
             guard panel.runModal() == .OK, var url = panel.url else { return }

@@ -136,10 +136,11 @@ public final class WorkspaceController {
             .sorted().first,
             let name = expandedDatabase.components(separatedBy: "/db/").last
         {
-            return SchemaRef(database: name, schema: config.dialect == .mysql ? name : "public")
+            return SchemaRef.pseudoSchema(config.dialect, database: name) ?? SchemaRef(database: name, schema: "public")
         }
         let database = config.database ?? ""
-        return SchemaRef(database: database, schema: config.dialect == .mysql ? database : "public")
+        return SchemaRef.pseudoSchema(config.dialect, database: database)
+            ?? SchemaRef(database: database, schema: "public")
     }
 
     public func sourceController(for tab: WorkspaceTab, object: SourceObject) -> SourceController {
@@ -253,7 +254,8 @@ public final class WorkspaceController {
         let open = workspace.tabs(for: connectionID, database: name) { [weak self] tab in
             guard let self, let query = queryControllers[tab.id] else { return nil }
             switch dialect {
-            case .mysql: return query.sessionDatabase
+            // A query tab on MySQL or SQLite belongs to the database its session is on.
+            case .mysql, .sqlite: return query.sessionDatabase
             case .postgresql: return environment.connections.first { $0.id == connectionID }?.database
             }
         }
@@ -511,12 +513,25 @@ public final class WorkspaceController {
     public func openSQLFile() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url,
-            let text = try? String(contentsOf: url, encoding: .utf8),
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        _ = openSQLFile(at: url)
+    }
+
+    /// Opens a `.sql` file as a query tab on the active connection. False when there is no
+    /// connection to run it on, or the file is not text.
+    @discardableResult
+    public func openSQLFile(at url: URL) -> Bool {
+        guard let text = try? String(contentsOf: url, encoding: .utf8),
             let id = workspace.activeConnectionID
-        else { return }
+        else { return false }
         let tab = newQueryTab(connectionID: id, sql: text)
         tab.title = url.lastPathComponent
+        return true
+    }
+
+    /// File › Open SQLite Database…: the file becomes a connection.
+    public func openSQLiteDatabase() {
+        SQLiteFileOpener.chooseAndOpen(in: self)
     }
 
     public func saveSQLFile() {

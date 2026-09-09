@@ -105,9 +105,13 @@ public final class QueryBuilderController {
         }
     }
 
-    /// The schemas the picker offers: MySQL's databases, PostgreSQL's schemas.
+    /// The schemas the picker offers: MySQL's databases, SQLite's `main`, PostgreSQL's schemas.
     private func loadSchemas(_ session: ConnectionSession) async {
         switch dialect {
+        case .sqlite:
+            let databases = (try? await session.introspection(.databases) { try await $0.databases() }) ?? []
+            availableSchemas = databases.map { SchemaRef(database: $0.name, schema: $0.name) }
+            if availableSchemas.isEmpty { availableSchemas = [SchemaRef.sqlite] }
         case .mysql:
             let databases = (try? await session.introspection(.databases) { try await $0.databases() }) ?? []
             let system: Set<String> = ["information_schema", "performance_schema", "mysql", "sys"]

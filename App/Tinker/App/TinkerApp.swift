@@ -1,5 +1,6 @@
 import DBCore
 import DBGrid
+import DBSQLite
 import SwiftUI
 
 /// The product's names: what the app calls itself, and who made it.
@@ -12,6 +13,7 @@ enum Product {
 }
 
 struct TinkerApp: App {
+    @NSApplicationDelegateAdaptor(TinkerAppDelegate.self) private var delegate
     @State private var environment = AppEnvironment()
     @State private var settings: AppSettings
     @State private var updater = Updater()
@@ -28,6 +30,18 @@ struct TinkerApp: App {
         WindowGroup(Product.name) {
             WorkspaceView(environment: environment, settings: settings)
                 .frame(minWidth: 960, minHeight: 600)
+                // A database file dropped anywhere on the window opens as a connection.
+                .dropDestination(for: URL.self) { urls, _ in
+                    guard let controller = CommandCenter.shared.current else { return false }
+                    let accepted = urls.filter { url in
+                        let ext = url.pathExtension.lowercased()
+                        return ext == "sql" || SQLiteDriver.fileExtensions.contains(ext)
+                            || SQLiteDriver.isDatabaseFile(at: url.path)
+                    }
+                    guard !accepted.isEmpty else { return false }
+                    Task { await SQLiteFileOpener.open(accepted, in: controller) }
+                    return true
+                }
                 .task {
                     await settings.load()
                     await crashReporter.start()
@@ -59,7 +73,7 @@ struct TinkerCommands: Commands {
                 NSApp.orderFrontStandardAboutPanel(options: [
                     .applicationName: Product.name,
                     .credits: NSAttributedString(
-                        string: "\(Product.credit)\nA native client for PostgreSQL and MySQL.",
+                        string: "\(Product.credit)\nA native client for PostgreSQL, MySQL and SQLite.",
                         attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)]
                     ),
                 ])
@@ -78,6 +92,8 @@ struct TinkerCommands: Commands {
             Divider()
             Button("Open SQL File…") { workspace?.openSQLFile() }
                 .keyboardShortcut("o", modifiers: .command)
+            Button("Open SQLite Database…") { workspace?.openSQLiteDatabase() }
+                .keyboardShortcut("o", modifiers: [.command, .option])
             Button("Save Query…") { workspace?.saveSQLFile() }
                 .keyboardShortcut("s", modifiers: .command)
             Divider()

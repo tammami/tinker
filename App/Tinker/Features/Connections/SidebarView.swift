@@ -283,7 +283,8 @@ struct SidebarRow: View {
 
     private var helpText: String {
         switch item.kind {
-        case .connection: config.map { "\($0.user)@\($0.host):\($0.port)" } ?? ""
+        case .connection:
+            config.map { $0.dialect.isFileBased ? ($0.database ?? "") : "\($0.user)@\($0.host):\($0.port)" } ?? ""
         case let .table(_, info): info.comment ?? "\(info.kind.displayName) \(info.ref.schema).\(info.ref.name)"
         case let .routine(_, _, name, signature): "\(name)(\(signature))"
         case let .failure(_, message): message
@@ -321,7 +322,7 @@ struct SidebarRow: View {
             // one node at a time.
             _ = workspace.openObjects(ref, connectionID: id)
         case let .database(id, name):
-            if let ref = mysqlSchema(connectionID: id, database: name) {
+            if let ref = pseudoSchema(connectionID: id, database: name) {
                 _ = workspace.openObjects(ref, connectionID: id)
             } else {
                 toggleExpansion()
@@ -400,8 +401,8 @@ struct SidebarRow: View {
             } label: {
                 Label("New Query", systemImage: Icon.newQuery)
             }
-            if let ref = mysqlSchema(connectionID: id, database: name) {
-                // On MySQL the database is the schema, so its actions live here.
+            if let ref = pseudoSchema(connectionID: id, database: name) {
+                // On MySQL and SQLite the database is the schema, so its actions live here.
                 Button {
                     _ = workspace.openObjects(ref, connectionID: id)
                 } label: {
@@ -415,15 +416,17 @@ struct SidebarRow: View {
                 Divider()
                 newObjectItems(connectionID: id, schema: ref)
             }
-            Button {
-                onOpenUsers(id, name)
-            } label: {
-                Label("Users & Privileges…", systemImage: Icon.user)
+            if dialect(of: id).hasUserAccounts {
+                Button {
+                    onOpenUsers(id, name)
+                } label: {
+                    Label("Users & Privileges…", systemImage: Icon.user)
+                }
             }
             Divider()
             transferItems(
                 connectionID: id,
-                schema: mysqlSchema(connectionID: id, database: name) ?? SchemaRef(database: name, schema: "public"),
+                schema: pseudoSchema(connectionID: id, database: name) ?? SchemaRef(database: name, schema: "public"),
                 databaseName: name)
             Divider()
             if !sidebar.isExpanded(item.id) {
@@ -477,12 +480,14 @@ struct SidebarRow: View {
         }
     }
 
-    /// The pseudo-schema a MySQL database is, or nil on PostgreSQL where schemas are rows.
-    private func mysqlSchema(connectionID: UUID, database: String) -> SchemaRef? {
-        guard workspace.environment.connections.first(where: { $0.id == connectionID })?.dialect == .mysql else {
-            return nil
-        }
-        return SchemaRef.mysql(database)
+    /// The pseudo-schema a MySQL or SQLite database is, or nil on PostgreSQL where
+    /// schemas are rows of their own.
+    private func pseudoSchema(connectionID: UUID, database: String) -> SchemaRef? {
+        SchemaRef.pseudoSchema(dialect(of: connectionID), database: database)
+    }
+
+    private func dialect(of connectionID: UUID) -> SQLDialect {
+        workspace.environment.connections.first { $0.id == connectionID }?.dialect ?? .postgresql
     }
 
     /// Collapse closes the whole branch, not just the one triangle.
@@ -506,7 +511,9 @@ struct SidebarRow: View {
     /// one the folder is about; it leads and the others follow below a rule.
     @ViewBuilder
     func newObjectItems(connectionID id: UUID, schema ref: SchemaRef, first: NewObject? = nil) -> some View {
-        let order: [NewObject] = [.table, .view, .function, .procedure]
+        // SQLite has no stored routines, so those two are not offered there.
+        let order: [NewObject] =
+            dialect(of: id) == .sqlite ? [.table, .view] : [.table, .view, .function, .procedure]
         let ordered = first.map { lead in [lead] + order.filter { $0 != lead } } ?? order
         ForEach(Array(ordered.enumerated()), id: \.offset) { index, kind in
             if index == 1, first != nil { Divider() }
@@ -543,7 +550,7 @@ struct SidebarRow: View {
     @ViewBuilder
     func transferItems(connectionID id: UUID, schema ref: SchemaRef, databaseName: String?) -> some View {
         let dialect = workspace.environment.connections.first { $0.id == id }?.dialect ?? .postgresql
-        let noun = dialect == .mysql ? "Database" : "Schema"
+        let noun = dialect.hasSchemaLayer ? "Schema" : "Database"
         Button {
             workspace.pendingDump = DumpRequest(connectionID: id, schema: ref, tables: nil)
         } label: {
@@ -586,11 +593,11 @@ struct SidebarRow: View {
         workspace.environment.connections.first { $0.id == id }?.name ?? ""
     }
 
-    /// The schema a connection-level action means: MySQL's database, PostgreSQL's public.
+    /// The schema a connection-level action means: MySQL's database, SQLite's `main`,
+    /// PostgreSQL's public.
     func defaultSchema(for config: ConnectionConfig) -> SchemaRef {
-        config.dialect == .mysql
-            ? SchemaRef.mysql(config.database ?? "")
-            : SchemaRef(database: config.database ?? "", schema: "public")
+        SchemaRef.pseudoSchema(config.dialect, database: config.database ?? "")
+            ?? SchemaRef(database: config.database ?? "", schema: "public")
     }
 
     func presentNewTable(connectionID: UUID, schema: SchemaRef) {
@@ -624,10 +631,12 @@ struct SidebarRow: View {
             } label: {
                 Label("Server Activity", systemImage: Icon.activity)
             }
-            Button {
-                onOpenUsers(id, config.database)
-            } label: {
-                Label("Users & Privileges…", systemImage: Icon.user)
+            if config.dialect.hasUserAccounts {
+                Button {
+                    onOpenUsers(id, config.database)
+                } label: {
+                    Label("Users & Privileges…", systemImage: Icon.user)
+                }
             }
             Divider()
             transferItems(connectionID: id, schema: defaultSchema(for: config), databaseName: config.database)
@@ -886,6 +895,8 @@ enum RoutineTemplates {
     static func skeleton(procedure: Bool, schema: SchemaRef, dialect: SQLDialect) -> String {
         let name = Identifier.qualify([schema.schema, procedure ? "new_procedure" : "new_function"], dialect: dialect)
         switch (dialect, procedure) {
+        case (.sqlite, _):
+            return "-- SQLite has no stored functions or procedures\n"
         case (.postgresql, false):
             return """
                 CREATE OR REPLACE FUNCTION \(name)(a integer, b integer)

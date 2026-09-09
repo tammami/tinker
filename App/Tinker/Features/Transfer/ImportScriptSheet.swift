@@ -98,9 +98,12 @@ struct ImportScriptSheet: View {
                             Text("Continuing runs every statement on its own, so one failure cannot roll back a batch.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                        if dialect == .mysql {
+                        if dialect != .postgresql {
                             Toggle(
-                                "Turn off foreign key and unique checks while loading", isOn: $disableForeignKeyChecks)
+                                dialect == .mysql
+                                    ? "Turn off foreign key and unique checks while loading"
+                                    : "Turn off foreign key checks while loading",
+                                isOn: $disableForeignKeyChecks)
                         }
                     }
                 }

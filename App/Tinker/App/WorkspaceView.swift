@@ -275,6 +275,8 @@ public struct WorkspaceView: View {
 
     private var subtitle: String {
         guard let config = workspace.displayedConnection else { return Product.tagline }
+        // A file connection has no user or host: the path says everything.
+        if config.dialect.isFileBased { return ((config.database ?? "") as NSString).abbreviatingWithTildeInPath }
         var parts = ["\(config.user)@\(config.host)"]
         if let database = config.database { parts.append(database) }
         return parts.joined(separator: " · ")
@@ -546,14 +548,22 @@ public struct WorkspaceView: View {
                 }
                 Text(sidebar.state(of: config.id).describedForStatusBar)
                 if sidebar.state(of: config.id).isUsable, let transport {
-                    // A closed lock for TLS or a tunnel, an open one for a wire in the clear,
-                    // so a `prefer` connection that fell back to plaintext is never a secret.
-                    Label(
-                        transport.isProtected ? "Encrypted" : "Not encrypted",
-                        systemImage: transport.isProtected ? Icon.lock : Icon.unlock
-                    )
-                    .foregroundStyle(transport.isProtected ? Color.secondary : Color.orange)
-                    .help(transport.summary)
+                    if transport.transport.isLocalFile {
+                        // A database file read in-process: there is no wire to encrypt.
+                        Label("Local file", systemImage: Icon.localFile)
+                            .foregroundStyle(Color.secondary)
+                            .help(transport.summary)
+                    } else {
+                        // A closed lock for TLS or a tunnel, an open one for a wire in the
+                        // clear, so a `prefer` connection that fell back to plaintext is
+                        // never a secret.
+                        Label(
+                            transport.isProtected ? "Encrypted" : "Not encrypted",
+                            systemImage: transport.isProtected ? Icon.lock : Icon.unlock
+                        )
+                        .foregroundStyle(transport.isProtected ? Color.secondary : Color.orange)
+                        .help(transport.summary)
+                    }
                 }
                 if config.readOnly {
                     Label("Read-only", systemImage: Icon.readOnly).foregroundStyle(.orange)
@@ -709,11 +719,10 @@ public struct WorkspaceView: View {
 
         let schema =
             selectedTableRef?.schemaRef
-            ?? SchemaRef(
-                database: config.database ?? "",
-                // MySQL's schema layer is the database itself; PostgreSQL's default is public.
-                schema: config.dialect == .mysql ? (config.database ?? "") : "public"
-            )
+            // MySQL's schema layer is the database itself, SQLite's is `main`, and
+            // PostgreSQL's default is public.
+            ?? SchemaRef.pseudoSchema(config.dialect, database: config.database ?? "")
+            ?? SchemaRef(database: config.database ?? "", schema: "public")
         return (connectionID, schema, config.dialect, config.isProduction)
     }
 

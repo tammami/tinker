@@ -1,12 +1,12 @@
 import DBCore
 import SwiftUI
 
-/// The badge that tells a PostgreSQL connection from a MySQL one at a glance.
+/// The badge that tells a PostgreSQL connection from a MySQL or SQLite one at a glance.
 ///
 /// The marks are drawn here rather than shipped as vendor artwork: the logos are
 /// trademarks and are not ours to bundle. What each engine is known by — the elephant and
-/// the dolphin, in that project's own colour — is enough to read the row without
-/// reproducing anyone's logo (DECISIONS.md ADR-0026).
+/// the dolphin, the feather — in that project's own colour, is enough to read the row
+/// without reproducing anyone's logo (DECISIONS.md ADR-0026).
 struct EngineMark: View {
     let dialect: SQLDialect
     var size: CGFloat = 16
@@ -27,6 +27,7 @@ struct EngineMark: View {
         switch dialect {
         case .postgresql: ElephantMark().fill(Color.white)
         case .mysql: DolphinMark().fill(Color.white)
+        case .sqlite: FeatherMark().fill(Color.white)
         }
     }
 
@@ -37,6 +38,8 @@ struct EngineMark: View {
         case .postgresql: Color(red: 0.20, green: 0.40, blue: 0.57)
         // MySQL's teal.
         case .mysql: Color(red: 0.00, green: 0.46, blue: 0.56)
+        // SQLite's steel blue, darkened so white reads on it.
+        case .sqlite: Color(red: 0.24, green: 0.44, blue: 0.62)
         }
     }
 
@@ -44,6 +47,7 @@ struct EngineMark: View {
         switch dialect {
         case .postgresql: "PostgreSQL"
         case .mysql: "MySQL"
+        case .sqlite: "SQLite"
         }
     }
 }
@@ -108,6 +112,33 @@ private struct DolphinMark: Shape {
         path.addLine(to: p(0.72, 0.80))
         // Belly back to the nose.
         path.addCurve(to: p(0.00, 0.78), control1: p(0.46, 0.98), control2: p(0.18, 0.94))
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// A feather: a quill rising from the lower left, its vane swept to the upper right.
+///
+/// Coarse like the others: one leaf-shaped vane and a short stem, which is all that
+/// survives sixteen points.
+private struct FeatherMark: Shape {
+    func path(in rect: CGRect) -> Path {
+        let w = rect.width
+        let h = rect.height
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: rect.minX + x * w, y: rect.minY + y * h)
+        }
+        var path = Path()
+        // Vane: a leaf from the tip at the top right down to where the stem begins.
+        path.move(to: p(0.98, 0.02))
+        path.addCurve(to: p(0.30, 0.70), control1: p(0.98, 0.42), control2: p(0.72, 0.72))
+        path.addCurve(to: p(0.98, 0.02), control1: p(0.28, 0.30), control2: p(0.60, 0.02))
+        path.closeSubpath()
+        // Stem: a short slanted quill continuing the vane's spine to the bottom left.
+        path.move(to: p(0.34, 0.60))
+        path.addLine(to: p(0.44, 0.68))
+        path.addLine(to: p(0.10, 1.00))
+        path.addLine(to: p(0.00, 0.92))
         path.closeSubpath()
         return path
     }

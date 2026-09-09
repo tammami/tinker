@@ -132,6 +132,7 @@ public struct SnippetsView: View {
                         Text("Any engine").tag("")
                         Text("PostgreSQL").tag(SQLDialect.postgresql.rawValue)
                         Text("MySQL").tag(SQLDialect.mysql.rawValue)
+                        Text("SQLite").tag(SQLDialect.sqlite.rawValue)
                     }
                     .labelsHidden()
                     .frame(width: 130)

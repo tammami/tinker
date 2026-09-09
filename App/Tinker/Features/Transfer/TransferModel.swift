@@ -22,7 +22,7 @@ public struct CopiedObjects: Sendable, Hashable {
         if let tables {
             return tables.count == 1 ? "“\(tables[0].name)”" : "\(tables.count) tables"
         }
-        return dialect == .mysql ? "database “\(schema.database)”" : "schema “\(schema.schema)”"
+        return dialect.hasSchemaLayer ? "schema “\(schema.schema)”" : "database “\(schema.database)”"
     }
 }
 

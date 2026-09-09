@@ -32,7 +32,7 @@ struct NewTableSheet: View {
                     .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius))
                 VStack(alignment: .leading, spacing: 2) {
                     Text("New Table").font(.headline)
-                    Text("in \(schema.id) · \(dialect == .postgresql ? "PostgreSQL" : "MySQL")")
+                    Text("in \(schema.id) · \(dialect.displayName)")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: DesignTokens.Spacing.lg)

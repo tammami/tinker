@@ -1,6 +1,7 @@
 import DBCore
 import DBMySQL
 import DBPostgres
+import DBSQLite
 import DBStore
 import DBTunnel
 import Foundation
@@ -26,6 +27,7 @@ public final class AppEnvironment {
     public let registry = DriverRegistry([
         .postgresql: PostgresDriver.self,
         .mysql: MySQLDriver.self,
+        .sqlite: SQLiteDriver.self,
     ])
     public let secrets: any SecretStore
     public let tunnelProvider: any TunnelProvider = SSHTunnelProvider()
@@ -202,7 +204,9 @@ public final class AppEnvironment {
     /// named after the user. Never nil for PostgreSQL, so a session on "another" database
     /// is only ever opened for a database that really is another one.
     private func mainDatabase(of config: ConnectionConfig) -> String? {
-        currentDatabases[config.id] ?? config.database ?? (config.dialect == .postgresql ? config.user : nil)
+        // A SQLite connection's `database` is the file's path; the catalog calls it `main`.
+        if config.dialect == .sqlite { return SchemaRef.sqliteMainSchema }
+        return currentDatabases[config.id] ?? config.database ?? (config.dialect == .postgresql ? config.user : nil)
     }
 
     /// A session on the same server but another database — what PostgreSQL needs to

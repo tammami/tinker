@@ -17,13 +17,14 @@ enum UIDemo {
         return arguments[index + 1]
     }
 
-    /// The schema a tree row stands for: a schema row's own, or a MySQL database's pseudo-schema.
+    /// The schema a tree row stands for: a schema row's own, or a MySQL or SQLite
+    /// database's pseudo-schema.
     static let logger = Logger(label: "tinker.demo")
 
-    static func demoSchemaRef(_ item: SidebarItem) -> SchemaRef? {
+    static func demoSchemaRef(_ item: SidebarItem, dialect: SQLDialect = .mysql) -> SchemaRef? {
         switch item.kind {
         case let .schema(_, ref): ref
-        case let .database(_, name): SchemaRef.mysql(name)
+        case let .database(_, name): SchemaRef.pseudoSchema(dialect, database: name) ?? SchemaRef.mysql(name)
         default: nil
         }
     }
@@ -160,7 +161,7 @@ enum UIDemo {
                 let tab = controller.newQueryTab(connectionID: config.id, sql: sql)
                 if let query = controller.queryController(for: tab) {
                     await query.loadSessionChoices()
-                    if config.dialect == .mysql, let name = demoSchemaRef(schema)?.schema {
+                    if !config.dialect.hasSchemaLayer, let name = demoSchemaRef(schema, dialect: config.dialect)?.schema {
                         await query.selectDatabase(name)
                     }
                     await query.loadCompletionSources()

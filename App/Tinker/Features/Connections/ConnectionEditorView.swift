@@ -1,6 +1,8 @@
 import DBCore
+import DBSQLite
 import DBStore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The connection sheet: one column of sections, each with its icon, and a test log.
 public struct ConnectionEditorView: View {
@@ -57,7 +59,9 @@ public struct ConnectionEditorView: View {
             icon: Icon.connection,
             subtitle: isNew
                 ? "Passwords go to your Keychain, never to \(Product.name)'s own files."
-                : "\(config.user)@\(config.host):\(config.port)",
+                : config.dialect.isFileBased
+                    ? ((config.database ?? "") as NSString).abbreviatingWithTildeInPath
+                    : "\(config.user)@\(config.host):\(config.port)",
             width: DesignTokens.Metrics.sheetWidth + 40,
             contentInset: 0
         ) {
@@ -66,33 +70,48 @@ public struct ConnectionEditorView: View {
                     Section {
                         TextField("Name", text: $config.name)
                         Picker("Engine", selection: $config.dialect) {
-                            ForEach([SQLDialect.postgresql, .mysql], id: \.self) { dialect in
+                            ForEach(SQLDialect.allCases, id: \.self) { dialect in
                                 Label {
-                                    Text(dialect == .postgresql ? "PostgreSQL" : "MySQL / MariaDB")
+                                    Text(dialect.displayName)
                                 } icon: {
                                     EngineMark(dialect: dialect, size: 14)
                                 }
                                 .tag(dialect)
                             }
                         }
-                        .onChange(of: config.dialect) { _, dialect in
-                            config.port = environment.registry.defaultPort(for: dialect)
+                        .onChange(of: config.dialect) { previous, dialect in
+                            switchEngine(from: previous, to: dialect)
                         }
-                        HStack(spacing: DesignTokens.Spacing.sm) {
-                            TextField("Host", text: $config.host)
-                            TextField("Port", value: $config.port, format: .number.grouping(.never))
-                                .frame(width: 90)
+                        if config.dialect.isFileBased {
+                            HStack(spacing: DesignTokens.Spacing.sm) {
+                                TextField(
+                                    "Database file",
+                                    text: Binding(
+                                        get: { config.database ?? "" },
+                                        set: { config.database = $0.isEmpty ? nil : $0 }
+                                    ), prompt: Text("~/Databases/app.sqlite"))
+                                Button("Choose…") { chooseDatabaseFile() }
+                                Button("New…") { createDatabaseFile() }
+                            }
+                            Text("A SQLite database is one file. Anyone who can read the file can read the data; there is no password.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            HStack(spacing: DesignTokens.Spacing.sm) {
+                                TextField("Host", text: $config.host)
+                                TextField("Port", value: $config.port, format: .number.grouping(.never))
+                                    .frame(width: 90)
+                            }
+                            TextField("User", text: $config.user)
+                            SecureField("Password", text: $password)
+                            TextField(
+                                "Database",
+                                text: Binding(
+                                    get: { config.database ?? "" },
+                                    set: { config.database = $0.isEmpty ? nil : $0 }
+                                ), prompt: Text(config.dialect == .mysql ? "Optional" : "postgres"))
                         }
-                        TextField("User", text: $config.user)
-                        SecureField("Password", text: $password)
-                        TextField(
-                            "Database",
-                            text: Binding(
-                                get: { config.database ?? "" },
-                                set: { config.database = $0.isEmpty ? nil : $0 }
-                            ), prompt: Text(config.dialect == .mysql ? "Optional" : "postgres"))
                     } header: {
-                        Label("Server", systemImage: Icon.database)
+                        Label(config.dialect.isFileBased ? "File" : "Server", systemImage: config.dialect.isFileBased ? Icon.localFile : Icon.database)
                     }
 
                     Section {
@@ -126,6 +145,7 @@ public struct ConnectionEditorView: View {
                         Label("Appearance and safety", systemImage: Icon.shield)
                     }
 
+                    if !config.dialect.isFileBased {
                     Section {
                         Picker("Mode", selection: $config.tls.mode) {
                             ForEach(TLSMode.allCases, id: \.self) { mode in
@@ -166,6 +186,7 @@ public struct ConnectionEditorView: View {
                     } header: {
                         Label("SSH", systemImage: "terminal")
                     }
+                    }
 
                     Section {
                         TextField(
@@ -174,12 +195,28 @@ public struct ConnectionEditorView: View {
                                 get: { config.statementTimeout.map { Int($0.components.seconds) } ?? 0 },
                                 set: { config.statementTimeout = $0 <= 0 ? nil : .seconds($0) }
                             ), format: .number)
-                        TextField(
-                            "Application name",
-                            text: Binding(
-                                get: { config.options[ConnectionConfig.OptionKey.applicationName] ?? Product.name },
-                                set: { config.options[ConnectionConfig.OptionKey.applicationName] = $0 }
-                            ))
+                        if !config.dialect.isFileBased {
+                            TextField(
+                                "Application name",
+                                text: Binding(
+                                    get: { config.options[ConnectionConfig.OptionKey.applicationName] ?? Product.name },
+                                    set: { config.options[ConnectionConfig.OptionKey.applicationName] = $0 }
+                                ))
+                        }
+                        if config.dialect == .sqlite {
+                            Toggle(
+                                "Enforce foreign keys",
+                                isOn: Binding(
+                                    get: { config.options[SQLiteDriver.OptionKey.foreignKeys] != "false" },
+                                    set: { config.options[SQLiteDriver.OptionKey.foreignKeys] = $0 ? "true" : "false" }
+                                ))
+                            Toggle(
+                                "Create the file if it does not exist",
+                                isOn: Binding(
+                                    get: { config.options[SQLiteDriver.OptionKey.createIfMissing] == "true" },
+                                    set: { config.options[SQLiteDriver.OptionKey.createIfMissing] = $0 ? "true" : "false" }
+                                ))
+                        }
                         if config.dialect == .mysql {
                             Toggle(
                                 "Treat tinyint(1) as boolean",
@@ -286,7 +323,78 @@ public struct ConnectionEditorView: View {
         }
     }
 
+    /// Resets the fields that mean nothing on the new engine: a file has no host, and a
+    /// server has no file.
+    func switchEngine(from previous: SQLDialect, to dialect: SQLDialect) {
+        if dialect.isFileBased {
+            config.host = ""
+            config.port = 0
+            config.user = ""
+            config.database = nil
+            config.tls = TLSConfig(mode: .disable)
+            config.ssh = nil
+            useSSH = false
+            password = ""
+            config.options[SQLiteDriver.OptionKey.foreignKeys] = "true"
+        } else {
+            if previous.isFileBased {
+                config.host = "localhost"
+                config.user = NSUserName()
+                config.database = nil
+                config.tls = TLSConfig(mode: .require)
+                config.options[SQLiteDriver.OptionKey.foreignKeys] = nil
+                config.options[SQLiteDriver.OptionKey.createIfMissing] = nil
+            }
+            config.port = environment.registry.defaultPort(for: dialect)
+        }
+    }
+
+    func chooseDatabaseFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = SQLiteFileOpener.contentTypes + [.data]
+        if let current = config.database, !current.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: (current as NSString).expandingTildeInPath).deletingLastPathComponent()
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        adoptDatabaseFile(url)
+    }
+
+    /// Creates an empty database where the user says, and points the connection at it.
+    func createDatabaseFile() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(config.name.isEmpty || config.name == "New Connection" ? "Database" : config.name).sqlite"
+        panel.allowedContentTypes = SQLiteFileOpener.contentTypes
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try SQLiteDriver.createDatabase(at: url.path)
+            adoptDatabaseFile(url)
+        } catch {
+            validationError = (error as? DBError)?.errorDescription ?? String(describing: error)
+        }
+    }
+
+    private func adoptDatabaseFile(_ url: URL) {
+        config.database = url.path
+        if config.name.isEmpty || config.name == "New Connection" {
+            config.name = url.deletingPathExtension().lastPathComponent
+        }
+    }
+
     func validate() -> String? {
+        if config.dialect.isFileBased {
+            let path = ((config.database ?? "") as NSString).expandingTildeInPath
+            if path.trimmingCharacters(in: .whitespaces).isEmpty { return "A database file is required" }
+            if FileManager.default.fileExists(atPath: path) {
+                if !SQLiteDriver.isDatabaseFile(at: path) { return "\(path) is not a SQLite database" }
+            } else if config.options[SQLiteDriver.OptionKey.createIfMissing] != "true" {
+                return "No file at \(path). Choose an existing database, use New…, or turn on “Create the file if it does not exist”"
+            }
+            return nil
+        }
         if config.host.trimmingCharacters(in: .whitespaces).isEmpty { return "A host is required" }
         if config.user.trimmingCharacters(in: .whitespaces).isEmpty { return "A user is required" }
         if config.port < 1 || config.port > 65_535 { return "The port must be between 1 and 65535" }
@@ -312,6 +420,20 @@ public struct ConnectionEditorView: View {
     func buildConfig() -> ConnectionConfig {
         var result = config
         result.name = result.name.trimmingCharacters(in: .whitespaces)
+        if result.dialect.isFileBased {
+            let path = ((result.database ?? "") as NSString).expandingTildeInPath
+            result.database = path
+            if result.name.isEmpty {
+                result.name = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+            }
+            result.host = ""
+            result.port = 0
+            result.user = ""
+            result.passwordRef = nil
+            result.ssh = nil
+            result.tls = TLSConfig(mode: .disable)
+            return result
+        }
         if result.name.isEmpty { result.name = "\(result.user)@\(result.host)" }
         if password.isEmpty {
             result.passwordRef = nil

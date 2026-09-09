@@ -172,6 +172,8 @@ public enum Icon {
     public static let disconnect = "bolt.slash"
     public static let lock = "lock"
     public static let unlock = "lock.open"
+    /// A database that is a file on this Mac rather than a server.
+    public static let localFile = "internaldrive"
     public static let production = "exclamationmark.triangle.fill"
     public static let readOnly = "lock.fill"
     public static let more = "ellipsis.circle"

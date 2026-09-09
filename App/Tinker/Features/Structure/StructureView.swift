@@ -315,7 +315,7 @@ struct ColumnsPane: View {
     }
 
     private var defaultType: String {
-        controller.dialect == .postgresql ? "text" : "varchar(255)"
+        controller.dialect == .mysql ? "varchar(255)" : "text"
     }
 
     private func row(_ column: ColumnDefinition, _ index: Int) -> some View {
@@ -866,8 +866,8 @@ struct IndexesPane: View {
                             )
                         )
                         .textFieldStyle(.plain)
-                        // A partial index is PostgreSQL's; MySQL has no equivalent.
-                        .disabled(!controller.isEditing || controller.dialect != .postgresql)
+                        // A partial index is PostgreSQL's and SQLite's; MySQL has no equivalent.
+                        .disabled(!controller.isEditing || controller.dialect == .mysql)
                     }
                 }
             }
@@ -895,9 +895,12 @@ struct IndexesPane: View {
 
     /// What each engine actually offers, rather than a list with half of it disabled.
     private var methods: [String] {
-        controller.dialect == .postgresql
-            ? ["btree", "hash", "gin", "gist", "brin", "spgist"]
-            : ["btree", "hash", "fulltext", "spatial"]
+        switch controller.dialect {
+        case .postgresql: ["btree", "hash", "gin", "gist", "brin", "spgist"]
+        case .mysql: ["btree", "hash", "fulltext", "spatial"]
+        // Every SQLite index is a b-tree; there is nothing to choose.
+        case .sqlite: ["btree"]
+        }
     }
 }
 

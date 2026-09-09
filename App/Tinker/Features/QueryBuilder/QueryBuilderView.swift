@@ -75,15 +75,15 @@ public struct QueryBuilderView: View {
                     Text(controller.schema.schema.isEmpty ? "Choose…" : controller.schema.schema).tag(controller.schema)
                 }
                 ForEach(controller.availableSchemas, id: \.self) { schema in
-                    Label(schema.schema, systemImage: controller.dialect == .mysql ? Icon.database : Icon.schema).tag(
-                        schema)
+                    Label(schema.schema, systemImage: controller.dialect.hasSchemaLayer ? Icon.schema : Icon.database)
+                        .tag(schema)
                 }
             }
             .labelsHidden()
             .frame(width: 180)
             .help(
-                controller.dialect == .mysql
-                    ? "The database whose tables are listed" : "The schema whose tables are listed")
+                controller.dialect.hasSchemaLayer
+                    ? "The schema whose tables are listed" : "The database whose tables are listed")
             Toggle("Distinct", isOn: $controller.model.isDistinct).toggleStyle(.checkbox)
             Spacer()
             Button {

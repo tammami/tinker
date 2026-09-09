@@ -73,7 +73,7 @@ public final class StructureController {
                 columns: [
                     ColumnDefinition(
                         name: "id",
-                        type: dialect == .postgresql ? "integer" : "int",
+                        type: dialect == .mysql ? "int" : "integer",
                         isNullable: false,
                         isAutoIncrement: true
                     )
@@ -263,7 +263,7 @@ public final class StructureController {
     public var hasPendingChanges: Bool { !pendingStatements.isEmpty }
 
     /// True when the engine undoes a failed run. MySQL does not, and the preview says so.
-    public var isTransactional: Bool { dialect == .postgresql }
+    public var isTransactional: Bool { dialect != .mysql }
 
     public func discardChanges() {
         edited = loaded

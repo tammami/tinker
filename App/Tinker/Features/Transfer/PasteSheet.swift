@@ -46,7 +46,8 @@ struct PasteSheet: View {
     }
 
     private var dialect: SQLDialect { request.source.dialect }
-    private var isMySQL: Bool { dialect == .mysql }
+    /// True when the database is the schema — MySQL and SQLite — so there is no schema row to pick.
+    private var isFlat: Bool { !dialect.hasSchemaLayer }
     private var isSingleTable: Bool { request.source.tables?.count == 1 }
 
     /// Connections of the same kind: pasting a PostgreSQL table into MySQL makes no sense.
@@ -60,11 +61,12 @@ struct PasteSheet: View {
         useNewDatabase ? newDatabase.trimmingCharacters(in: .whitespaces) : database
     }
     private var effectiveSchema: String {
-        isMySQL ? effectiveDatabase : (useNewSchema ? newSchema.trimmingCharacters(in: .whitespaces) : schema)
+        isFlat ? effectiveDatabase : (useNewSchema ? newSchema.trimmingCharacters(in: .whitespaces) : schema)
     }
 
     private var targetRef: SchemaRef {
-        isMySQL ? SchemaRef.mysql(effectiveDatabase) : SchemaRef(database: effectiveDatabase, schema: effectiveSchema)
+        SchemaRef.pseudoSchema(dialect, database: effectiveDatabase)
+            ?? SchemaRef(database: effectiveDatabase, schema: effectiveSchema)
     }
 
     private var isSameSchema: Bool {
@@ -114,7 +116,7 @@ struct PasteSheet: View {
                         }
                         .onChange(of: targetConnectionID) { _, _ in Task { await loadTargets() } }
                         databaseRow
-                        if !isMySQL { schemaRow }
+                        if !isFlat { schemaRow }
                         if isSingleTable {
                             TextField(
                                 "Paste as", text: $tableName, prompt: Text(request.source.tables?.first?.name ?? ""))
@@ -126,7 +128,7 @@ struct PasteSheet: View {
                     }
                 }
                 .formStyle(.grouped)
-                .frame(height: (isSingleTable ? 372 : 336) + (isMySQL ? 0 : 80))
+                .frame(height: (isSingleTable ? 372 : 336) + (isFlat ? 0 : 80))
                 .disabled(controller.isRunning)
 
                 if let tables = request.source.tables, tables.count > 1 {
@@ -185,7 +187,7 @@ struct PasteSheet: View {
     }
 
     private var sourceLine: String {
-        isMySQL ? request.source.schema.database : "\(request.source.schema.database) · \(request.source.schema.schema)"
+        isFlat ? request.source.schema.database : "\(request.source.schema.database) · \(request.source.schema.schema)"
     }
 
     @ViewBuilder
@@ -240,7 +242,7 @@ struct PasteSheet: View {
             if !databases.contains(database) {
                 database = databases.first { $0 == session.config.database } ?? databases.first ?? ""
             }
-            if isMySQL, request.source.isWholeSchema, request.targetSchema == nil {
+            if isFlat, request.source.isWholeSchema, request.targetSchema == nil {
                 // A whole database usually goes to a database of its own name.
                 useNewDatabase =
                     !databases.contains(request.source.schema.database)
@@ -260,7 +262,7 @@ struct PasteSheet: View {
     }
 
     private func loadSchemas() async {
-        guard !isMySQL, !database.isEmpty,
+        guard !isFlat, !database.isEmpty,
             let session = environment.session(for: targetConnectionID, database: database)
         else {
             await loadExistingTables()
@@ -280,8 +282,8 @@ struct PasteSheet: View {
 
     private func loadExistingTables() async {
         existingTables = []
-        guard !useNewDatabase, !(useNewSchema && !isMySQL), !effectiveDatabase.isEmpty,
-            let session = environment.session(for: targetConnectionID, database: isMySQL ? nil : effectiveDatabase)
+        guard !useNewDatabase, !(useNewSchema && !isFlat), !effectiveDatabase.isEmpty,
+            let session = environment.session(for: targetConnectionID, database: isFlat ? nil : effectiveDatabase)
         else { return }
         let ref = targetRef
         let tables = (try? await session.introspection(.tables(ref)) { try await $0.tables(in: ref) }) ?? []

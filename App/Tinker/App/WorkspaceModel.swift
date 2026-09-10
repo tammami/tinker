@@ -180,6 +180,14 @@ public final class WorkspaceModel {
     public var tabs: [WorkspaceTab] = []
     public var selectedTabID: UUID?
     public var sidebarSelection: SidebarItem.ID?
+    /// The sidebar's filter text, matched fuzzily against every row's name.
+    public var sidebarFilter = ""
+    /// A row shown as the drop target it would be mid-drag, for screenshots of the
+    /// highlight (`--ui-demo dragdrop`); nil in ordinary use.
+    public var demoDropTargetID: SidebarItem.ID?
+    /// The connection being dragged in the sidebar, while the drag lasts. A drop target
+    /// reads it to decide, before the pasteboard is loaded, whether it can take the drop.
+    @ObservationIgnored public var draggedConnectionID: UUID?
     public var isSidebarVisible = true
     public var isInspectorVisible = false
     public var quickOpenQuery = ""

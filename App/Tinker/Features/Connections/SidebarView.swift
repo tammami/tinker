@@ -18,12 +18,10 @@ public struct SidebarView: View {
     let onCloseDatabase: (UUID, String, SidebarItem.ID) -> Void
     let onOpenUsers: (UUID, String?) -> Void
 
-    @State private var searchText = ""
-
     public var body: some View {
         List(selection: $workspace.sidebarSelection) {
-            if filteredRoots.isEmpty, !searchText.isEmpty {
-                Text("No connection or object matches “\(searchText)”")
+            if filteredRoots.isEmpty, !workspace.sidebarFilter.isEmpty {
+                Text("No connection or object matches “\(workspace.sidebarFilter)”")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, DesignTokens.Spacing.sm)
@@ -46,7 +44,7 @@ public struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .searchable(text: $searchText, placement: .sidebar, prompt: "Filter connections and tables")
+        .searchable(text: $workspace.sidebarFilter, placement: .sidebar, prompt: "Filter connections and tables")
         .sheet(item: $workspace.folderEditor) { editor in
             FolderNameSheet(editor: editor, environment: workspace.environment) { workspace.folderEditor = nil }
         }
@@ -92,13 +90,15 @@ public struct SidebarView: View {
         return live > 0 ? "\(live) of \(total) connected" : "\(total) connection\(total == 1 ? "" : "s")"
     }
 
+    /// The tree with only the rows whose name matches the search, fuzzily (`ak` keeps
+    /// `aset_kelompok`), and the rows above them.
     var filteredRoots: [SidebarItem] {
-        guard !searchText.isEmpty else { return sidebar.roots }
-        let needle = searchText.lowercased()
+        let needle = workspace.sidebarFilter.trimmingCharacters(in: .whitespaces)
+        guard !needle.isEmpty else { return sidebar.roots }
         func filter(_ items: [SidebarItem]) -> [SidebarItem] {
             items.compactMap { item in
                 let children = filter(item.children ?? [])
-                if item.title.lowercased().contains(needle) || !children.isEmpty {
+                if FuzzyMatch.matches(needle, in: item.title) || !children.isEmpty {
                     var copy = item
                     if item.children != nil { copy.children = children.isEmpty ? item.children : children }
                     return copy
@@ -221,8 +221,8 @@ struct SidebarRow: View {
         .simultaneousGesture(TapGesture(count: 2).onEnded { handleDoubleClick() })
         .simultaneousGesture(TapGesture(count: 1).onEnded { workspace.sidebarSelection = item.id })
         .help(helpText)
-        // Connections drag; folders (and the space between folders, via the connection
-        // rows themselves) accept them, which is how a connection changes folder.
+        // Connections drag; folders and connection rows accept them, which is how a
+        // connection changes folder. The target row lights up while it can take the drop.
         .modifier(ConnectionDragModifier(item: item, workspace: workspace))
     }
 
@@ -940,46 +940,134 @@ enum RoutineTemplates {
     }
 }
 
-/// Connections can be dragged; folders take the drop. Everything else is inert.
+/// Connections can be dragged; folders and connection rows take the drop, which moves
+/// the dragged connection into that folder, or beside that connection (so a drop on a
+/// top-level connection takes it out of its folder). The row under the pointer is tinted
+/// and outlined while it can take the drop, so where the connection will land is plain.
 struct ConnectionDragModifier: ViewModifier {
     let item: SidebarItem
     let workspace: WorkspaceModel
+    @State private var isTargeted = false
 
     func body(content: Content) -> some View {
         switch item.kind {
         case let .connection(id):
             content
-                .onDrag { NSItemProvider(object: id.uuidString as NSString) }
+                .onDrag {
+                    workspace.draggedConnectionID = id
+                    return NSItemProvider(object: id.uuidString as NSString)
+                } preview: {
+                    ConnectionDragPreview(title: item.title)
+                }
+                .modifier(DropTargetHighlight(isTargeted: isTargeted || workspace.demoDropTargetID == item.id))
+                .onDrop(
+                    of: ConnectionDropDelegate.types,
+                    delegate: ConnectionDropDelegate(
+                        path: workspace.environment.connections.first { $0.id == id }?.groupPath ?? [],
+                        workspace: workspace, isTargeted: $isTargeted))
         case let .group(path):
             content
+                .modifier(DropTargetHighlight(isTargeted: isTargeted || workspace.demoDropTargetID == item.id))
                 .onDrop(
-                    of: [.plainText, .utf8PlainText, .text],
-                    delegate: FolderDropDelegate(path: path, workspace: workspace))
+                    of: ConnectionDropDelegate.types,
+                    delegate: ConnectionDropDelegate(path: path, workspace: workspace, isTargeted: $isTargeted))
         default:
             content
         }
     }
 }
 
-/// Moves a dropped connection into the folder it landed on.
-struct FolderDropDelegate: DropDelegate {
+/// What travels with the pointer: the connection's icon and name on a small card, so a
+/// drag is visibly carrying something from the moment it starts.
+private struct ConnectionDragPreview: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: DesignTokens.Spacing.sm) {
+            Image(systemName: Icon.connection)
+                .frame(width: DesignTokens.Metrics.iconWidth)
+            Text(title).lineLimit(1)
+        }
+        .font(.callout)
+        .padding(.horizontal, DesignTokens.Spacing.md)
+        .padding(.vertical, DesignTokens.Spacing.sm)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius)
+                .strokeBorder(Color.accentColor, lineWidth: 1))
+    }
+}
+
+/// The accent tint and outline a row wears while a dragged connection can be dropped on it.
+private struct DropTargetHighlight: ViewModifier {
+    let isTargeted: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius)
+                    .fill(Color.accentColor.opacity(isTargeted ? 0.2 : 0))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius)
+                    .strokeBorder(Color.accentColor.opacity(isTargeted ? 1 : 0), lineWidth: 1.5)
+            )
+            .animation(.easeOut(duration: 0.12), value: isTargeted)
+    }
+}
+
+/// Moves a dropped connection into `path`: the folder it landed on, or the folder of the
+/// connection it landed on. A drop that would change nothing (the same folder, or the
+/// connection onto itself) is refused, so the row is not tinted for it.
+struct ConnectionDropDelegate: DropDelegate {
+    static let types: [UTType] = [.plainText, .utf8PlainText, .text]
+
     let path: [String]
     let workspace: WorkspaceModel
+    let isTargeted: Binding<Bool>
 
-    func validateDrop(info: DropInfo) -> Bool {
-        info.hasItemsConforming(to: [.plainText, .utf8PlainText, .text])
+    /// The dragged connection, when it is one of ours and not already at `path`.
+    private var movable: ConnectionConfig? {
+        guard let id = workspace.draggedConnectionID,
+            let config = workspace.environment.connections.first(where: { $0.id == id }),
+            config.groupPath != path
+        else { return nil }
+        return config
     }
 
-    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: Self.types) && movable != nil
+    }
+
+    func dropEntered(info: DropInfo) {
+        isTargeted.wrappedValue = movable != nil
+    }
+
+    func dropExited(info: DropInfo) {
+        isTargeted.wrappedValue = false
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: movable != nil ? .move : .cancel)
+    }
 
     func performDrop(info: DropInfo) -> Bool {
-        guard let provider = info.itemProviders(for: [.plainText, .utf8PlainText, .text]).first else { return false }
+        isTargeted.wrappedValue = false
         let workspace = workspace
         let path = path
+        workspace.draggedConnectionID = nil
+        if let config = movable {
+            Task { @MainActor in await workspace.environment.move(config, toGroup: path) }
+            return true
+        }
+        // A drag that started elsewhere (another window) carries the id on the pasteboard.
+        guard let provider = info.itemProviders(for: Self.types).first else { return false }
         _ = provider.loadObject(ofClass: NSString.self) { object, _ in
             guard let text = object as? String, let id = UUID(uuidString: text) else { return }
             Task { @MainActor in
-                guard let config = workspace.environment.connections.first(where: { $0.id == id }) else { return }
+                guard let config = workspace.environment.connections.first(where: { $0.id == id }),
+                    config.groupPath != path
+                else { return }
                 await workspace.environment.move(config, toGroup: path)
             }
         }

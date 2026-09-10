@@ -75,6 +75,13 @@ public final class SidebarModel {
         )
     }
 
+    /// `items` in the order a person scans a list: by name, case-insensitively, with
+    /// numbers in numeric order (`table_2` before `table_10`), whatever the server's
+    /// collation returned.
+    static func byName<T>(_ items: [T], _ name: (T) -> String) -> [T] {
+        items.sorted { name($0).localizedStandardCompare(name($1)) == .orderedAscending }
+    }
+
     /// The rows directly inside `path`: its subfolders, then its own connections.
     private func buildLevel(path: [String]) -> [SidebarItem] {
         var childNames: [String] = []
@@ -100,9 +107,11 @@ public final class SidebarModel {
                 children: children
             )
         }
+        // Connections in name order, like everything else in the tree.
         items.append(
             contentsOf: environment.connections
                 .filter { $0.groupPath == path }
+                .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
                 .map(connectionItem))
         return items
     }
@@ -294,7 +303,7 @@ public final class SidebarModel {
             let databases = try await session.introspection(.databases) { try await $0.databases() }
             // Which one the main session sits on decides whether another needs its own session.
             environment.currentDatabases[id] = databases.first { $0.isCurrent }?.name
-            return databases.map { database in
+            return Self.byName(databases, \.name).map { database in
                 SidebarItem(
                     id: "\(id.uuidString)/db/\(database.name)",
                     kind: .database(connection: id, name: database.name),
@@ -327,7 +336,7 @@ public final class SidebarModel {
                 try await $0.schemas(in: name)
             }
             // System schemas are hidden by default; the user rarely browses pg_catalog.
-            return schemas.filter { !$0.isSystem }.map { schema in
+            return Self.byName(schemas.filter { !$0.isSystem }, \.name).map { schema in
                 SidebarItem(
                     id: "\(id.uuidString)/db/\(name)/schema/\(schema.name)",
                     kind: .schema(connection: id, ref: schema.ref),
@@ -351,7 +360,7 @@ public final class SidebarModel {
                         title: Self.folderTitle(for: kind),
                         subtitle: "\(matching.count)",
                         symbolName: kind.symbolName,
-                        children: matching.map { table in
+                        children: Self.byName(matching, \.name).map { table in
                             SidebarItem(
                                 id: "\(id.uuidString)/table/\(table.ref.id)",
                                 kind: .table(connection: id, info: table),
@@ -375,7 +384,7 @@ public final class SidebarModel {
         case let .routineFolder(id, ref):
             guard let session = environment.session(for: id, schema: ref) else { return [] }
             let routines = try await session.introspection(.routines(ref)) { try await $0.routines(in: ref) }
-            return routines.map { routine in
+            return Self.byName(routines, \.name).map { routine in
                 SidebarItem(
                     id: "\(item.id)/\(routine.id)",
                     kind: .routine(
@@ -414,36 +423,12 @@ public final class SidebarModel {
 
     /// Fuzzy-matches table names across every connection whose schema has been read.
     ///
-    /// A subsequence match, ranked by how early and how tightly the letters appear, which
-    /// is what makes `usr` find `users` ahead of `user_sessions`.
+    /// A subsequence match (`FuzzyMatch`), ranked by how early and how tightly the letters
+    /// appear, which is what makes `usr` find `users` ahead of `user_sessions`.
     public func quickOpenMatches(_ query: String, limit: Int = 40) -> [(connection: UUID, table: TableInfo)] {
-        let needle = query.lowercased()
+        let needle = query.trimmingCharacters(in: .whitespaces)
         guard !needle.isEmpty else { return Array(knownTables.prefix(limit)) }
-        return
-            knownTables
-            .compactMap { entry -> (score: Int, connection: UUID, table: TableInfo)? in
-                guard let score = Self.fuzzyScore(needle: needle, haystack: entry.table.name.lowercased()) else {
-                    return nil
-                }
-                return (score, entry.connection, entry.table)
-            }
-            .sorted { ($0.score, $0.table.name) < ($1.score, $1.table.name) }
-            .prefix(limit)
-            .map { (connection: $0.connection, table: $0.table) }
-    }
-
-    /// Lower is better. `nil` when the needle is not a subsequence of the haystack.
-    static func fuzzyScore(needle: String, haystack: String) -> Int? {
-        if haystack.hasPrefix(needle) { return 0 }
-        var score = haystack.contains(needle) ? 10 : 100
-        var index = haystack.startIndex
-        var gaps = 0
-        for character in needle {
-            guard let found = haystack[index...].firstIndex(of: character) else { return nil }
-            gaps += haystack.distance(from: index, to: found)
-            index = haystack.index(after: found)
-        }
-        score += gaps
-        return score
+        let ordered = knownTables.sorted { $0.table.name.localizedStandardCompare($1.table.name) == .orderedAscending }
+        return Array(FuzzyMatch.filter(ordered, query: needle, text: { $0.table.name }).prefix(limit))
     }
 }

@@ -104,6 +104,9 @@ public struct QueryTabView: View {
             .onAppear {
                 controller.onRequestInspector = { workspace.isInspectorVisible = true }
                 controller.onConfirmProduction = { workspace.confirmation = $0 }
+                controller.onFollowReference = { table, rules in
+                    workspace.followReference(to: table, connectionID: controller.connectionID, filter: rules)
+                }
             }
     }
 
@@ -302,7 +305,7 @@ public struct QueryTabView: View {
     private func resultChip(_ result: QueryResultTab) -> some View {
         let isSelected = controller.selectedResultID == result.id
         return Button {
-            controller.selectedResultID = result.id
+            controller.showResult(result.id)
         } label: {
             HStack(spacing: DesignTokens.Spacing.xs) {
                 Image(systemName: result.error != nil ? Icon.error : (result.grid == nil ? Icon.success : Icon.data))
@@ -476,7 +479,9 @@ public struct QueryTabView: View {
                             rowValues: controller.rowValues(controller.selection.focusRow),
                             rowState: grid.rowChangeState(controller.selection.focusRow),
                             isEditable: grid.isEditable,
-                            hasReference: { _ in false },
+                            hasReference: { column in
+                                controller.gridHasReference(row: controller.selection.focusRow, column: column)
+                            },
                             onCommit: { column, text in
                                 controller.gridDidCommitEdit(
                                     row: controller.selection.focusRow, column: column, text: text)
@@ -485,7 +490,12 @@ public struct QueryTabView: View {
                                 grid.setValue(.null, row: controller.selection.focusRow, column: column)
                                 controller.bumpRevision()
                             },
-                            onFollow: { _ in }
+                            onFollow: { column in
+                                controller.gridDidRequestFollowReference(
+                                    row: controller.selection.focusRow, column: column)
+                            },
+                            canPickReference: { column in controller.gridColumnReferences(column) },
+                            onPickReference: { column in controller.requestReferencePicker(column: column) }
                         )
                         .id(controller.revision)
                     }

@@ -141,13 +141,17 @@ public struct DataGridView: NSViewRepresentable {
 
     public func updateNSView(_ scrollView: NSScrollView, context: Context) {
         let coordinator = context.coordinator
+        // SwiftUI keeps one table view for a pane and hands it another model when the
+        // shown result changes (a Run All has several). The columns belong to the model
+        // they were built for, so a swapped model is a full reload, revision or not.
+        let modelChanged = coordinator.model !== model
         coordinator.model = model
         coordinator.delegate = delegate
         coordinator.selection = selection
         coordinator.selectionBinding = $selection
         coordinator.storedColumnWidths = columnWidths
         coordinator.hiddenColumns = hiddenColumns
-        if coordinator.revision != revision {
+        if coordinator.revision != revision || modelChanged {
             coordinator.revision = revision
             // A reload tears down the cell an inline editor sits in, which would end the
             // edit and commit half-typed text; it waits until the editor is done.

@@ -57,6 +57,11 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     /// Bumped when the connection or schema changes, so a load for the old one is dropped.
     private var completionGeneration = 0
     private var warmTask: Task<Void, Never>?
+    /// The tables the pending warm is about to read, so asking for them again while it
+    /// waits does not restart its pause: a list polled every few milliseconds would
+    /// otherwise never see the columns arrive.
+    private var warmingKeys: Set<ColumnCacheKey> = []
+    private var warmGeneration = 0
 
     struct ColumnCacheKey: Hashable {
         let connection: UUID
@@ -69,6 +74,11 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         self.dialect = dialect
         self.environment = environment
     }
+
+    /// The foreign keys of each result that reads one table, by result id, so a cell
+    /// can be followed to the row it points at, as on a table tab.
+    @ObservationIgnored private var references: [UUID: ReferenceSupport] = [:]
+    private var selectedReferences: ReferenceSupport? { selectedResultID.flatMap { references[$0] } }
 
     var session: ConnectionSession? { environment.session(for: connectionID) }
 
@@ -134,7 +144,25 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         results.first { $0.id == selectedResultID } ?? results.first
     }
 
-    public func bumpRevision() { revision &+= 1 }
+    public func bumpRevision() {
+        revision &+= 1
+        scheduleReferenceLabels()
+    }
+
+    /// Looks up, shortly after the grid changed, the labels beside foreign-key values
+    /// that are loaded and not known yet; a redraw follows without another round.
+    private func scheduleReferenceLabels() {
+        guard let grid = selectedResult?.grid, let session, let references = selectedReferences else { return }
+        references.scheduleLabels(model: grid, session: session) { [weak self] in self?.revision &+= 1 }
+    }
+
+    /// Shows one of the run's results. The cell selection belongs to the result it was
+    /// made in, so it starts over rather than pointing into another result's columns.
+    public func showResult(_ id: UUID) {
+        guard selectedResultID != id else { return }
+        selectedResultID = id
+        selection = GridSelection()
+    }
 
     /// The schema (PostgreSQL) or database (MySQL) unqualified names resolve against: the
     /// tab's choice in the toolbar, else the connection's own.
@@ -265,6 +293,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         isRunning = true
         errorBanner = nil
         results.removeAll()
+        references.removeAll()
         elapsed = .zero
         startTimer()
         defer {
@@ -314,13 +343,23 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
                     return try await self.connectionForRun(session: session)
                 }
                 // A SELECT over one table with its key edits like a table tab.
-                let editing = await editTarget(for: statement.text, session: session)
+                let source = sourceTable(for: statement.text, session: session)
+                let editing = await editTarget(for: source, session: session)
                 let grid = GridModel(
                     source: .query(statement.text), dialect: dialect, loader: loader,
                     identityColumns: editing?.key ?? [], identityKind: editing?.keyKind)
                 grid.isPaged = true
                 await grid.load(page: 0)
                 if let failure = grid.lastError { throw failure }
+                // The foreign keys of the tables the statement reads, joined or not, so a
+                // cell can be followed to the row it points at as on a table tab.
+                let read = readTables(in: statement.text, session: session)
+                if !read.isEmpty {
+                    let support = ReferenceSupport(
+                        environment: environment, connectionID: connectionID, dialect: dialect)
+                    await support.load(tables: read, columns: grid.columns, session: session)
+                    if !support.foreignKeys.isEmpty { references[result.id] = support }
+                }
                 if let editing {
                     let names = Set(grid.columns.map(\.name))
                     let sameTable = grid.columns.allSatisfy { $0.tableOID == nil || $0.tableOID == editing.tableOID }
@@ -411,27 +450,49 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         }
     }
 
-    /// What editing a result of `sql` would write to, when it reads one table whose key
-    /// can be looked up; nil means the rows stay read-only.
+    /// The one table a SELECT reads, resolved against the tab's database, or nil when the
+    /// statement joins, aggregates or is not a SELECT.
+    private func sourceTable(for sql: String, session: ConnectionSession) -> TableRef? {
+        guard let match = QuerySourceTable.detect(sql, dialect: dialect) else { return nil }
+        return tableRef(schema: match.schema, name: match.name, session: session)
+    }
+
+    /// Every table the statement reads (FROM, JOIN, a comma list), each once, resolved
+    /// against the tab's database; what a result's foreign keys can come from.
+    private func readTables(in sql: String, session: ConnectionSession) -> [TableRef] {
+        var seen: Set<String> = []
+        var tables: [TableRef] = []
+        for mention in SQLCompletionContext.tableMentions(in: sql, dialect: dialect) {
+            let table = tableRef(schema: mention.schema, name: mention.name, session: session)
+            if seen.insert(table.id).inserted { tables.append(table) }
+        }
+        return tables
+    }
+
+    /// A table named in a statement, with the schema or database the statement left out
+    /// filled in from the tab's session.
+    private func tableRef(schema: String?, name: String, session: ConnectionSession) -> TableRef {
+        let database = session.config.database ?? ""
+        switch dialect {
+        case .mysql:
+            return TableRef(schema: SchemaRef.mysql(schema ?? sessionDatabase ?? database), name: name)
+        case .sqlite:
+            // One schema, `main`, unless the statement names an attached database.
+            let schema = schema ?? SchemaRef.sqliteMainSchema
+            return TableRef(database: schema, schema: schema, name: name)
+        case .postgresql:
+            return TableRef(database: database, schema: schema ?? sessionDatabase ?? "public", name: name)
+        }
+    }
+
+    /// What editing a result over `table` would write to, when the table's key can be
+    /// looked up; nil means the rows stay read-only.
     private func editTarget(
-        for sql: String, session: ConnectionSession
+        for table: TableRef?, session: ConnectionSession
     ) async -> (
         table: TableRef, key: [String], keyKind: DBValueKind?, columns: Set<String>, tableOID: String
     )? {
-        guard let match = QuerySourceTable.detect(sql, dialect: dialect) else { return nil }
-        let database = session.config.database ?? ""
-        let table: TableRef
-        switch dialect {
-        case .mysql:
-            let schema = match.schema ?? sessionDatabase ?? database
-            table = TableRef(schema: SchemaRef.mysql(schema), name: match.name)
-        case .sqlite:
-            // One schema, `main`, unless the statement names an attached database.
-            let schema = match.schema ?? SchemaRef.sqliteMainSchema
-            table = TableRef(database: schema, schema: schema, name: match.name)
-        case .postgresql:
-            table = TableRef(database: database, schema: match.schema ?? sessionDatabase ?? "public", name: match.name)
-        }
+        guard let table else { return nil }
         guard
             let columns = try? await session.introspection(.columns(table), load: { try await $0.columns(of: table) }),
             !columns.isEmpty
@@ -897,6 +958,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         sessionDatabase = nil
         availableDatabases = []
         results.removeAll()
+        references.removeAll()
         selectedResultID = nil
         statusText = "Connected to \(config.name)"
         cachedColumns = [:]
@@ -1052,14 +1114,16 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     {
         let context = SQLCompletionContext.detect(statement: statement, caretOffset: caretOffset, dialect: dialect)
         let lowered = context.prefix.lowercased()
+        // Matching is fuzzy: `kel` finds `aset_kelompok`, `ak` too. The ranking at the
+        // end puts the best fit first; here the buckets only drop what cannot match.
         func matches(_ candidate: CompletionCandidate) -> Bool {
-            lowered.isEmpty || candidate.text.lowercased().hasPrefix(lowered)
+            lowered.isEmpty || FuzzyMatch.matches(lowered, in: candidate.text)
         }
         let keywords =
             lowered.isEmpty
             ? []
             : SQLTokenizer.keywords
-                .filter { $0.lowercased().hasPrefix(lowered) }
+                .filter { FuzzyMatch.matches(lowered, in: $0) }
                 .sorted()
                 .map { CompletionCandidate(text: $0, kind: .keyword) }
         // The engine's functions, once a letter is typed: `DA` offers DATE, DATE_FORMAT,
@@ -1067,7 +1131,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         let functions =
             lowered.isEmpty
             ? []
-            : SQLFunctionCatalog.matching(prefix: lowered, dialect: dialect)
+            : SQLFunctionCatalog.functions(for: dialect)
+                .filter { FuzzyMatch.matches(lowered, in: $0.name) }
                 .sorted { $0.name.lowercased() < $1.name.lowercased() }
                 .map { CompletionCandidate(function: $0) }
 
@@ -1091,9 +1156,12 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
                 ranked = columnCandidates(for: [SQLTableMention(name: qualifier)], matching: lowered)
             }
         case .any:
-            ranked = lowered.isEmpty ? [] : functions + keywords + completionTables.filter(matches)
+            ranked = lowered.isEmpty ? [] : keywords + completionTables.filter(matches) + functions
         }
-        // Tables and columns come before keywords, so the cap never hides what the context asked for.
+        // What was typed in full, then the everyday keywords (`fro` is FROM before
+        // FROM_BASE64), then the rest by fit, each bucket keeping its order; the cap then
+        // never hides what the context asked for.
+        ranked = SQLCompletionRanking.order(ranked, prefix: lowered, text: \.text, isKeyword: { $0.kind == .keyword })
         return Array(ranked.prefix(60))
     }
 
@@ -1107,7 +1175,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
                 missing.append(mention)
                 continue
             }
-            for column in columns where lowered.isEmpty || column.name.lowercased().hasPrefix(lowered) {
+            for column in columns where lowered.isEmpty || FuzzyMatch.matches(lowered, in: column.name) {
                 let detail = mentions.count > 1 ? "\(mention.name) · \(column.nativeType)" : column.nativeType
                 candidates.append(CompletionCandidate(text: column.name, detail: detail, kind: .column))
             }
@@ -1132,8 +1200,17 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     /// Reads the columns of the tables the statement under the caret names, a moment after
     /// typing pauses, so the list has them by the time a column is wanted.
     private func scheduleColumnWarm(_ mentions: [SQLTableMention]? = nil) {
+        if let mentions, !mentions.isEmpty, mentions.allSatisfy({ warmingKeys.contains(cacheKey(for: $0)) }) {
+            return  // Already on its way.
+        }
         warmTask?.cancel()
+        warmingKeys = Set((mentions ?? []).map(cacheKey(for:)))
+        warmGeneration &+= 1
+        let generation = warmGeneration
         warmTask = Task { [weak self] in
+            defer {
+                if let self, self.warmGeneration == generation { self.warmingKeys.removeAll() }
+            }
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled, let self else { return }
             let wanted =
@@ -1228,6 +1305,59 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     public func gridDidRequestInspector() { onRequestInspector?() }
     /// Set by the tab view; the grid asks for the inspector with the space bar.
     @ObservationIgnored public var onRequestInspector: (() -> Void)?
+    /// Set by the tab view; the grid's context menu asks to follow a foreign key.
+    @ObservationIgnored public var onFollowReference: ((TableRef, [FilterRule]) -> Void)?
+
+    // MARK: Foreign keys of a single-table result
+
+    /// The foreign key a cell takes part in and the filter that finds the referenced row.
+    public func referenceTarget(row: Int, column: Int) -> (table: TableRef, filter: [FilterRule])? {
+        guard let grid = selectedResult?.grid, let references = selectedReferences else { return nil }
+        return references.target(row: row, column: column, in: grid)
+    }
+
+    public func gridHasReference(row: Int, column: Int) -> Bool {
+        referenceTarget(row: row, column: column) != nil
+    }
+
+    public func gridDidRequestFollowReference(row: Int, column: Int) {
+        guard let target = referenceTarget(row: row, column: column) else { return }
+        onFollowReference?(target.table, target.filter)
+    }
+
+    public func gridColumnReferences(_ column: Int) -> Bool {
+        guard let grid = selectedResult?.grid, let references = selectedReferences else { return false }
+        return references.columnReferences(column, in: grid)
+    }
+
+    public func gridReferencePicker(row: Int, column: Int) -> ReferencePickerModel? {
+        guard let grid = selectedResult?.grid, let session, let references = selectedReferences else { return nil }
+        return references.picker(row: row, column: column, in: grid, session: session) { [weak self] in
+            self?.bumpRevision()
+        }
+    }
+
+    public func gridDidPickReference(row: Int, column: Int, key: [String: DBValue]) {
+        guard let grid = selectedResult?.grid, let references = selectedReferences,
+            references.apply(key: key, row: row, column: column, in: grid)
+        else { return }
+        bumpRevision()
+        if !grid.isPendingInsertRow(row) { writeIfAutoCommit(.loadedRowsOnly) }
+    }
+
+    public func gridReferenceLabel(row: Int, column: Int) -> String? {
+        guard let grid = selectedResult?.grid, let references = selectedReferences else { return nil }
+        return references.label(row: row, column: column, in: grid)
+    }
+
+    /// Asks the grid to open the foreign-key picker over a cell, for the inspector's
+    /// Choose button. The grid owns the popover so it can anchor to the real cell.
+    public func requestReferencePicker(column: Int) {
+        NotificationCenter.default.post(
+            name: .tinkerPresentReferencePicker, object: self,
+            userInfo: ["row": selection.focusRow, "column": column]
+        )
+    }
     public func gridDidRequestSetNull() { setSelectionNull() }
     public func gridDidRequestDeleteRows() { deleteSelectedRows() }
     public func gridDidRequestAddRow() { addRow() }

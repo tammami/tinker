@@ -8,6 +8,9 @@ public struct ColumnMeta: Sendable, Hashable, Identifiable, Codable {
     /// Driver-specific identity of the table this column came from, when the server
     /// reports one. PostgreSQL: the relation OID. `nil` for computed columns.
     public let tableOID: String?
+    /// The column's name in that table, when the server reports it and it differs from
+    /// `name` because of an alias. MySQL reports it; PostgreSQL does not.
+    public let sourceColumn: String?
     /// The server's own spelling of the type, e.g. `int4` or `varchar(255)`.
     public let nativeTypeName: String
     public let kind: DBValueKind
@@ -19,6 +22,7 @@ public struct ColumnMeta: Sendable, Hashable, Identifiable, Codable {
         id: Int,
         name: String,
         tableOID: String? = nil,
+        sourceColumn: String? = nil,
         nativeTypeName: String,
         kind: DBValueKind,
         isNullable: Bool? = nil,
@@ -27,6 +31,7 @@ public struct ColumnMeta: Sendable, Hashable, Identifiable, Codable {
         self.id = id
         self.name = name
         self.tableOID = tableOID
+        self.sourceColumn = sourceColumn
         self.nativeTypeName = nativeTypeName
         self.kind = kind
         self.isNullable = isNullable

@@ -114,3 +114,14 @@ final class CompletionContextTests: XCTestCase {
         XCTAssertEqual(midWord.prefix, "na")
     }
 }
+
+final class TableMentionTests: XCTestCase {
+    func testEveryTableOfAJoinIsMentionedWithItsAlias() {
+        let mentions = SQLCompletionContext.tableMentions(
+            in: "SELECT o.id, c.name FROM orders o, items i JOIN public.customers AS c ON c.id = o.customer_id",
+            dialect: .postgresql)
+        XCTAssertEqual(mentions.map(\.name), ["orders", "items", "customers"])
+        XCTAssertEqual(mentions.map(\.alias), ["o", "i", "c"])
+        XCTAssertEqual(mentions.map(\.schema), [nil, nil, "public"])
+    }
+}

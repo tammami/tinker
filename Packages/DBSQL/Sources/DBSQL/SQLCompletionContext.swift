@@ -184,6 +184,15 @@ public struct SQLCompletionContext: Sendable, Hashable {
         return nil
     }
 
+    /// Every table `statement` names after FROM, JOIN, INTO, UPDATE or TABLE, in order,
+    /// with its alias. What a result's columns can have come from.
+    public static func tableMentions(in statement: String, dialect: SQLDialect) -> [SQLTableMention] {
+        let tokens = SQLTokenizer.tokenize(statement, dialect: dialect).filter {
+            $0.kind != .whitespace && $0.kind != .comment
+        }
+        return mentions(in: tokens, dialect: dialect)
+    }
+
     /// Every `[schema.]table [AS] [alias]` after FROM, JOIN, INTO, UPDATE or TABLE, and
     /// the further ones a comma adds to a FROM list.
     static func mentions(in tokens: [SQLToken], dialect: SQLDialect) -> [SQLTableMention] {

@@ -2,6 +2,7 @@ import AppKit
 import DBCore
 import DBGrid
 import DBSQL
+import DBStore
 import Foundation
 import Logging
 
@@ -56,7 +57,8 @@ enum UIDemo {
         // The map scene wants the seeded test database whatever the connection defaults to;
         // `--ui-demo-database <name>` picks any other.
         var preferredDatabase =
-            wanted.contains { $0.hasPrefix("map") || $0 == "reference" } ? "tinker_test" : (config.database ?? "")
+            wanted.contains { $0.hasPrefix("map") || $0 == "reference" || $0 == "runall" || $0 == "joinrefs" }
+            ? "tinker_test" : (config.database ?? "")
         if let index = arguments.firstIndex(of: "--ui-demo-database"), index + 1 < arguments.count {
             preferredDatabase = arguments[index + 1]
         }
@@ -145,6 +147,54 @@ enum UIDemo {
                     try? await Task.sleep(for: .milliseconds(400))
                     query.run(all: true)
                 }
+            case "runall":
+                // Two statements run together, the second result shown: every column of the
+                // second table must be filled, not only the ones the first table shares.
+                let tab = controller.newQueryTab(
+                    connectionID: config.id, sql: "SELECT * FROM customers;\nSELECT * FROM orders;")
+                if let query = controller.queryController(for: tab) {
+                    await query.loadSessionChoices()
+                    if !config.dialect.hasSchemaLayer, let name = demoSchemaRef(schema, dialect: config.dialect)?.schema
+                    {
+                        await query.selectDatabase(name)
+                    }
+                    query.run(all: true)
+                    try? await Task.sleep(for: .milliseconds(1500))
+                    if query.results.count > 1 { query.showResult(query.results[1].id) }
+                }
+            case "joinrefs":
+                // A JOIN's customer_id still points at its customer: the label beside it
+                // and the context menu's Go to Referenced Row come from the orders table.
+                let sql = """
+                    SELECT o.id, o.customer_id, c.name AS customer, o.total
+                    FROM orders o JOIN customers c ON c.id = o.customer_id
+                    ORDER BY o.id;
+                    """
+                let tab = controller.newQueryTab(connectionID: config.id, sql: sql)
+                if let query = controller.queryController(for: tab) {
+                    await query.loadSessionChoices()
+                    // PostgreSQL runs on the connection's own database; only MySQL can
+                    // switch to the seeded one here.
+                    if !config.dialect.hasSchemaLayer, let name = demoSchemaRef(schema, dialect: config.dialect)?.schema
+                    {
+                        await query.selectDatabase(name)
+                    }
+                    query.run(all: true)
+                    try? await Task.sleep(for: .milliseconds(1500))
+                    query.selection = GridSelection(row: 0, column: 1)
+                    workspace.isInspectorVisible = true
+                }
+            case "sidebarfilter":
+                // The sidebar filter is fuzzy: `ak` keeps `aset_kelompok`.
+                workspace.sidebarFilter =
+                    arguments.first { $0.hasPrefix("--ui-demo-filter=") }
+                    .map { String($0.dropFirst("--ui-demo-filter=".count)) } ?? "ak"
+            case "dragdrop":
+                // The highlight a folder wears while a dragged connection can be dropped on it.
+                workspace.draggedConnectionID = config.id
+                workspace.demoDropTargetID = workspace.environment.groups.first.map {
+                    "group/\($0.path.joined(separator: "\u{1F}"))"
+                }
             case "bigquery":
                 let tab = controller.newQueryTab(connectionID: config.id, sql: "SELECT * FROM big_table ORDER BY id;")
                 if let query = controller.queryController(for: tab) {
@@ -162,14 +212,18 @@ enum UIDemo {
                         query.selection = GridSelection(row: 0, column: 1)
                     }
                 }
-            case "completion", "completion-columns", "completion-functions":
+            case "completion", "completion-columns", "completion-functions", "completion-keyword", "completion-fuzzy":
                 // `completion` shows the tables offered after FROM with nothing typed;
                 // `completion-columns` the first table's columns after `t.`;
-                // `completion-functions` the date functions offered for `DA` in a select list.
+                // `completion-functions` the date functions offered for `DA` in a select list;
+                // `completion-keyword` FROM above FROM_BASE64 for `fro`;
+                // `completion-fuzzy` the tables whose letters spell `cst` (customers).
                 let sql =
                     switch item {
                     case "completion": "SELECT * FROM "
                     case "completion-functions": "SELECT id, DA"
+                    case "completion-keyword": "SELECT * fro"
+                    case "completion-fuzzy": "SELECT * FROM cst"
                     default: "SELECT * FROM \(preferred?.name ?? "orders") t WHERE t."
                     }
                 let tab = controller.newQueryTab(connectionID: config.id, sql: sql)

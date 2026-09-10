@@ -209,6 +209,7 @@ public actor MySQLSQLConnection: SQLConnection {
                 id: index,
                 name: column.name,
                 tableOID: column.orgTable.isEmpty ? nil : "\(column.schema).\(column.orgTable)",
+                sourceColumn: column.orgName.isEmpty ? nil : column.orgName,
                 nativeTypeName: MySQLValueDecoder.typeName(column),
                 kind: decoder.kind(for: column),
                 isNullable: !column.flags.contains(.COLUMN_NOT_NULL),

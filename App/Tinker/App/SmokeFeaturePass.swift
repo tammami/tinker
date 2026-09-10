@@ -215,8 +215,8 @@ extension SmokeTest {
                 try exporter.finish()
                 let exported = try String(contentsOf: exportURL, encoding: .utf8)
                 check(
-                    "CSV export holds the header and the rows",
-                    exported.hasPrefix("id,name,amount,created") && exported.contains("Ada Lovelace"))
+                    "CSV export holds the header and the rows (\(exported.prefix(120).replacingOccurrences(of: "\n", with: "⏎")))",
+                    exported.hasPrefix("id,name,amount,created") && exported.contains("Ada Byron"))
             } else {
                 check("grid available for export", false)
             }
@@ -344,6 +344,10 @@ extension SmokeTest {
             query.errorBanner = nil
             await environment.save(config)
             check("the connection is back off production", !table.isProduction)
+            // Production held every statement in one transaction; leaving production does
+            // not end it (that is the user's call), so end it here before the edits below.
+            await query.rollbackTransaction()
+            check("leaving production keeps its transaction until it is ended", !query.isInTransaction)
 
             // MARK: Query results page and edit like a table
             query.sql = "SELECT id, name, amount FROM smoke_features ORDER BY id"

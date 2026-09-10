@@ -126,13 +126,7 @@ public struct SettingsView: View {
                         "Reports are written to Application Support and never sent anywhere. They record the app version, the system version and a stack trace; never SQL, values or credentials."
                     )
                 }
-                Section {
-                    LabeledContent("Updates") {
-                        Text(Self.describe(updater.status)).foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Label("Updates", systemImage: Icon.refresh)
-                }
+                UpdatesSection(updater: updater)
             }
             .formStyle(.grouped)
             .tabItem { Label("Diagnostics", systemImage: "stethoscope") }
@@ -148,12 +142,42 @@ public struct SettingsView: View {
         .onChange(of: settings.showSystemSchemas) { _, _ in Task { await settings.save() } }
     }
 
+    /// The Updates group of the Diagnostics tab: version, status, the automatic switch
+    /// and a button. Its own view, so the form's builder stays small enough to type-check.
+    private struct UpdatesSection: View {
+        @Bindable var updater: Updater
+
+        var body: some View {
+            Section {
+                LabeledContent("Version") {
+                    Text(Updater.versionDescription).foregroundStyle(.secondary).monospacedDigit()
+                }
+                LabeledContent("Status") {
+                    Text(SettingsView.describe(updater.status)).foregroundStyle(.secondary)
+                }
+                Toggle("Check for updates automatically", isOn: $updater.automaticallyChecks)
+                    .disabled(!updater.isConfigured)
+                LabeledContent("") {
+                    Button("Check Now") { updater.checkForUpdates() }
+                        .disabled(!updater.isConfigured || updater.status == .checking)
+                }
+            } header: {
+                Label("Updates", systemImage: Icon.update)
+            } footer: {
+                Text(
+                    "Updates are fetched from the release feed only when you ask, or on a daily schedule when the switch is on. Every update is signed; one that does not verify is refused."
+                )
+            }
+        }
+    }
+
     static func describe(_ status: Updater.Status) -> String {
         switch status {
         case .notConfigured: "Not configured in this build"
         case let .idle(feed): feed.host ?? feed.absoluteString
         case .checking: "Checking…"
         case let .upToDate(checkedAt): "Up to date, checked \(checkedAt.formatted(date: .omitted, time: .shortened))"
+        case let .updateAvailable(version): "Version \(version) is available"
         case let .failed(message): message
         }
     }

@@ -4,6 +4,20 @@
 <dict>
 	<!-- Merged into the generated Info.plist. SQLite database files open as connections;
 	     the rank is Alternate so Tinker offers itself without claiming the files. -->
+	<!-- Sparkle (SPEC §2.1). The feed and key come from the TINKER_APPCAST_URL and
+	     TINKER_SPARKLE_PUBLIC_KEY build settings; Updater reports "not configured" when
+	     either is empty. Automatic checks are off until the user turns them on in Settings,
+	     so Sparkle never asks with its own prompt and never reaches the network unasked. -->
+	<key>SUFeedURL</key>
+	<string>$(TINKER_APPCAST_URL)</string>
+	<key>SUPublicEDKey</key>
+	<string>$(TINKER_SPARKLE_PUBLIC_KEY)</string>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
+	<key>SUEnableInstallerLauncherService</key>
+	<false/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

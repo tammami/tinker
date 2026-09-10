@@ -8,6 +8,14 @@
 #                                      Developer ID: signed with the certificate at hand
 #                                      (or ad hoc), zipped; opened once with right-click → Open
 #   Scripts/release.sh --unsigned      no signing at all, for a local smoke test
+#   Scripts/release.sh --publish       full release, then a GitHub release carrying the DMG,
+#                                      the zip and the signed appcast (needs `gh auth login`)
+#
+# Updates: the project's TINKER_APPCAST_URL points at
+#   https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml
+# so each GitHub release must carry an appcast.xml naming its own DMG. This script writes
+# it, signed with the Sparkle EdDSA private key in the login keychain (made once with
+# `generate_keys`; the matching public key is the project's TINKER_SPARKLE_PUBLIC_KEY).
 #
 # Environment:
 #   TINKER_SIGNING_IDENTITY   "Developer ID Application: … (TEAMID)"
@@ -33,9 +41,15 @@ for argument in "$@"; do
         # certificate is at hand (or ad hoc), Apple silicon only, zipped so nothing is lost on
         # the way. The recipient opens it once with right-click → Open.
         --share) MODE="share" ;;
+        --publish) PUBLISH=1 ;;
         *) echo "unknown argument: $argument" >&2; exit 2 ;;
     esac
 done
+PUBLISH="${PUBLISH:-0}"
+if [[ "$PUBLISH" == 1 && "$MODE" != "full" ]]; then
+    echo "--publish needs a full (notarized) release" >&2
+    exit 2
+fi
 
 bold() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33mWARNING:\033[0m %s\n' "$*"; }
@@ -45,6 +59,8 @@ BUILD_DIR=".build/release"
 ARCHIVE="$BUILD_DIR/Tinker.xcarchive"
 EXPORT_DIR="$BUILD_DIR/export"
 APP="$EXPORT_DIR/Tinker.app"
+# The stapled zip; only a full release makes one.
+RELEASE_ZIP=""
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
@@ -282,14 +298,76 @@ ls -lh "$DMG" | awk '{print "  " $5}'
 
 # ---------------------------------------------------------------------------
 bold "Appcast"
-if [[ -n "${TINKER_APPCAST_URL:-}" ]]; then
-    cat <<APPCAST
-  Sign the DMG for Sparkle and add an <item> to the appcast:
-    ./bin/sign_update "$DMG"
-  The feed this build points at is $TINKER_APPCAST_URL
-APPCAST
+# The feed and key baked into this build: an explicit environment value, else the project's.
+FEED_URL="${TINKER_APPCAST_URL:-$(xcodebuild -project App/Tinker.xcodeproj -target Tinker -showBuildSettings 2>/dev/null |
+    awk '/ TINKER_APPCAST_URL = / {print $3; exit}')}"
+SPARKLE_BIN="$(find .build/DerivedData/SourcePackages/artifacts/sparkle -type d -path "*/Sparkle/bin" 2>/dev/null | head -1)"
+APPCAST="$BUILD_DIR/appcast.xml"
+if [[ -z "$FEED_URL" ]]; then
+    warn "no appcast URL in the build; it cannot check for updates"
+elif [[ -z "$SPARKLE_BIN" || ! -x "$SPARKLE_BIN/sign_update" ]]; then
+    warn "Sparkle's sign_update was not found under .build/DerivedData; build the app once, then sign $DMG by hand"
+elif [[ "$MODE" == "unsigned" ]]; then
+    warn "unsigned build: no appcast is written"
 else
-    warn "TINKER_APPCAST_URL is unset; this build cannot check for updates"
+    # Where the DMG will be downloadable from. A GitHub "latest/download" feed implies the
+    # release's own asset URL; any other feed needs TINKER_DOWNLOAD_URL.
+    TAG="v$VERSION-$BUILD_NUMBER"
+    DOWNLOAD_URL="${TINKER_DOWNLOAD_URL:-}"
+    REPO=""
+    if [[ "$FEED_URL" =~ ^https://github\.com/([^/]+/[^/]+)/releases/latest/download/appcast\.xml$ ]]; then
+        REPO="${BASH_REMATCH[1]}"
+        DOWNLOAD_URL="${DOWNLOAD_URL:-https://github.com/$REPO/releases/download/$TAG/$(basename "$DMG")}"
+    fi
+    if [[ -z "$DOWNLOAD_URL" ]]; then
+        warn "the feed $FEED_URL is not a GitHub release feed; set TINKER_DOWNLOAD_URL to where the DMG will live"
+    else
+        # sign_update prints: sparkle:edSignature="…" length="…"
+        SIGNATURE="$("$SPARKLE_BIN/sign_update" "$DMG")"
+        [[ "$SIGNATURE" == *edSignature* ]] || fail "sign_update produced no signature (is the Sparkle private key in the keychain?)"
+        # What changed: the first section of the changelog, shown in Sparkle's update window.
+        NOTES_MD="$BUILD_DIR/release-notes.md"
+        awk 'BEGIN {n=0} /^## / {n++} n==1 {print}' CHANGELOG.md | sed '1d' > "$NOTES_MD"
+        [[ -s "$NOTES_MD" ]] || echo "Bug fixes and improvements." > "$NOTES_MD"
+        NOTES_HTML="$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$NOTES_MD")"
+        cat > "$APPCAST" <<XML
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <channel>
+        <title>Tinker</title>
+        <description>Tinker releases</description>
+        <language>en</language>
+        <item>
+            <title>Tinker $VERSION ($BUILD_NUMBER)</title>
+            <sparkle:version>$BUILD_NUMBER</sparkle:version>
+            <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <pubDate>$(date -R)</pubDate>
+            <description><![CDATA[<pre style="font: 13px -apple-system, sans-serif; white-space: pre-wrap;">$NOTES_HTML</pre>]]></description>
+            <enclosure url="$DOWNLOAD_URL" type="application/octet-stream" $SIGNATURE />
+        </item>
+    </channel>
+</rss>
+XML
+        echo "  $APPCAST"
+        echo "  enclosure $DOWNLOAD_URL"
+        echo "  feed      $FEED_URL"
+        if [[ "$PUBLISH" == 1 ]]; then
+            bold "Publish"
+            [[ -n "$REPO" ]] || fail "--publish needs a GitHub release feed (got $FEED_URL)"
+            command -v gh >/dev/null || fail "gh is not installed (brew install gh; gh auth login)"
+            gh release create "$TAG" "$DMG" "$RELEASE_ZIP" "$APPCAST" \
+                --repo "$REPO" --title "Tinker $VERSION ($BUILD_NUMBER)" --notes-file "$NOTES_MD"
+            echo "  https://github.com/$REPO/releases/tag/$TAG"
+        else
+            cat <<PUBLISH
+  To publish (the feed reads the latest GitHub release):
+    gh release create "$TAG" "$DMG" "$RELEASE_ZIP" "$APPCAST" --repo "$REPO" \\
+        --title "Tinker $VERSION ($BUILD_NUMBER)" --notes-file "$NOTES_MD"
+  or run Scripts/release.sh --publish next time.
+PUBLISH
+        fi
+    fi
 fi
 
 echo

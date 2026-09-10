@@ -364,7 +364,7 @@
 				CODE_SIGN_ENTITLEMENTS = Tinker/Resources/Tinker.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 				DEVELOPMENT_TEAM = F843PPA65P;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -374,15 +374,13 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Tinker;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Tinker by ThinkFree";
-				INFOPLIST_KEY_SUEnableInstallerLauncherService = NO;
-				INFOPLIST_KEY_SUFeedURL = "$(TINKER_APPCAST_URL)";
-				INFOPLIST_KEY_SUPublicEDKey = "$(TINKER_SPARKLE_PUBLIC_KEY)";
-				INFOPLIST_KEY_SUVerifyUpdateBeforeExtraction = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
+				TINKER_APPCAST_URL = "https://github.com/tammami/tinker/releases/latest/download/appcast.xml";
+				TINKER_SPARKLE_PUBLIC_KEY = "Gi7lBLDqgLU5mKj4TV1ULnshoEYUzXs21UxsFnhHg2w=";
 				PRODUCT_BUNDLE_IDENTIFIER = com.thinkfree.Tinker;
 				PRODUCT_NAME = Tinker;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -399,7 +397,7 @@
 				CODE_SIGN_ENTITLEMENTS = Tinker/Resources/Tinker.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 				DEVELOPMENT_TEAM = F843PPA65P;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -409,15 +407,13 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Tinker;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Tinker by ThinkFree";
-				INFOPLIST_KEY_SUEnableInstallerLauncherService = NO;
-				INFOPLIST_KEY_SUFeedURL = "$(TINKER_APPCAST_URL)";
-				INFOPLIST_KEY_SUPublicEDKey = "$(TINKER_SPARKLE_PUBLIC_KEY)";
-				INFOPLIST_KEY_SUVerifyUpdateBeforeExtraction = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
+				TINKER_APPCAST_URL = "https://github.com/tammami/tinker/releases/latest/download/appcast.xml";
+				TINKER_SPARKLE_PUBLIC_KEY = "Gi7lBLDqgLU5mKj4TV1ULnshoEYUzXs21UxsFnhHg2w=";
 				PRODUCT_BUNDLE_IDENTIFIER = com.thinkfree.Tinker;
 				PRODUCT_NAME = Tinker;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;

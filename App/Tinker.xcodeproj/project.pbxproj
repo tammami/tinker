@@ -364,7 +364,7 @@
 				CODE_SIGN_ENTITLEMENTS = Tinker/Resources/Tinker.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				DEVELOPMENT_TEAM = F843PPA65P;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -378,14 +378,14 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
-				TINKER_APPCAST_URL = "https://github.com/tammami/tinker/releases/latest/download/appcast.xml";
-				TINKER_SPARKLE_PUBLIC_KEY = "Gi7lBLDqgLU5mKj4TV1ULnshoEYUzXs21UxsFnhHg2w=";
+				MARKETING_VERSION = 0.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.thinkfree.Tinker;
 				PRODUCT_NAME = Tinker;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				TINKER_APPCAST_URL = "https://github.com/tammami/tinker/releases/latest/download/appcast.xml";
+				TINKER_SPARKLE_PUBLIC_KEY = "Gi7lBLDqgLU5mKj4TV1ULnshoEYUzXs21UxsFnhHg2w=";
 			};
 			name = Debug;
 		};
@@ -397,7 +397,7 @@
 				CODE_SIGN_ENTITLEMENTS = Tinker/Resources/Tinker.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				DEVELOPMENT_TEAM = F843PPA65P;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -411,14 +411,14 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
-				TINKER_APPCAST_URL = "https://github.com/tammami/tinker/releases/latest/download/appcast.xml";
-				TINKER_SPARKLE_PUBLIC_KEY = "Gi7lBLDqgLU5mKj4TV1ULnshoEYUzXs21UxsFnhHg2w=";
+				MARKETING_VERSION = 0.1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.thinkfree.Tinker;
 				PRODUCT_NAME = Tinker;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				TINKER_APPCAST_URL = "https://github.com/tammami/tinker/releases/latest/download/appcast.xml";
+				TINKER_SPARKLE_PUBLIC_KEY = "Gi7lBLDqgLU5mKj4TV1ULnshoEYUzXs21UxsFnhHg2w=";
 			};
 			name = Release;
 		};

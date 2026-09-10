@@ -73,7 +73,12 @@ public struct MySQLValueDecoder: Sendable {
             }
             return integerValue(data, buffer: &buffer, unsigned: isUnsigned)
 
-        case .float, .double:
+        case .float:
+            // Through the shortest decimal text of the single, so that 0.1 stays 0.1
+            // rather than 0.10000000149011612 (the same reasoning as the PostgreSQL float4).
+            guard let single = data.float else { return .null }
+            return .double(single.isFinite ? Double(String(single)) ?? Double(single) : Double(single))
+        case .double:
             return data.double.map { .double($0) } ?? .null
 
         case .decimal, .newdecimal:

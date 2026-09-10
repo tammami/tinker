@@ -248,6 +248,38 @@ final class SQLiteIntegrationTests: XCTestCase {
         }
     }
 
+    /// `affectedRows` counts the rows the statement changed itself, not the rows a
+    /// trigger or `ON DELETE CASCADE` changed with it: the grid checks for exactly one,
+    /// and a parent with three children was reported as four and rolled back.
+    func testAffectedRowsCountsDirectRowsNotCascadesOrTriggers() async throws {
+        try await withConnection { connection in
+            _ = try await connection.executeCollecting("DROP TABLE IF EXISTS probe_child")
+            _ = try await connection.executeCollecting("DROP TABLE IF EXISTS probe_parent")
+            _ = try await connection.executeCollecting("DROP TABLE IF EXISTS probe_audit")
+            _ = try await connection.executeCollecting("CREATE TABLE probe_parent (id INTEGER PRIMARY KEY, v TEXT)")
+            _ = try await connection.executeCollecting(
+                "CREATE TABLE probe_child (id INTEGER PRIMARY KEY, parent INTEGER REFERENCES probe_parent(id) ON DELETE CASCADE)"
+            )
+            _ = try await connection.executeCollecting("CREATE TABLE probe_audit (note TEXT)")
+            _ = try await connection.executeCollecting(
+                "CREATE TRIGGER probe_after_update AFTER UPDATE ON probe_parent BEGIN INSERT INTO probe_audit VALUES ('u'); END"
+            )
+            _ = try await connection.executeCollecting("INSERT INTO probe_parent VALUES (1, 'a'), (2, 'b')")
+            _ = try await connection.executeCollecting("INSERT INTO probe_child VALUES (10, 1), (11, 1), (12, 1)")
+
+            let update = try await connection.executeCollecting("UPDATE probe_parent SET v = 'z' WHERE id = 1")
+            XCTAssertEqual(update.completion.affectedRows, 1, "the trigger's insert is not the statement's own row")
+            let delete = try await connection.executeCollecting("DELETE FROM probe_parent WHERE id = 1")
+            XCTAssertEqual(delete.completion.affectedRows, 1, "three cascaded children are not the statement's own rows")
+            let children = try await connection.executeCollecting("SELECT count(*) FROM probe_child")
+            XCTAssertEqual(children.firstText, "0", "the cascade itself still happened")
+
+            _ = try await connection.executeCollecting("DROP TABLE probe_child")
+            _ = try await connection.executeCollecting("DROP TABLE probe_parent")
+            _ = try await connection.executeCollecting("DROP TABLE probe_audit")
+        }
+    }
+
     func testParametersAreBoundNotInterpolated() async throws {
         try await withConnection { connection in
             let hostile = "x'; DROP TABLE smoke; --"

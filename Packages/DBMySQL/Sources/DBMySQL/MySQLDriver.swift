@@ -64,17 +64,14 @@ public enum MySQLDriver: SQLDriver {
             ).get()
         }
 
+        // No retry in the clear when the handshake fails. mysql-nio already proceeds
+        // without TLS when the server's greeting lacks the SSL capability, which is the
+        // only downgrade `prefer` means; a handshake that *starts* and then fails is a
+        // broken or hostile server, and reconnecting in plaintext would hand an on-path
+        // attacker exactly the downgrade they were after.
         do {
             return try await attempt(tls: try tlsConfiguration(config))
         } catch {
-            if config.tls.mode == .prefer, tlsFailed(error) {
-                logger.debug("TLS refused; retrying without it because the mode is 'prefer'")
-                do {
-                    return try await attempt(tls: nil)
-                } catch {
-                    throw mapConnect(error, config: config)
-                }
-            }
             throw mapConnect(error, config: config)
         }
     }
@@ -128,11 +125,6 @@ public enum MySQLDriver: SQLDriver {
             case .verifyFull: .fullVerification
             }
         return tls
-    }
-
-    static func tlsFailed(_ error: any Error) -> Bool {
-        let text = String(reflecting: error).lowercased()
-        return text.contains("ssl") || text.contains("tls") || text.contains("handshake")
     }
 
     static func mapConnect(_ error: any Error, config: ResolvedConnectionConfig) -> DBError {

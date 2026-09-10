@@ -484,6 +484,55 @@ final class PostgresIntegrationTests: XCTestCase {
         }
     }
 
+    /// The server reports its own `statement_timeout` with the same SQLSTATE (57014) as
+    /// a cancel this client asked for. Only the latter is `.cancelled`; a timeout keeps
+    /// the server's words, which say what to change.
+    func testStatementTimeoutKeepsTheServersMessageAndIsNotACancel() async throws {
+        try await withEachServer { connection, _ in
+            _ = try await connection.executeCollecting("SET statement_timeout = 200")
+            defer { Task { _ = try? await connection.executeCollecting("RESET statement_timeout") } }
+            do {
+                _ = try await connection.executeCollecting("SELECT pg_sleep(5)")
+                XCTFail("expected the statement to time out")
+            } catch let error as DBError {
+                guard case let .server(serverError) = error else {
+                    return XCTFail("expected the server's own error, got \(error)")
+                }
+                XCTAssertEqual(serverError.sqlState, "57014")
+                XCTAssertTrue(serverError.message.contains("statement timeout"), serverError.message)
+            }
+            _ = try await connection.executeCollecting("RESET statement_timeout")
+            let reuse = try await connection.executeCollecting("SELECT 1")
+            XCTAssertEqual(reuse.firstText, "1")
+        }
+    }
+
+    /// `float4` widens through its shortest decimal text (0.1, not 0.10000000149011612),
+    /// and `money` carries a text form the server reads back as the same amount.
+    func testFloat4AndMoneyKeepTextTheServerAccepts() async throws {
+        try await withEachServer { connection, _ in
+            let single = try await connection.executeCollecting("SELECT 0.1::real, -2.5::real")
+            XCTAssertEqual(single.rows.first?.first?.text, "0.1")
+            XCTAssertEqual(single.rows.first?.last, .double(-2.5))
+
+            _ = try await connection.executeCollecting("SET lc_monetary = 'C'")
+            let money = try await connection.executeCollecting("SELECT '$12.34'::money, '-$0.05'::money")
+            guard case let .raw(typeName, text, _)? = money.rows.first?.first else {
+                return XCTFail("expected money as raw, got \(String(describing: money.rows.first))")
+            }
+            XCTAssertEqual(typeName, "money")
+            XCTAssertEqual(text, "12.34")
+            XCTAssertEqual(money.rows.first?.last?.text, "-0.05")
+
+            // The text form round-trips through a parameter to the same amount: the old
+            // form "1234" read back as twelve hundred and thirty-four dollars.
+            let back = try await connection.executeCollecting(
+                "SELECT $1::money = '$12.34'::money", parameters: [.raw(typeName: "money", text: "12.34", bytes: nil)]
+            )
+            XCTAssertEqual(back.rows.first?.first, .bool(true))
+        }
+    }
+
     // MARK: - Transactions
 
     func testTransactionsCommitAndRollBack() async throws {

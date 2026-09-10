@@ -18,6 +18,13 @@ enum MySQLParameterEncoder {
                 var buffer = ByteBufferAllocator().buffer(capacity: data.count)
                 buffer.writeBytes(data)
                 return MySQLData(type: .blob, format: .binary, buffer: buffer, isUnsigned: false)
+            case let .raw("bit", _, bytes?):
+                // A BIT value goes back as the bytes it came from: MySQL reads a binary
+                // string assigned to a BIT column as the bit pattern itself, whereas the
+                // text "1010" would be read as the number one thousand and ten.
+                var buffer = ByteBufferAllocator().buffer(capacity: bytes.count)
+                buffer.writeBytes(bytes)
+                return MySQLData(type: .blob, format: .binary, buffer: buffer, isUnsigned: false)
             default:
                 return MySQLData(string: text(for: value))
             }

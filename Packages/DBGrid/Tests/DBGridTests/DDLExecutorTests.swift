@@ -26,8 +26,8 @@ final class DDLExecutorTests: XCTestCase {
     func withSession(
         _ body: (ConnectionSession, TestServer) async throws -> Void
     ) async throws {
-        let postgres = (try? TestEnvironment.servers(for: .postgresql)) ?? []
-        let mysql = (try? TestEnvironment.servers(for: .mysql)) ?? []
+        let postgres = try TestEnvironment.servers(for: .postgresql)
+        let mysql = try TestEnvironment.servers(for: .mysql)
         let all = postgres + mysql
         if all.isEmpty {
             throw XCTSkip("neither TINKER_TEST_PG_URL nor TINKER_TEST_MYSQL_URL is set")

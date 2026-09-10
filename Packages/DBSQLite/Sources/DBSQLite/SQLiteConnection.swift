@@ -313,18 +313,19 @@ public actor SQLiteConnection: SQLConnection {
             isFirst = false
 
             let columnCount = sqlite3_column_count(statement)
-            let changesBefore = sqlite3_total_changes64(handle.pointer)
             if columnCount > 0, !outcome.emittedColumns {
                 outcome.rowCount = try stream(statement, columnCount: columnCount, continuation: continuation, sql: text)
                 outcome.emittedColumns = true
             } else {
                 try stepToEnd(statement, sql: text)
             }
-            // `sqlite3_changes` is not reset by a statement that changes no rows, so a
-            // CREATE would report the previous INSERT's count; the difference in the total
-            // is what this statement itself did, and only a write is asked.
+            // `sqlite3_changes` counts the rows this statement changed directly — not the
+            // rows its triggers or `ON DELETE CASCADE` touched, which `sqlite3_total_changes`
+            // would add and which made the grid refuse a correct one-row edit as "touched
+            // 4 rows". It is only read after a row write, so a CREATE cannot inherit the
+            // previous INSERT's count (DECISIONS.md ADR-0040).
             if !sqlite3_stmt_readonly(statement).isTruthy, Self.isRowWrite(text) {
-                outcome.changes = (outcome.changes ?? 0) + (sqlite3_total_changes64(handle.pointer) - changesBefore)
+                outcome.changes = (outcome.changes ?? 0) + sqlite3_changes64(handle.pointer)
                 outcome.lastInsertID = sqlite3_last_insert_rowid(handle.pointer)
             }
         }

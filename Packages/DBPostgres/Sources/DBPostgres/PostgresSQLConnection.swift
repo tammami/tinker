@@ -30,6 +30,9 @@ public actor PostgresSQLConnection: SQLConnection {
     /// by observing transaction keywords in statements the user runs (ADR-0009).
     private var transactionOpen = false
     private var closed = false
+    /// Set when this client asked the server to cancel, so that the 57014 that follows is
+    /// reported as `.cancelled` and a `statement_timeout`'s 57014 is not.
+    private var cancelRequested = false
 
     init(underlying: PostgresConnection, config: ResolvedConnectionConfig, logger: Logger) async throws {
         self.underlying = underlying
@@ -245,9 +248,11 @@ public actor PostgresSQLConnection: SQLConnection {
                 try await runCollecting(query, into: continuation, started: started)
             }
             noteTransactionKeyword(in: sql)
+            cancelRequested = false
             continuation.finish()
         } catch {
-            let mapped = PostgresErrorMapper.map(error, user: config.user)
+            let mapped = PostgresErrorMapper.map(error, user: config.user, cancelRequested: cancelRequested)
+            cancelRequested = false
             if case .server(let serverError) = mapped,
                 serverError.sqlState == PostgresErrorMapper.adminShutdownSQLState
             {
@@ -365,6 +370,7 @@ public actor PostgresSQLConnection: SQLConnection {
     /// refuses the cancel, must not turn into an error the user sees.
     public func cancelCurrent() async {
         guard !closed, let pid = Int32(backendID) else { return }
+        cancelRequested = true
         var cancelConfig = config
         cancelConfig.connectTimeout = .seconds(5)
         cancelConfig.statementTimeout = .seconds(5)

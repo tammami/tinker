@@ -27,8 +27,8 @@ final class SyncIntegrationTests: XCTestCase {
         let sqlite = try TestEnvironment.servers(for: .sqlite)
         if !sqlite.isEmpty { try await SQLiteFixtures.prepare() }
         let all =
-            ((try? TestEnvironment.servers(for: .postgresql)) ?? [])
-            + ((try? TestEnvironment.servers(for: .mysql)) ?? []) + sqlite
+            (try TestEnvironment.servers(for: .postgresql))
+            + (try TestEnvironment.servers(for: .mysql)) + sqlite
         if all.isEmpty { throw XCTSkip("no test server configured") }
         for server in all {
             let dialect = server.engine.dialect

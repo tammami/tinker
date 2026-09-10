@@ -48,6 +48,36 @@ final class MySQLIntegrationTests: XCTestCase {
         }
     }
 
+    // MARK: - BIT and FLOAT fidelity
+
+    /// A BIT value read from a column binds back as the same bits: as text, "1010" was
+    /// read by the server as the number one thousand and ten. FLOAT widens through its
+    /// shortest decimal text so 0.1 stays 0.1.
+    func testBitValuesRoundTripThroughParametersAndFloatKeepsItsText() async throws {
+        try await withEachServer { connection, _ in
+            _ = try await connection.executeCollecting("DROP TABLE IF EXISTS tinker_bits")
+            _ = try await connection.executeCollecting("CREATE TABLE tinker_bits (b BIT(8), f FLOAT)")
+            defer { Task { _ = try? await connection.executeCollecting("DROP TABLE IF EXISTS tinker_bits") } }
+            _ = try await connection.executeCollecting("INSERT INTO tinker_bits VALUES (b'00001010', 0.1)")
+
+            let read = try await connection.executeCollecting("SELECT b, f FROM tinker_bits")
+            guard case let .raw(typeName, text, bytes)? = read.rows.first?.first else {
+                return XCTFail("expected BIT as raw, got \(String(describing: read.rows.first))")
+            }
+            XCTAssertEqual(typeName, "bit")
+            XCTAssertEqual(text, "00001010")
+            XCTAssertEqual(bytes, Data([0x0A]))
+            XCTAssertEqual(read.rows.first?.last?.text, "0.1")
+
+            _ = try await connection.executeCollecting(
+                "INSERT INTO tinker_bits (b) VALUES (?)",
+                parameters: [.raw(typeName: "bit", text: "00001010", bytes: Data([0x0A]))]
+            )
+            let same = try await connection.executeCollecting("SELECT count(*) FROM tinker_bits WHERE b = b'00001010'")
+            XCTAssertEqual(same.firstText, "2", "the bound BIT value must equal the literal it came from")
+        }
+    }
+
     // MARK: - tinyint(1)
 
     /// `tinyint(1)` is a boolean by convention, and a number by declaration: 0 and 1 read as

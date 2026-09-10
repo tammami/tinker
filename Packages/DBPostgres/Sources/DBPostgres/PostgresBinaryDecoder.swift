@@ -57,8 +57,12 @@ public struct PostgresBinaryDecoder: Sendable {
         case PGOID.oid, PGOID.xid, PGOID.cid:
             return .int(Int64(buffer.readInteger(as: UInt32.self) ?? 0))
         case PGOID.float4:
+            // Widened through its shortest decimal text, not its bit pattern: the Double
+            // nearest to "0.1" prints as 0.1, while Double(Float(0.1)) prints as
+            // 0.10000000149011612 — noise the user cannot type back into the cell.
             let bits = buffer.readInteger(as: UInt32.self) ?? 0
-            return .double(Double(Float(bitPattern: bits)))
+            let single = Float(bitPattern: bits)
+            return .double(single.isFinite ? Double(String(single)) ?? Double(single) : Double(single))
         case PGOID.float8:
             let bits = buffer.readInteger(as: UInt64.self) ?? 0
             return .double(Double(bitPattern: bits))
@@ -106,10 +110,15 @@ public struct PostgresBinaryDecoder: Sendable {
         case PGOID.bit, PGOID.varbit:
             return decodeBitString(&buffer, oid: oid)
         case PGOID.money:
-            // Scale and symbol depend on lc_monetary, which the driver does not read;
-            // the exact integer amount in the server's minor unit is the honest value.
+            // The wire carries the amount in the minor unit. The text form is what the
+            // server accepts back as input — "12.34", not "1234", which `money` would read
+            // as twelve hundred and thirty-four — assuming two fractional digits, which
+            // every `lc_monetary` PostgreSQL ships uses except JPY-style locales
+            // (DECISIONS.md ADR-0040). The symbol is a display matter and is left out.
             let amount = buffer.readInteger(as: Int64.self) ?? 0
-            return .raw(typeName: "money", text: String(amount), bytes: nil)
+            let magnitude = amount.magnitude
+            let text = "\(amount < 0 ? "-" : "")\(magnitude / 100).\(String(format: "%02llu", magnitude % 100))"
+            return .raw(typeName: "money", text: text, bytes: nil)
         default:
             break
         }

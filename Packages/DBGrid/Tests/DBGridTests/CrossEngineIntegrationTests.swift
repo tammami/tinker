@@ -120,8 +120,8 @@ extension SyncIntegrationTests {
         let sqlite = try TestEnvironment.servers(for: .sqlite)
         if !sqlite.isEmpty { try await SQLiteFixtures.prepare() }
         let servers =
-            ((try? TestEnvironment.servers(for: .postgresql)) ?? [])
-            + ((try? TestEnvironment.servers(for: .mysql)) ?? []) + sqlite
+            (try TestEnvironment.servers(for: .postgresql))
+            + (try TestEnvironment.servers(for: .mysql)) + sqlite
         var sessions: [(ConnectionSession, TestServer)] = []
         for server in servers {
             let config = ConnectionConfig(

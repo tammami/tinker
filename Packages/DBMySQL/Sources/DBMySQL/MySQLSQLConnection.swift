@@ -176,8 +176,8 @@ public actor MySQLSQLConnection: SQLConnection {
             columns: state.columns,
             rows: state.rows,
             completion: QueryCompletion(
-                affectedRows: metadata.map { Int64($0.affectedRows) } ?? Int64(state.rows.count),
-                lastInsertID: metadata?.lastInsertID.map { Int64($0) },
+                affectedRows: metadata.flatMap { Int64(exactly: $0.affectedRows) } ?? Int64(state.rows.count),
+                lastInsertID: metadata?.lastInsertID.flatMap { Int64(exactly: $0) },
                 serverTag: Self.tag(sql: sql, metadata: metadata, rowCount: state.rows.count),
                 durationTotal: started.duration(to: .now)
             )
@@ -287,8 +287,8 @@ public actor MySQLSQLConnection: SQLConnection {
                     QueryCompletion(
                         affectedRows: rowCount > 0
                             ? Int64(rowCount)
-                            : metadata.map { Int64($0.affectedRows) },
-                        lastInsertID: metadata?.lastInsertID.map { Int64($0) },
+                            : metadata.flatMap { Int64(exactly: $0.affectedRows) },
+                        lastInsertID: metadata?.lastInsertID.flatMap { Int64(exactly: $0) },
                         serverTag: Self.tag(sql: sql, metadata: metadata, rowCount: rowCount),
                         durationTotal: started.duration(to: .now)
                     )))

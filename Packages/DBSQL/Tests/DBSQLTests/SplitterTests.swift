@@ -145,6 +145,30 @@ final class StatementSplitterTests: XCTestCase {
         XCTAssertFalse(statement("EXPLAIN DELETE FROM t").isProbablyDestructive)
     }
 
+    /// A statement is scanned for its dialect, not always as PostgreSQL: MySQL's `#`
+    /// comment hid the keyword behind it, so a `DROP` after one passed every gate.
+    func testLeadingKeywordRespectsTheDialectsComments() {
+        let mysql = StatementSplitter.split("# note\nDROP TABLE t", dialect: .mysql)[0]
+        XCTAssertEqual(mysql.dialect, .mysql)
+        XCTAssertEqual(mysql.leadingKeyword, "DROP")
+        XCTAssertTrue(mysql.isProbablyDestructive)
+        XCTAssertFalse(mysql.isProbablyReadOnly)
+        // On PostgreSQL `#` is not a comment, so the statement has no keyword at all.
+        let postgres = StatementSplitter.split("# note\nDROP TABLE t", dialect: .postgresql)[0]
+        XCTAssertEqual(postgres.leadingKeyword, "")
+    }
+
+    /// `CALL` and `DO` run a body the scanner cannot see into; on production they ask for
+    /// the connection's name like a DELETE would.
+    func testOpaqueBodiesCountAsDestructive() {
+        func statement(_ sql: String, _ dialect: SQLDialect = .postgresql) -> SQLStatement {
+            StatementSplitter.split(sql, dialect: dialect)[0]
+        }
+        XCTAssertTrue(statement("CALL cleanup_everything()", .mysql).isProbablyDestructive)
+        XCTAssertTrue(statement("DO $$ BEGIN DELETE FROM t; END $$").isProbablyDestructive)
+        XCTAssertFalse(statement("CALL cleanup_everything()", .mysql).isProbablyReadOnly)
+    }
+
     func testSelectIntoAndWithWritesAreWrites() {
         func statement(_ sql: String) -> SQLStatement { StatementSplitter.split(sql, dialect: .postgresql)[0] }
         XCTAssertFalse(statement("SELECT * INTO new_table FROM t").isProbablyReadOnly)

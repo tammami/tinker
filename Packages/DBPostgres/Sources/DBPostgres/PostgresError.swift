@@ -11,7 +11,12 @@ enum PostgresErrorMapper {
     static let adminShutdownSQLState = "57P01"
 
     /// Maps an error raised while a statement was running.
-    static func map(_ error: any Error, user: String) -> DBError {
+    ///
+    /// SQLSTATE 57014 is what the server reports both for a cancel this client asked for
+    /// and for its own `statement_timeout`. Only the first is `.cancelled`; the second
+    /// keeps the server's words ("canceling statement due to statement timeout"), which
+    /// is what the user needs to read. `cancelRequested` says which one this was.
+    static func map(_ error: any Error, user: String, cancelRequested: Bool = false) -> DBError {
         if let dbError = error as? DBError { return dbError }
         if error is CancellationError { return .cancelled }
 
@@ -21,18 +26,19 @@ enum PostgresErrorMapper {
 
         if let info = psql.serverInfo {
             let sqlState = info[.sqlState]
-            if sqlState == queryCanceledSQLState { return .cancelled }
-            let serverError = ServerError(
-                sqlState: sqlState,
-                code: nil,
-                message: info[.message] ?? "Unknown server error",
-                detail: info[.detail],
-                hint: info[.hint],
-                position: info[.position].flatMap(Int.init)
-            )
-            // Authentication failures carry class 28; the sheet shows the stage, not a rewrite.
-            if sqlState?.hasPrefix("28") == true { return .authenticationFailed(user: user) }
-            return .server(serverError)
+            if sqlState == queryCanceledSQLState, cancelRequested { return .cancelled }
+            // Class 28 after connect (`SET SESSION AUTHORIZATION`, `SET ROLE`) is a server
+            // error like any other and is shown verbatim; only `mapConnect` reads it as
+            // a failed login.
+            return .server(
+                ServerError(
+                    sqlState: sqlState,
+                    code: nil,
+                    message: info[.message] ?? "Unknown server error",
+                    detail: info[.detail],
+                    hint: info[.hint],
+                    position: info[.position].flatMap(Int.init)
+                ))
         }
 
         switch psql.code {

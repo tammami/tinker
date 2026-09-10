@@ -30,8 +30,8 @@ final class GridIntegrationTests: XCTestCase {
     }
 
     func allServers() async throws -> [TestServer] {
-        let postgres = (try? TestEnvironment.servers(for: .postgresql)) ?? []
-        let mysql = (try? TestEnvironment.servers(for: .mysql)) ?? []
+        let postgres = try TestEnvironment.servers(for: .postgresql)
+        let mysql = try TestEnvironment.servers(for: .mysql)
         let sqlite = try TestEnvironment.servers(for: .sqlite)
         if !sqlite.isEmpty { try await SQLiteFixtures.prepare() }
         let all = postgres + mysql + sqlite

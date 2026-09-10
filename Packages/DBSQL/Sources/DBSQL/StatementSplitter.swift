@@ -11,12 +11,19 @@ public struct SQLStatement: Sendable, Hashable, Identifiable {
     public let startLine: Int
     /// The delimiter that ended the statement, or nil when the script ended first.
     public let terminator: String?
+    /// The dialect the statement was split for. It decides what a comment looks like:
+    /// scanned as PostgreSQL, a MySQL script opening with `# note` had no leading
+    /// keyword at all, and a `DROP TABLE` behind it passed every keyword-based gate.
+    public let dialect: SQLDialect
 
-    public init(text: String, utf16Range: Range<Int>, startLine: Int, terminator: String?) {
+    public init(
+        text: String, utf16Range: Range<Int>, startLine: Int, terminator: String?, dialect: SQLDialect = .postgresql
+    ) {
         self.text = text
         self.utf16Range = utf16Range
         self.startLine = startLine
         self.terminator = terminator
+        self.dialect = dialect
     }
 
     public var id: Int { utf16Range.lowerBound }
@@ -25,7 +32,7 @@ public struct SQLStatement: Sendable, Hashable, Identifiable {
     public var leadingKeyword: String {
         var scanner = SQLScanner(text)
         while !scanner.isAtEnd {
-            if scanner.consumeQuotedOrComment(dialect: .postgresql) != nil { continue }
+            if scanner.consumeQuotedOrComment(dialect: dialect) != nil { continue }
             guard let scalar = scanner.peek() else { break }
             if scalar.properties.isWhitespace || scalar == "(" {
                 scanner.advance()
@@ -66,7 +73,11 @@ public struct SQLStatement: Sendable, Hashable, Identifiable {
     /// True when the statement takes data or objects away, or rewrites them in place:
     /// what a production connection asks the connection's name for.
     public var isProbablyDestructive: Bool {
-        let destructive: Set<String> = ["DELETE", "DROP", "TRUNCATE", "ALTER", "UPDATE", "REPLACE", "MERGE", "RENAME"]
+        // `CALL` and `DO` run a body this scanner cannot see into; on production they
+        // are treated as the worst they could be.
+        let destructive: Set<String> = [
+            "DELETE", "DROP", "TRUNCATE", "ALTER", "UPDATE", "REPLACE", "MERGE", "RENAME", "CALL", "DO",
+        ]
         switch leadingKeyword {
         case "EXPLAIN":
             guard let explained = explainedStatement, explained.runs else { return false }
@@ -83,7 +94,7 @@ public struct SQLStatement: Sendable, Hashable, Identifiable {
     /// Options come as a parenthesised list (`EXPLAIN (ANALYZE, BUFFERS) …`), as bare
     /// words (`EXPLAIN ANALYZE VERBOSE …`) or as MySQL's `FORMAT=JSON`.
     var explainedStatement: (statement: SQLStatement, runs: Bool)? {
-        let tokens = SQLTokenizer.tokenize(text, dialect: .postgresql).filter {
+        let tokens = SQLTokenizer.tokenize(text, dialect: dialect).filter {
             $0.kind != .whitespace && $0.kind != .comment
         }
         guard let first = tokens.first, first.kind == .keyword, first.text.uppercased() == "EXPLAIN" else { return nil }
@@ -194,7 +205,8 @@ public enum StatementSplitter {
                         text: String(trimmed),
                         utf16Range: (statementStartUTF16 + leadingUTF16) ..< (endUTF16 - trailingUTF16),
                         startLine: statementStartLine + extraLines,
-                        terminator: terminator
+                        terminator: terminator,
+                        dialect: dialect
                     ))
             }
         }

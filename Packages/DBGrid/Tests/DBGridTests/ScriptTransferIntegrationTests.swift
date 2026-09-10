@@ -26,8 +26,8 @@ final class ScriptTransferIntegrationTests: XCTestCase {
         let sqlite = try TestEnvironment.servers(for: .sqlite)
         if !sqlite.isEmpty { try await SQLiteFixtures.prepare() }
         let all =
-            ((try? TestEnvironment.servers(for: .postgresql)) ?? [])
-            + ((try? TestEnvironment.servers(for: .mysql)) ?? []) + sqlite
+            (try TestEnvironment.servers(for: .postgresql))
+            + (try TestEnvironment.servers(for: .mysql)) + sqlite
         if all.isEmpty { throw XCTSkip("no test server is configured and SQLite is disabled") }
         return all
     }

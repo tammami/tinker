@@ -180,6 +180,8 @@ public enum Icon {
     public static let settings = "gearshape"
     public static let command = "command"
     public static let goTo = "arrow.right.circle"
+    /// Choosing the row a foreign key points at, from a searchable list.
+    public static let lookup = "text.magnifyingglass"
     public static let maintenance = "wrench.and.screwdriver"
     public static let newQuery = "plus.rectangle.on.rectangle"
     public static let openInNewTab = "rectangle.badge.plus"

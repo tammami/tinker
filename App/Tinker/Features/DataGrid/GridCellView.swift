@@ -49,10 +49,12 @@ final class GridCellView: NSView {
         changeState: CellChangeState,
         isSelected: Bool,
         isFocused: Bool,
-        alignment: NSTextAlignment
+        alignment: NSTextAlignment,
+        label: String? = nil
     ) {
         isFocusedCell = isFocused
-        textField.alignment = alignment
+        // A value with a label beside it reads as text, whatever the column's type.
+        textField.alignment = label == nil ? alignment : .left
 
         switch value {
         case .none:
@@ -72,6 +74,17 @@ final class GridCellView: NSView {
             textField.stringValue = Self.displayText(for: other)
             textField.textColor = .labelColor
             textField.font = DesignTokens.Fonts.grid
+            if let label, changeState != .deleted {
+                // "1 · Ada": the key the column holds, then what it points at, muted.
+                let shown = NSMutableAttributedString(
+                    string: textField.stringValue,
+                    attributes: [.font: DesignTokens.Fonts.grid, .foregroundColor: NSColor.labelColor])
+                shown.append(
+                    NSAttributedString(
+                        string: "  ·  \(label)",
+                        attributes: [.font: DesignTokens.Fonts.grid, .foregroundColor: NSColor.secondaryLabelColor]))
+                textField.attributedStringValue = shown
+            }
         }
 
         backgroundColor =

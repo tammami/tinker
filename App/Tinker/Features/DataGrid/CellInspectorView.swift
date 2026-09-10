@@ -15,6 +15,10 @@ public struct CellInspectorView: View {
     let onCommit: (Int, String) -> Void
     let onSetNull: (Int) -> Void
     let onFollow: (Int) -> Void
+    /// Whether a column takes part in a foreign key, so its value can be picked.
+    var canPickReference: (Int) -> Bool = { _ in false }
+    /// Opens the foreign-key picker for a column.
+    var onPickReference: (Int) -> Void = { _ in }
 
     enum Pane: String, CaseIterable, Identifiable {
         case cell = "Cell"
@@ -76,6 +80,15 @@ public struct CellInspectorView: View {
                         }
                     }
                     Spacer()
+                    if isEditable, canPickReference(focusedColumn) {
+                        Button {
+                            onPickReference(focusedColumn)
+                        } label: {
+                            Label("Choose…", systemImage: Icon.lookup)
+                        }
+                        .controlSize(.small)
+                        .help("Pick this value from the referenced table")
+                    }
                     if hasReference(focusedColumn) {
                         Button {
                             onFollow(focusedColumn)
@@ -161,9 +174,11 @@ private struct RowFormField: View {
     let value: DBValue
     let isEditable: Bool
     let hasReference: Bool
+    var canPick: Bool = false
     let onCommit: (String) -> Void
     let onSetNull: () -> Void
     let onFollow: () -> Void
+    var onPick: () -> Void = {}
 
     @State private var draft = ""
     @State private var isNull = false
@@ -176,6 +191,9 @@ private struct RowFormField: View {
                 Text(column.nativeTypeName).font(.caption2).foregroundStyle(.tertiary)
                 if column.isPrimaryKey == true { Badge(text: "PK", color: .accentColor) }
                 Spacer()
+                if isEditable, canPick {
+                    IconButton(icon: Icon.lookup, label: "Choose from referenced table", action: onPick)
+                }
                 if hasReference {
                     IconButton(icon: Icon.goTo, label: "Go to referenced row", action: onFollow)
                 }

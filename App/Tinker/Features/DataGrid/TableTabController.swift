@@ -24,6 +24,16 @@ public final class TableTabController: DataGridDelegate {
     public var quickSearch = ""
     /// The table's foreign keys, for jumping to the row a cell points at.
     public private(set) var foreignKeys: [ForeignKeyInfo] = []
+    /// The label column each referenced table is searched by in the picker, remembered so
+    /// the next lookup opens the same way. Keyed by the referenced table's id.
+    private var referenceLabels: [String: String] = [:]
+    /// The label beside each foreign-key value on the loaded rows — "Ada" for customer 1 —
+    /// by column name, then by the value's text. Filled a page at a time, one query per key.
+    private var referenceLabelCache: [String: [String: String]] = [:]
+    /// The label column of each referenced table once it has been settled, by table id;
+    /// an entry holding nil means the table has no column that reads as a name.
+    private var settledLabelColumns: [String: String?] = [:]
+    private var labelResolution: Task<Void, Never>?
     public var statusText = ""
     public var errorText: String?
     public var isLoading = false
@@ -113,6 +123,14 @@ public final class TableTabController: DataGridDelegate {
                 (try? await session.introspection(.foreignKeys(table)) {
                     try await $0.foreignKeys(of: table)
                 }) ?? []
+            // The label column each referenced table was last searched by, so a picker
+            // opens the way it did before. A handful of keys, read once with the structure.
+            for key in foreignKeys where referenceLabels[key.referencedTable.id] == nil {
+                let stored = await environment.gridPreferences(
+                    connectionID: connectionID, table: key.referencedTable.id
+                ).labelColumn
+                if let stored { referenceLabels[key.referencedTable.id] = stored }
+            }
 
             let preferences = await environment.gridPreferences(
                 connectionID: connectionID, table: table.id
@@ -167,6 +185,7 @@ public final class TableTabController: DataGridDelegate {
 
     public func bumpRevision() {
         revision &+= 1
+        scheduleReferenceLabels()
     }
 
     public func updateStatus() {
@@ -590,6 +609,14 @@ public final class TableTabController: DataGridDelegate {
 
     // MARK: - Preferences
 
+    /// Saves the picker's label choice into the referenced table's own grid preferences,
+    /// so it is remembered wherever that table is shown.
+    private func persistReferenceLabel(_ label: String?, for referencedTable: String) async {
+        var preferences = await environment.gridPreferences(connectionID: connectionID, table: referencedTable)
+        preferences.labelColumn = label
+        await environment.saveGridPreferences(preferences, connectionID: connectionID, table: referencedTable)
+    }
+
     func persistPreferences() async {
         guard let model else { return }
         let preferences = GridPreferences(
@@ -662,6 +689,147 @@ public final class TableTabController: DataGridDelegate {
 
     public func gridHasReference(row: Int, column: Int) -> Bool {
         referenceTarget(row: row, column: column) != nil
+    }
+
+    public func gridReferenceLabel(row: Int, column: Int) -> String? {
+        guard let model, model.columns.indices.contains(column),
+            let byValue = referenceLabelCache[model.columns[column].name],
+            let text = model.value(row: row, column: column)?.text,
+            let label = byValue[text], !label.isEmpty
+        else { return nil }
+        return label
+    }
+
+    /// Looks up, shortly after the grid changed, the labels of foreign-key values that are
+    /// loaded and not known yet. Nothing new means no query.
+    private func scheduleReferenceLabels() {
+        guard !foreignKeys.isEmpty else { return }
+        labelResolution?.cancel()
+        labelResolution = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            await self?.resolveReferenceLabels()
+        }
+    }
+
+    private func resolveReferenceLabels() async {
+        guard let model, let session else { return }
+        var learned = false
+        for key in foreignKeys where key.columns.count == 1 {
+            let local = key.columns[0]
+            guard let index = model.columns.firstIndex(where: { $0.name == local }) else { continue }
+            let lookup = ReferenceLookup(session: session, key: key, dialect: dialect)
+            guard let label = await settledLabelColumn(for: key, lookup: lookup) else { continue }
+
+            var known = referenceLabelCache[local] ?? [:]
+            var unresolved: [String: DBValue] = [:]
+            for row in 0 ..< model.rowCount {
+                guard let value = model.value(row: row, column: index), !value.isNull, let text = value.text,
+                    known[text] == nil, unresolved[text] == nil
+                else { continue }
+                unresolved[text] = value
+            }
+            guard !unresolved.isEmpty,
+                let found = try? await lookup.labels(forKeys: Array(unresolved.values), label: label)
+            else { continue }
+            // A key the table does not hold is remembered as blank, so it is not asked again.
+            for text in unresolved.keys { known[text] = found[text] ?? "" }
+            referenceLabelCache[local] = known
+            learned = true
+        }
+        // Redraw without scheduling another round: there is nothing left to learn.
+        if learned { revision &+= 1 }
+    }
+
+    /// The remembered label column, else the one the lookup would choose, settled once.
+    private func settledLabelColumn(for key: ForeignKeyInfo, lookup: ReferenceLookup) async -> String? {
+        let id = key.referencedTable.id
+        if let settled = settledLabelColumns[id] { return settled }
+        if let stored = referenceLabels[id] {
+            settledLabelColumns[id] = stored
+            return stored
+        }
+        let columns = (try? await lookup.columns()) ?? []
+        let chosen = ReferenceLookup.labelColumn(among: columns, keyColumns: key.referencedColumns)
+        settledLabelColumns[id] = .some(chosen)
+        return chosen
+    }
+
+    /// Whether the column is (part of) a foreign key, so its value can be picked.
+    public func gridColumnReferences(_ column: Int) -> Bool {
+        guard let model, model.columns.indices.contains(column) else { return false }
+        let name = model.columns[column].name
+        return foreignKeys.contains { $0.columns.contains(name) }
+    }
+
+    /// A picker over the referenced table for this cell, seeded with the current value and
+    /// the remembered label column.
+    public func gridReferencePicker(row: Int, column: Int) -> ReferencePickerModel? {
+        guard let session, let model, model.columns.indices.contains(column) else { return nil }
+        let name = model.columns[column].name
+        guard let key = foreignKeys.first(where: { $0.columns.contains(name) }) else { return nil }
+
+        // The header shows every local key column's current value, so a composite key is
+        // legible too.
+        let current =
+            key.columns
+            .compactMap { local -> String? in
+                guard let index = model.columns.firstIndex(where: { $0.name == local }),
+                    let value = model.value(row: row, column: index), !value.isNull
+                else { return nil }
+                return value.text
+            }
+            .joined(separator: ", ")
+        let isNullable = model.columns[column].isNullable != false
+
+        let storedLabel = referenceLabels[key.referencedTable.id]
+        let referencedTableID = key.referencedTable.id
+        return ReferencePickerModel(
+            session: session,
+            key: key,
+            dialect: dialect,
+            storedLabel: storedLabel,
+            currentText: current.isEmpty ? nil : current,
+            isNullable: isNullable,
+            onPersistLabel: { [weak self] chosen in
+                if let chosen {
+                    self?.referenceLabels[referencedTableID] = chosen
+                } else {
+                    self?.referenceLabels.removeValue(forKey: referencedTableID)
+                }
+                // The labels beside the values follow the new column.
+                self?.settledLabelColumns.removeValue(forKey: referencedTableID)
+                self?.referenceLabelCache.removeValue(forKey: name)
+                Task { [weak self] in await self?.persistReferenceLabel(chosen, for: referencedTableID) }
+                self?.bumpRevision()
+            }
+        )
+    }
+
+    /// Writes a chosen referenced key back to the row's local columns, each through the
+    /// grid's ordinary edit path so auto-commit and the production gate apply.
+    /// Asks the grid to open the foreign-key picker over a cell, for the inspector's
+    /// Choose button. The grid owns the popover so it can anchor to the real cell.
+    public func requestReferencePicker(column: Int) {
+        NotificationCenter.default.post(
+            name: .tinkerPresentReferencePicker, object: self,
+            userInfo: ["row": selection.focusRow, "column": column]
+        )
+    }
+
+    public func gridDidPickReference(row: Int, column: Int, key: [String: DBValue]) {
+        guard let model else { return }
+        let name = model.columns[column].name
+        guard let foreignKey = foreignKeys.first(where: { $0.columns.contains(name) }) else { return }
+        for (local, referenced) in zip(foreignKey.columns, foreignKey.referencedColumns) {
+            guard let index = model.columns.firstIndex(where: { $0.name == local }),
+                let value = key[referenced]
+            else { continue }
+            model.setValue(value, row: row, column: index)
+        }
+        bumpRevision()
+        updateStatus()
+        if !model.isPendingInsertRow(row) { writeIfAutoCommit(.loadedRowsOnly) }
     }
 
     /// Hides or shows one column; the change is drawn at once and remembered.

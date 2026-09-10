@@ -123,6 +123,23 @@ public struct TableTabView: View {
                     if let column = geometryColumns.first { controller.mapRequest = MapRequest(row: 2, column: column) }
                 }
             }
+            if UserDefaults.standard.bool(forKey: "uiDemo.referencePick") {
+                UserDefaults.standard.removeObject(forKey: "uiDemo.referencePick")
+                Task {
+                    // Re-post a few times: the transient popover needs a key window, which
+                    // is not guaranteed the instant the tab appears while the app launches.
+                    for _ in 0 ..< 8 {
+                        try? await Task.sleep(for: .milliseconds(700))
+                        guard let model = controller.model,
+                            let column = model.columns.firstIndex(where: { controller.gridColumnReferences($0.id) })
+                        else { continue }
+                        controller.selection = GridSelection(row: 0, column: column)
+                        NotificationCenter.default.post(
+                            name: .tinkerPresentReferencePicker, object: controller,
+                            userInfo: ["row": 0, "column": column, "demo": true])
+                    }
+                }
+            }
             if UserDefaults.standard.bool(forKey: "uiDemo.mapPeek") {
                 UserDefaults.standard.removeObject(forKey: "uiDemo.mapPeek")
                 Task {
@@ -341,7 +358,9 @@ public struct TableTabView: View {
                             controller.gridDidRequestFollowReference(
                                 row: controller.selection.focusRow, column: column
                             )
-                        }
+                        },
+                        canPickReference: { column in controller.gridColumnReferences(column) },
+                        onPickReference: { column in controller.requestReferencePicker(column: column) }
                     )
                     .id(controller.revision)
                 }

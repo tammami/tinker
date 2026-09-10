@@ -43,21 +43,27 @@ public struct GridPreferences: Sendable, Hashable, Codable {
     public var filter: [StoredFilterRule]
     /// Columns the person has hidden for this table, by name.
     public var hiddenColumns: [String]
+    /// The column that reads as a row's name when another table's foreign key points here.
+    public var labelColumn: String?
 
     public init(
         columnWidths: [String: Double] = [:],
         sort: [GridSortTerm] = [],
         filter: [StoredFilterRule] = [],
-        hiddenColumns: [String] = []
+        hiddenColumns: [String] = [],
+        labelColumn: String? = nil
     ) {
         self.columnWidths = columnWidths
         self.sort = sort
         self.filter = filter
         self.hiddenColumns = hiddenColumns
+        self.labelColumn = labelColumn
     }
 
     public static let empty = GridPreferences()
-    public var isEmpty: Bool { columnWidths.isEmpty && sort.isEmpty && filter.isEmpty && hiddenColumns.isEmpty }
+    public var isEmpty: Bool {
+        columnWidths.isEmpty && sort.isEmpty && filter.isEmpty && hiddenColumns.isEmpty && labelColumn == nil
+    }
 }
 
 /// A persisted sort term. Mirrors `DBSQL.PagePlanner.SortTerm` without `DBStore`

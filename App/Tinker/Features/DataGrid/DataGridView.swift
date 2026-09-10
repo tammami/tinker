@@ -19,6 +19,18 @@ public protocol DataGridDelegate: AnyObject {
     func gridHasReference(row: Int, column: Int) -> Bool
     /// Opens the row a cell's foreign key points at.
     func gridDidRequestFollowReference(row: Int, column: Int)
+    /// Whether this column takes part in a foreign key, so its value can be picked from
+    /// the referenced table rather than typed.
+    func gridColumnReferences(_ column: Int) -> Bool
+    /// A model that searches the referenced table for this cell, or nil when the column is
+    /// not a foreign key. The grid hosts it in a popover over the cell.
+    func gridReferencePicker(row: Int, column: Int) -> ReferencePickerModel?
+    /// The referenced key the picker chose, keyed by referenced column name, is written
+    /// back to the row's local columns.
+    func gridDidPickReference(row: Int, column: Int, key: [String: DBValue])
+    /// What a foreign-key cell's value points at ("Ada" for customer 1), shown beside it.
+    /// A dictionary lookup: it is asked for every visible cell on every reload.
+    func gridReferenceLabel(row: Int, column: Int) -> String?
     /// The context menu's copy, in the chosen format.
     func gridDidRequestCopy(format: ClipboardFormat)
     func gridDidRequestSetNull()
@@ -38,6 +50,10 @@ public extension DataGridDelegate {
     func gridDidClickColumnHeader(column: Int, additive: Bool) {}
     func gridHasReference(row: Int, column: Int) -> Bool { false }
     func gridDidRequestFollowReference(row: Int, column: Int) {}
+    func gridColumnReferences(_ column: Int) -> Bool { false }
+    func gridReferencePicker(row: Int, column: Int) -> ReferencePickerModel? { nil }
+    func gridDidPickReference(row: Int, column: Int, key: [String: DBValue]) {}
+    func gridReferenceLabel(row: Int, column: Int) -> String? { nil }
     func gridDidRequestSetNull() {}
     func gridDidRequestDeleteRows() {}
     func gridDidRequestAddRow() {}
@@ -187,14 +203,33 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
                 self.peekOnMap(row: row, column: column)
             }
         }
+        pickObserver = NotificationCenter.default.addObserver(
+            forName: .tinkerPresentReferencePicker, object: nil, queue: .main
+        ) { [weak self] note in
+            let row = note.userInfo?["row"] as? Int
+            let column = note.userInfo?["column"] as? Int
+            let demo = note.userInfo?["demo"] as? Bool ?? false
+            let target = (note.object as AnyObject?).map(ObjectIdentifier.init)
+            MainActor.assumeIsolated {
+                guard let self, let window = self.tableView?.window, demo || window.isKeyWindow, let row, let column,
+                    let delegate = self.delegate, target == ObjectIdentifier(delegate as AnyObject)
+                else { return }
+                self.presentReferencePicker(row: row, column: column)
+            }
+        }
     }
+    private var pickObserver: (any NSObjectProtocol)?
 
     /// Removes the observer; the grid's view is going away.
     func stopObservingPeekRequests() {
         if let peekObserver { NotificationCenter.default.removeObserver(peekObserver) }
         peekObserver = nil
+        if let pickObserver { NotificationCenter.default.removeObserver(pickObserver) }
+        pickObserver = nil
         mapPopover?.close()
         mapPopover = nil
+        referencePopover?.close()
+        referencePopover = nil
     }
     var storedColumnWidths: [String: Double] = [:]
     var hiddenColumns: Set<String> = []
@@ -425,7 +460,8 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
             changeState: model.changeState(row: row, column: columnIndex),
             isSelected: selection.contains(row: row, column: columnIndex, columnCount: model.columns.count),
             isFocused: isFocused,
-            alignment: model.columns[columnIndex].kind.cellAlignment
+            alignment: model.columns[columnIndex].kind.cellAlignment,
+            label: delegate?.gridReferenceLabel(row: row, column: columnIndex)
         )
         return view
     }
@@ -656,6 +692,18 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
                 follow.image = NSImage(systemSymbolName: Icon.goTo, accessibilityDescription: nil)
                 follow.representedObject = [row, column]
                 menu.addItem(follow)
+            }
+            if model.isEditable, delegate?.gridColumnReferences(column) == true {
+                let pick = NSMenuItem(
+                    title: "Choose from Referenced Table…", action: #selector(pickReference(_:)), keyEquivalent: "")
+                pick.target = self
+                pick.image = NSImage(systemSymbolName: Icon.lookup, accessibilityDescription: nil)
+                pick.representedObject = [row, column]
+                menu.addItem(pick)
+            }
+            if delegate?.gridHasReference(row: row, column: column) == true
+                || (model.isEditable && delegate?.gridColumnReferences(column) == true)
+            {
                 menu.addItem(.separator())
             }
             if model.isEditable, [.date, .time, .timestamp].contains(model.columns[column].kind) {
@@ -729,6 +777,41 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         delegate?.gridDidRequestFollowReference(row: pair[0], column: pair[1])
     }
 
+    @objc private func pickReference(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [Int], pair.count == 2 else { return }
+        presentReferencePicker(row: pair[0], column: pair[1])
+    }
+
+    /// Opens the foreign-key picker in a popover over the cell, so the grid stays put. The
+    /// chosen key is written back through the delegate's ordinary edit path.
+    func presentReferencePicker(row: Int, column: Int) {
+        guard let tableView, let position = position(ofModelColumn: column),
+            let model = delegate?.gridReferencePicker(row: row, column: column)
+        else { return }
+        let rect = tableView.frameOfCell(atColumn: position, row: row)
+        let popover = NSPopover()
+        popover.behavior = .transient
+        let view = ReferencePickerView(
+            model: model,
+            onChoose: { [weak self] key in
+                popover.close()
+                self?.delegate?.gridDidPickReference(row: row, column: column, key: key)
+            },
+            onSetNull: { [weak self] in
+                popover.close()
+                self?.delegate?.gridDidCommitEdit(row: row, column: column, text: "")
+                self?.delegate?.gridDidRequestSetNull()
+            },
+            onCancel: { popover.close() }
+        )
+        popover.contentViewController = NSHostingController(rootView: view)
+        popover.contentSize = NSSize(width: 360, height: 440)
+        referencePopover = popover
+        popover.show(relativeTo: rect, of: tableView, preferredEdge: .maxY)
+    }
+
+    private var referencePopover: NSPopover?
+
     @objc private func showInspector(_ sender: NSMenuItem) {
         delegate?.gridDidRequestInspector()
     }
@@ -790,6 +873,14 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         let rowCount = model.displayRowCount
         let columnCount = model.columns.count
         guard rowCount > 0, columnCount > 0 else { return false }
+
+        // ⌥↓ opens the foreign-key picker for the focused cell, when it is one.
+        if event.modifierFlags.contains(.option), event.keyCode == 125, model.isEditable,
+            delegate?.gridColumnReferences(selection.focusColumn) == true
+        {
+            presentReferencePicker(row: selection.focusRow, column: selection.focusColumn)
+            return true
+        }
 
         // ⌘A selects everything; the menu's Select All never reaches an NSTableView cell grid.
         if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "a" {
@@ -1000,4 +1091,6 @@ final class GridHeaderView: NSTableHeaderView {
 extension Notification.Name {
     /// Asks the visible grid to open its map popover over a cell (UI demo only).
     static let tinkerPeekOnMap = Notification.Name("TinkerPeekOnMap")
+    /// The inspector asks the grid to open the foreign-key picker over a cell.
+    static let tinkerPresentReferencePicker = Notification.Name("TinkerPresentReferencePicker")
 }

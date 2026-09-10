@@ -6,7 +6,26 @@ All notable changes to Tinker are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Foreign keys read like names.** A foreign-key cell shows what it points at beside the
+  key — `1 · Ada` — resolved one batched query per page and cached. Editing such a cell
+  offers **Choose from Referenced Table…** (context menu, `⌥↓`, or Choose… in the
+  Inspector): a popover that searches the referenced table by a label column on the server,
+  fifty rows at a time, with the current value shown, NULL when allowed, and a remembered
+  choice of label column. The chosen key goes through the ordinary edit path, so auto-commit
+  and the production gate apply.
+- **Views reopen in the Query Builder.** Creating a view from the builder remembers its
+  canvas; **Open in Query Builder** on the view's Source tab brings it back for editing when
+  the server's definition is unchanged, and **Save View** replaces it in place. A view made
+  elsewhere is read back from its definition for the subset the canvas can draw (joins,
+  aggregates, conditions, grouping, ordering, limits); anything beyond that — a subquery, an
+  expression, nested condition groups — is named on the Source tab rather than approximated.
+
 ### Fixed
+- **MySQL `tinyint(1)` no longer turns 2 into `true`.** The column is a boolean by convention
+  only; 0 and 1 still read as false and true, and any other value keeps its number, on screen
+  and when typed into the cell. The connection's "Treat tinyint(1) as boolean" switch turns
+  the convention off entirely.
 - **Structure: Done no longer loses a pending change.** Done only left editing, so a column
   added without pressing Preview stayed as an invisible pending edit that the next re-read
   of the table replaced. Done now shows the pending statements and leaves editing once they

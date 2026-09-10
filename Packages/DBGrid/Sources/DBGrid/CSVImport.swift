@@ -14,7 +14,10 @@ public enum ValueCoercion {
             switch text.lowercased() {
             case "t", "true", "1", "yes", "y": return .bool(true)
             case "f", "false", "0", "no", "n": return .bool(false)
-            default: return nil
+            default:
+                // MySQL's boolean is a tinyint(1) that takes any small integer; typing 2
+                // into such a column stores 2.
+                return Int64(text).map { .int($0) }
             }
         case .int:
             return Int64(text).map { .int($0) }

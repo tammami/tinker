@@ -48,6 +48,28 @@ final class MySQLIntegrationTests: XCTestCase {
         }
     }
 
+    // MARK: - tinyint(1)
+
+    /// `tinyint(1)` is a boolean by convention, and a number by declaration: 0 and 1 read as
+    /// false and true, anything else keeps its value rather than becoming `true`.
+    func testTinyint1KeepsValuesOtherThanZeroAndOne() async throws {
+        try await withEachServer { connection, _ in
+            _ = try await connection.executeCollecting("DROP TABLE IF EXISTS tinker_tiny")
+            _ = try await connection.executeCollecting(
+                "CREATE TABLE tinker_tiny (id int PRIMARY KEY, status tinyint(1))")
+            defer { Task { _ = try? await connection.executeCollecting("DROP TABLE IF EXISTS tinker_tiny") } }
+            _ = try await connection.executeCollecting("INSERT INTO tinker_tiny VALUES (1, 0), (2, 1), (3, 2), (4, -5)")
+            let result = try await connection.executeCollecting("SELECT status FROM tinker_tiny ORDER BY id")
+            XCTAssertEqual(result.columns.first?.kind, .bool)
+            XCTAssertEqual(result.rows.map { $0[0] }, [.bool(false), .bool(true), .int(2), .int(-5)])
+            // Written back as a number, the value round-trips unchanged.
+            _ = try await connection.executeCollecting(
+                "UPDATE tinker_tiny SET status = ? WHERE id = 1", parameters: [.int(3)])
+            let updated = try await connection.executeCollecting("SELECT status FROM tinker_tiny WHERE id = 1")
+            XCTAssertEqual(updated.rows.first?.first, .int(3))
+        }
+    }
+
     // MARK: - Connection and authentication
 
     func testConnectsAndReportsVersionAndThreadID() async throws {

@@ -41,9 +41,12 @@ public struct MySQLValueDecoder: Sendable {
 
         switch column.columnType {
         case .tiny:
-            // `tinyint(1)` is MySQL's boolean, but only when the column was declared that way.
+            // `tinyint(1)` is MySQL's boolean by convention only: the column holds -128…127,
+            // and a schema that stores 2 there means 2. So 0 and 1 read as false and true,
+            // and any other value stays the number it is — never collapsed to `true`.
             if settings.tinyint1IsBool, column.columnLength <= 1, !isUnsigned {
-                return .bool((integer(data, buffer: &buffer, unsigned: false) ?? 0) != 0)
+                guard let number = integer(data, buffer: &buffer, unsigned: false) else { return .null }
+                return number == 0 || number == 1 ? .bool(number == 1) : .int(number)
             }
             return integerValue(data, buffer: &buffer, unsigned: isUnsigned)
         case .short, .long, .int24:

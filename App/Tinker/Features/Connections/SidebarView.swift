@@ -590,7 +590,7 @@ struct SidebarRow: View {
     }
 
     func connectionName(_ id: UUID) -> String {
-        workspace.environment.connections.first { $0.id == id }?.name ?? ""
+        workspace.environment.connections.first { $0.id == id }?.qualifiedName ?? ""
     }
 
     /// The schema a connection-level action means: MySQL's database, SQLite's `main`,

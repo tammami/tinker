@@ -95,7 +95,7 @@ final class EndpointModel {
     /// `name · database · schema`, for the header.
     var label: String {
         guard let config else { return "Choose a connection" }
-        var parts = [config.name]
+        var parts = [config.qualifiedName]
         if !database.isEmpty { parts.append(database) }
         if !isFlat, !schema.isEmpty { parts.append(schema) }
         return parts.joined(separator: " · ")
@@ -242,6 +242,8 @@ struct ToolsWizardSheet: View {
 
     /// Every stored connection: the tools carry structure and rows between engines.
     private var candidateConnections: [ConnectionConfig] { environment.connections }
+    /// Folder-qualified titles, so two connections called the same read apart.
+    private var connectionTitles: [UUID: String] { ConnectionConfig.distinctTitles(for: candidateConnections) }
 
     private var baseTables: [TableInfo] { source.tables.filter { $0.kind.isEditable } }
     private var views: [TableInfo] { source.tables.filter { !$0.kind.isEditable } }
@@ -312,7 +314,7 @@ struct ToolsWizardSheet: View {
             Spacer()
             HStack(spacing: DesignTokens.Spacing.sm) {
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text(source.config?.name ?? "Source").font(.callout.weight(.medium)).lineLimit(1)
+                    Text(source.config?.qualifiedName ?? "Source").font(.callout.weight(.medium)).lineLimit(1)
                     Text(endpointLine(source)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Image(systemName: Icon.database).foregroundStyle(.green)
@@ -320,7 +322,7 @@ struct ToolsWizardSheet: View {
                 Image(systemName: targetIsFile && kind == .dataTransfer ? Icon.text : Icon.database).foregroundStyle(
                     Color.accentColor)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(targetIsFile && kind == .dataTransfer ? "File" : (target.config?.name ?? "Target"))
+                    Text(targetIsFile && kind == .dataTransfer ? "File" : (target.config?.qualifiedName ?? "Target"))
                         .font(.callout.weight(.medium)).lineLimit(1)
                     Text(targetIsFile && kind == .dataTransfer ? (compress ? ".sql.gz" : ".sql") : endpointLine(target))
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -402,7 +404,7 @@ struct ToolsWizardSheet: View {
                         Text("Choose…").tag(UUID?.none)
                         ForEach(candidateConnections) { config in
                             Label {
-                                Text(config.name)
+                                Text(connectionTitles[config.id] ?? config.name)
                             } icon: {
                                 EngineMark(dialect: config.dialect, size: 14)
                             }
@@ -896,7 +898,7 @@ struct ToolsWizardSheet: View {
         }
         guard let targetID = target.connectionID, let targetRef = target.schemaRef else { return }
         let copied = CopiedObjects(
-            connectionID: sourceID, connectionName: config.name, dialect: dialect, schema: sourceRef,
+            connectionID: sourceID, connectionName: config.qualifiedName, dialect: dialect, schema: sourceRef,
             tables: isEverythingChosen ? nil : tables)
         let request = PasteRequest(source: copied, targetConnectionID: targetID, targetSchema: targetRef)
         controller.paste(

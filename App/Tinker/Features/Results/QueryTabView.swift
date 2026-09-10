@@ -13,6 +13,15 @@ public struct QueryTabView: View {
 
     @State private var resultPane: ResultPane = .result
 
+    /// The connection pop-up's items: folder-qualified titles, so two connections called
+    /// the same — one per folder — read apart.
+    private var connectionItems: [BarPopUp<UUID>.Item] {
+        let titles = ConnectionConfig.distinctTitles(for: controller.availableConnections)
+        return controller.availableConnections.map {
+            BarPopUp.Item(id: $0.id, title: titles[$0.id] ?? $0.name, icon: Icon.connection)
+        }
+    }
+
     /// What the session-database pop-up means on each engine.
     private var sessionDatabaseHelp: String {
         switch controller.dialect {
@@ -161,9 +170,7 @@ public struct QueryTabView: View {
             // The tab's session: statements resolve unqualified names here. Both pop-ups
             // keep a fixed width, so the bar reads the same whatever they are called.
             BarPopUp(
-                items: controller.availableConnections.map {
-                    BarPopUp.Item(id: $0.id, title: $0.name, icon: Icon.connection)
-                },
+                items: connectionItems,
                 selection: Binding(
                     get: { controller.connectionID },
                     set: { id in Task { await controller.selectConnection(id) } }

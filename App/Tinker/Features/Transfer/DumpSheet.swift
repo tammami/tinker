@@ -54,9 +54,13 @@ struct DumpSheet: View {
     }
 
     private var sourceLine: String {
-        let name = config?.name ?? "connection"
-        return dialect.hasSchemaLayer ? "\(name) · \(schema.database) · \(schema.schema)" : "\(name) · \(schema.database)"
+        let name = config?.qualifiedName ?? "connection"
+        return dialect.hasSchemaLayer
+            ? "\(name) · \(schema.database) · \(schema.schema)" : "\(name) · \(schema.database)"
     }
+
+    /// Folder-qualified titles, so two connections called the same read apart.
+    private var connectionTitles: [UUID: String] { ConnectionConfig.distinctTitles(for: environment.connections) }
 
     private var chosenTables: [TableInfo] {
         request.tables ?? tables.filter { selected.contains($0.name) }
@@ -189,7 +193,9 @@ struct DumpSheet: View {
             HStack(spacing: DesignTokens.Spacing.md) {
                 FieldRow(label: "Connection", labelWidth: 80) {
                     Picker("", selection: $endpoint.connectionID) {
-                        ForEach(environment.connections) { config in Text(config.name).tag(UUID?.some(config.id)) }
+                        ForEach(environment.connections) { config in
+                            Text(connectionTitles[config.id] ?? config.name).tag(UUID?.some(config.id))
+                        }
                     }
                     .labelsHidden()
                     .onChange(of: endpoint.connectionID) { _, _ in

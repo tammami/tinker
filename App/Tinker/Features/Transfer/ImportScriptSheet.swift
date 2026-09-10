@@ -63,8 +63,11 @@ struct ImportScriptSheet: View {
     private var isProduction: Bool { config?.isProduction ?? false }
     @State private var typedName = ""
 
+    /// Folder-qualified titles, so two connections called the same read apart.
+    private var connectionTitles: [UUID: String] { ConnectionConfig.distinctTitles(for: environment.connections) }
+
     private var targetLine: String {
-        let name = config?.name ?? "connection"
+        let name = config?.qualifiedName ?? "connection"
         let database = database ?? config?.database ?? ""
         return database.isEmpty ? name : "\(name) · \(database)"
     }
@@ -154,7 +157,9 @@ struct ImportScriptSheet: View {
             HStack(spacing: DesignTokens.Spacing.md) {
                 FieldRow(label: "Into connection", labelWidth: 100) {
                     Picker("", selection: $endpoint.connectionID) {
-                        ForEach(environment.connections) { config in Text(config.name).tag(UUID?.some(config.id)) }
+                        ForEach(environment.connections) { config in
+                            Text(connectionTitles[config.id] ?? config.name).tag(UUID?.some(config.id))
+                        }
                     }
                     .labelsHidden()
                     .onChange(of: endpoint.connectionID) { _, _ in Task { await endpoint.loadConnection() } }

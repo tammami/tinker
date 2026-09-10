@@ -31,6 +31,9 @@ struct StructureSyncSheet: View {
         environment.connections.filter { $0.dialect == dialect }
     }
 
+    /// Folder-qualified titles, so two connections called the same read apart.
+    private var connectionTitles: [UUID: String] { ConnectionConfig.distinctTitles(for: connections) }
+
     var body: some View {
         SheetFrame(
             title: "Structure Sync",
@@ -48,7 +51,7 @@ struct StructureSyncSheet: View {
                         Picker("Connection", selection: $targetConnectionID) {
                             Text("Choose…").tag(UUID?.none)
                             ForEach(connections) { config in
-                                Text(config.name).tag(UUID?.some(config.id))
+                                Text(connectionTitles[config.id] ?? config.name).tag(UUID?.some(config.id))
                             }
                         }
                         TextField("Schema", text: $targetSchema)

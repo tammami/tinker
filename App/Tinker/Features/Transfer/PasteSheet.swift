@@ -54,6 +54,8 @@ struct PasteSheet: View {
 
     /// Every stored connection: a paste may cross engines.
     private var candidateConnections: [ConnectionConfig] { environment.connections }
+    /// Folder-qualified titles, so two connections called the same read apart.
+    private var connectionTitles: [UUID: String] { ConnectionConfig.distinctTitles(for: candidateConnections) }
 
     private var targetConfig: ConnectionConfig? { environment.connections.first { $0.id == targetConnectionID } }
 
@@ -114,7 +116,7 @@ struct PasteSheet: View {
                         Picker("Connection", selection: $targetConnectionID) {
                             ForEach(candidateConnections) { config in
                                 Label {
-                                    Text(config.name)
+                                    Text(connectionTitles[config.id] ?? config.name)
                                 } icon: {
                                     EngineMark(dialect: config.dialect, size: 14)
                                 }

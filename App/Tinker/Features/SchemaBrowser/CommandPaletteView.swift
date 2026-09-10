@@ -140,7 +140,7 @@ public struct CommandPaletteView: View {
         for config in ws.environment.connections {
             commands.append(
                 PaletteCommand(
-                    id: "conn-\(config.id)", group: .connections, title: config.name,
+                    id: "conn-\(config.id)", group: .connections, title: config.qualifiedName,
                     subtitle: "New query on \(config.user)@\(config.host)", icon: Icon.connection
                 ) { controller.newQueryTab(connectionID: config.id) })
         }

@@ -158,6 +158,11 @@ actor FixtureLoader: GridDataLoader {
     func setFailure(_ error: (any Error)?) { failure = error }
     func requestLog() -> [PageRequest] { requests }
 
+    /// A sort on this column answers late, with rows that say so, so a test can prove a
+    /// late answer never lands over a newer one.
+    private var slowSort: (column: String, delay: Duration)?
+    func setSlowSort(column: String, delay: Duration) { slowSort = (column, delay) }
+
     static let columns = [
         ColumnMeta(id: 0, name: "id", nativeTypeName: "int4", kind: .int, isPrimaryKey: true),
         ColumnMeta(id: 1, name: "name", nativeTypeName: "text", kind: .string),
@@ -166,11 +171,16 @@ actor FixtureLoader: GridDataLoader {
     func loadPage(_ request: PageRequest) async throws -> LoadedPage {
         requests.append(request)
         if let failure { throw failure }
+        var label = "row"
+        if let slowSort, request.sort.first?.column == slowSort.column {
+            try await Task.sleep(for: slowSort.delay)
+            label = "slow"
+        }
         let start = request.page * pageSize
         guard start < totalRows else { return LoadedPage(columns: Self.columns, rows: []) }
         let end = min(start + pageSize, totalRows)
         let rows = (start ..< end).map { index in
-            [DBValue.int(Int64(index)), .string("row \(index)")]
+            [DBValue.int(Int64(index)), .string("\(label) \(index)")]
         }
         return LoadedPage(columns: Self.columns, rows: rows)
     }
@@ -367,6 +377,27 @@ final class GridModelTests: XCTestCase {
         let requests = await loader.requestLog()
         XCTAssertEqual(requests.last?.page, 0)
         XCTAssertEqual(requests.last?.filter.first?.column, "name")
+    }
+
+    /// Two header clicks start two loads. The first answers last here, and its rows must
+    /// not land over the second's: the grid showed one column's order under another
+    /// column's arrow.
+    func testAStaleLoadDoesNotOverwriteANewerOne() async throws {
+        let (model, loader) = makeModel(rows: 100, pageSize: 100)
+        await loader.setSlowSort(column: "name", delay: .milliseconds(200))
+
+        let slow = Task { await model.setSort([PagePlanner.SortTerm(column: "name", ascending: true)]) }
+        try await Task.sleep(for: .milliseconds(30))
+        await model.setSort([PagePlanner.SortTerm(column: "id", ascending: true)])
+        XCTAssertEqual(model.value(row: 0, column: 1), .string("row 0"))
+
+        await slow.value
+        XCTAssertEqual(model.sort.first?.column, "id")
+        XCTAssertEqual(
+            model.value(row: 0, column: 1), .string("row 0"),
+            "the late answer for the earlier sort must have been dropped")
+        XCTAssertEqual(model.rowCount, 100)
+        XCTAssertNil(model.lastError)
     }
 
     func testCycleSortGoesAscendingDescendingNone() async {

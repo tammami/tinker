@@ -59,7 +59,9 @@ allowed_imports() {
     DBSQLite)   echo "Foundation Logging DBCore DBSQL SQLite3" ;;
         DBTunnel)   echo "Foundation Logging DBCore Citadel Crypto _CryptoExtras CTinkerBcrypt NIO NIOCore NIOPosix NIOSSH os" ;;
         DBStore)    echo "Foundation Logging DBCore SQLite3 Security" ;;
-        DBGrid)     echo "Foundation Logging DBCore DBSQL os zlib" ;;
+        # Observation is the toolchain's own framework (the @Observable write queue that
+        # views watch), not a package dependency.
+        DBGrid)     echo "Foundation Logging Observation DBCore DBSQL os zlib" ;;
         DBTestKit)  echo "Foundation Logging DBCore XCTest" ;;
         *)          echo "" ;;
     esac

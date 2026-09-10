@@ -309,11 +309,20 @@ public final class GridModel {
         }
     }
 
+    /// Bumped by every reload. A page load that started under an earlier generation
+    /// describes a sort, filter or page the grid has since moved away from, and its rows
+    /// are dropped when they arrive rather than stored over the newer ones.
+    private var loadGeneration = 0
+
     /// Loads one page, ignoring a request for a page already in flight.
     public func load(page: Int) async {
         guard !loadingPages.contains(page) else { return }
         loadingPages.insert(page)
-        defer { loadingPages.remove(page) }
+        let generation = loadGeneration
+        defer {
+            // A reload cleared the set already; the page there belongs to the new load.
+            if generation == loadGeneration { loadingPages.remove(page) }
+        }
 
         let strategy = strategy(forPage: page)
         var anchor: DBValue?
@@ -326,6 +335,10 @@ public final class GridModel {
         )
         do {
             let loaded = try await loader.loadPage(request)
+            // Two header clicks in a row start two loads; whichever answers last used to
+            // win, so the rows could be sorted by one column while the header pointed at
+            // another. Only the load of the current generation may store anything.
+            guard generation == loadGeneration else { return }
             if columns.isEmpty { columns = loaded.columns }
             buffer.store(page: page, rows: loaded.rows)
             let end = page * buffer.pageSize + loaded.rows.count
@@ -336,6 +349,7 @@ public final class GridModel {
             }
             lastError = nil
         } catch {
+            guard generation == loadGeneration else { return }
             lastError = error
         }
     }
@@ -372,6 +386,7 @@ public final class GridModel {
     /// have no index and can stay when the caller asks (`keepingNewRows`), as an
     /// auto-commit write does while the user is still filling one in.
     public func reload(keepingNewRows: Bool = false) async {
+        loadGeneration += 1
         buffer.removeAll()
         edits.discard(keepingNewRows ? .loadedRowsOnly : .everything)
         rowCount = 0

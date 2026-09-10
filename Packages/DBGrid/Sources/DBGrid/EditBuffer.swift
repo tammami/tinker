@@ -141,6 +141,11 @@ public struct EditBuffer: Sendable {
         insertions.removeAll { $0.id == id }
     }
 
+    /// Drops new rows the user added and never typed into: they hold nothing to write.
+    public mutating func removeEmptyInserts() {
+        insertions.removeAll { $0.values.isEmpty }
+    }
+
     public mutating func discardAll() {
         edits.removeAll()
         deletions.removeAll()

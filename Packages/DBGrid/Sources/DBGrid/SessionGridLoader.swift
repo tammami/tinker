@@ -27,9 +27,9 @@ public struct SessionGridLoader: GridDataLoader {
             page: request.page,
             keysetAnchor: request.keysetAnchor
         )
-        let (lease, connection) = try await session.lease()
-        defer { Task { await session.release(lease) } }
-        let result = try await connection.executeCollecting(query.sql, parameters: query.parameters)
+        let result = try await session.withLease { connection in
+            try await connection.executeCollecting(query.sql, parameters: query.parameters)
+        }
         return LoadedPage(columns: result.columns, rows: result.rows)
     }
 
@@ -37,9 +37,9 @@ public struct SessionGridLoader: GridDataLoader {
         let planner = PagePlanner(dialect: dialect, table: table)
         let compiled = FilterCompiler.compile(rules, dialect: dialect)
         let query = planner.countQuery(filter: compiled)
-        let (lease, connection) = try await session.lease()
-        defer { Task { await session.release(lease) } }
-        let result = try await connection.executeCollecting(query.sql, parameters: query.parameters)
+        let result = try await session.withLease { connection in
+            try await connection.executeCollecting(query.sql, parameters: query.parameters)
+        }
         guard let text = result.firstText, let count = Int64(text) else { return 0 }
         return count
     }

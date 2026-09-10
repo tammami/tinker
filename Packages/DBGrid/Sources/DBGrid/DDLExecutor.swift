@@ -51,35 +51,34 @@ public actor DDLExecutor {
 
         // Every statement has to travel on the same connection, or a transaction would not
         // contain them and MySQL's session state would not follow them.
-        let (lease, connection) = try await session.lease()
-        defer { Task { await session.release(lease) } }
-
         let transactional = isTransactional
-        if transactional { try await connection.beginTransaction() }
+        return try await session.withLease { connection in
+            if transactional { try await connection.beginTransaction() }
 
-        var applied: [GeneratedDDL] = []
-        for statement in statements {
-            do {
-                _ = try await connection.executeCollecting(statement.sql, parameters: [])
-                applied.append(statement)
-            } catch {
-                let message = (error as? DBError)?.errorDescription ?? String(describing: error)
-                if transactional {
-                    // Best effort: if the rollback itself fails the connection is going
-                    // back to the pool anyway, and the server has already aborted the
-                    // transaction.
-                    try? await connection.rollback()
+            var applied: [GeneratedDDL] = []
+            for statement in statements {
+                do {
+                    _ = try await connection.executeCollecting(statement.sql, parameters: [])
+                    applied.append(statement)
+                } catch {
+                    let message = (error as? DBError)?.errorDescription ?? String(describing: error)
+                    if transactional {
+                        // Best effort: if the rollback itself fails the connection is going
+                        // back to the pool anyway, and the server has already aborted the
+                        // transaction.
+                        try? await connection.rollback()
+                        return DDLExecutionResult(
+                            applied: [], failed: statement, errorText: message, didRollBack: true
+                        )
+                    }
                     return DDLExecutionResult(
-                        applied: [], failed: statement, errorText: message, didRollBack: true
+                        applied: applied, failed: statement, errorText: message, didRollBack: false
                     )
                 }
-                return DDLExecutionResult(
-                    applied: applied, failed: statement, errorText: message, didRollBack: false
-                )
             }
-        }
 
-        if transactional { try await connection.commit() }
-        return DDLExecutionResult(applied: applied)
+            if transactional { try await connection.commit() }
+            return DDLExecutionResult(applied: applied)
+        }
     }
 }

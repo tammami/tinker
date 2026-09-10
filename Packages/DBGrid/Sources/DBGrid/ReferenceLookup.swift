@@ -88,9 +88,9 @@ public struct ReferenceLookup: Sendable {
     /// Runs one page of the search on a leased connection.
     public func search(_ text: String, label: String?, page: Int) async throws -> Page {
         let query = Self.query(key: key, label: label, text: text, page: page, dialect: dialect)
-        let (lease, connection) = try await session.lease()
-        defer { Task { await session.release(lease) } }
-        let result = try await connection.executeCollecting(query.sql, parameters: query.parameters)
+        let result = try await session.withLease { connection in
+            try await connection.executeCollecting(query.sql, parameters: query.parameters)
+        }
         let hasMore = result.rows.count > Self.pageSize
         return Page(columns: result.columns, rows: Array(result.rows.prefix(Self.pageSize)), hasMore: hasMore)
     }
@@ -122,17 +122,17 @@ extension ReferenceLookup {
     /// whose label is NULL, are absent from the result.
     public func labels(forKeys keys: [DBValue], label: String) async throws -> [String: String] {
         var found: [String: String] = [:]
-        let (lease, connection) = try await session.lease()
-        defer { Task { await session.release(lease) } }
-        var start = 0
-        while start < keys.count {
-            let batch = Array(keys[start ..< min(start + Self.labelBatchSize, keys.count)])
-            start += Self.labelBatchSize
-            guard let query = Self.labelsQuery(key: key, label: label, keys: batch, dialect: dialect) else { break }
-            let result = try await connection.executeCollecting(query.sql, parameters: query.parameters)
-            for row in result.rows where row.count >= 2 {
-                guard let keyText = row[0].text, !row[1].isNull, let text = row[1].text else { continue }
-                found[keyText] = text
+        try await session.withLease { connection in
+            var start = 0
+            while start < keys.count {
+                let batch = Array(keys[start ..< min(start + Self.labelBatchSize, keys.count)])
+                start += Self.labelBatchSize
+                guard let query = Self.labelsQuery(key: key, label: label, keys: batch, dialect: dialect) else { break }
+                let result = try await connection.executeCollecting(query.sql, parameters: query.parameters)
+                for row in result.rows where row.count >= 2 {
+                    guard let keyText = row[0].text, !row[1].isNull, let text = row[1].text else { continue }
+                    found[keyText] = text
+                }
             }
         }
         return found

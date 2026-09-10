@@ -40,6 +40,9 @@ let package = Package(
         .package(url: "https://github.com/vapor/postgres-nio.git", from: "1.21.0"),
         .package(url: "https://github.com/orlandos-nl/Citadel.git", from: "0.7.0"),
         .package(url: "https://github.com/vapor/mysql-nio.git", from: "1.7.0"),
+        // Already in the graph through Citadel; named here so DBTunnel can use _CryptoExtras
+        // (RSA signing with SHA-2, AES-CTR/CBC) directly. See DECISIONS.md ADR-0039.
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.12.3"),
     ],
     targets: [
         // MARK: Libraries
@@ -84,10 +87,18 @@ let package = Package(
             swiftSettings: strict
         ),
         .target(
+            // OpenBSD's bcrypt_pbkdf, which OpenSSH uses to encrypt private keys with a
+            // passphrase. Vendored C; see DECISIONS.md ADR-0039.
+            name: "CTinkerBcrypt",
+            path: "Packages/DBTunnel/Sources/CTinkerBcrypt"
+        ),
+        .target(
             name: "DBTunnel",
             dependencies: [
                 "DBCore",
+                "CTinkerBcrypt",
                 .product(name: "Citadel", package: "Citadel"),
+                .product(name: "_CryptoExtras", package: "swift-crypto"),
             ],
             path: "Packages/DBTunnel/Sources/DBTunnel",
             swiftSettings: strict

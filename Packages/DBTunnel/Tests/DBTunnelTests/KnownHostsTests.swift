@@ -153,7 +153,7 @@ final class SSHAuthenticationTests: XCTestCase {
     func testAgentAuthenticationSaysWhatToDoInstead() async {
         let config = SSHConfig(host: "h", user: "me", auth: .agent)
         do {
-            _ = try await SSHTunnelProvider.authenticationMethod(for: config, secrets: EphemeralSecretStore())
+            _ = try await SSHTunnelProvider.authenticationAttempts(for: config, secrets: EphemeralSecretStore())
             XCTFail("expected agent authentication to be refused")
         } catch let error as DBError {
             guard case let .tunnelFailed(stage, message) = error else {
@@ -170,7 +170,7 @@ final class SSHAuthenticationTests: XCTestCase {
         let reference = SecretRef(account: "absent")
         let config = SSHConfig(host: "h", user: "me", auth: .password(reference))
         do {
-            _ = try await SSHTunnelProvider.authenticationMethod(for: config, secrets: EphemeralSecretStore())
+            _ = try await SSHTunnelProvider.authenticationAttempts(for: config, secrets: EphemeralSecretStore())
             XCTFail("expected the missing password to be reported")
         } catch let error as DBError {
             guard case let .tunnelFailed(stage, _) = error else { return XCTFail("expected .tunnelFailed") }
@@ -183,7 +183,7 @@ final class SSHAuthenticationTests: XCTestCase {
     func testMissingKeyFileIsReportedWithItsPath() async {
         let config = SSHConfig(host: "h", user: "me", auth: .privateKey(path: "/nope/id_ed25519", passphrase: nil))
         do {
-            _ = try await SSHTunnelProvider.authenticationMethod(for: config, secrets: EphemeralSecretStore())
+            _ = try await SSHTunnelProvider.authenticationAttempts(for: config, secrets: EphemeralSecretStore())
             XCTFail("expected the missing key to be reported")
         } catch let error as DBError {
             guard case let .tunnelFailed(_, message) = error else { return XCTFail("expected .tunnelFailed") }
@@ -252,13 +252,13 @@ enum SSHKeyFixture {
         }
     }
 
-    static func generate(type: String, passphrase: String = "") throws -> Key {
+    static func generate(type: String, passphrase: String = "", arguments extra: [String] = []) throws -> Key {
         let path = NSTemporaryDirectory() + "tinker-key-\(UUID().uuidString)"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh-keygen")
         var arguments = ["-t", type, "-f", path, "-N", passphrase, "-C", "tinker-test", "-q"]
         if type == "rsa" { arguments += ["-b", "2048"] }
-        process.arguments = arguments
+        process.arguments = arguments + extra
         process.standardOutput = Pipe()
         process.standardError = Pipe()
         try process.run()

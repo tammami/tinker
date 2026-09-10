@@ -3,7 +3,6 @@
 // own API. `@preconcurrency` accepts that contract rather than weakening ours: every use
 // here is funnelled through the `SSHPortForward` actor or a single connect call.
 @preconcurrency import Citadel
-import Crypto
 import DBCore
 import Foundation
 import Logging
@@ -40,54 +39,80 @@ public struct SSHTunnelProvider: TunnelProvider {
     }
 
     /// Connects to the SSH host, hopping through the jump host first when one is configured.
+    ///
+    /// A key file yields one attempt per signature algorithm the key supports, strongest
+    /// first, and each attempt is a connection of its own: Citadel's authentication method
+    /// gives a delegate one turn (see `SingleKeyAuthenticationDelegate`). A modern server
+    /// accepts the first; only a server that refuses it costs another handshake.
     static func connectClient(
         _ config: SSHConfig,
         secrets: any SecretStore,
         logger: Logger
     ) async throws -> SSHClient {
-        let authentication = try await authenticationMethod(for: config, secrets: secrets)
+        let attempts = try await authenticationAttempts(for: config, secrets: secrets)
         let validator = try hostKeyValidator(for: config)
 
+        var jumpClient: SSHClient?
         if let jump = config.jumpHost?.value {
-            let jumpClient = try await connectClient(jump, secrets: secrets, logger: logger)
+            jumpClient = try await connectClient(jump, secrets: secrets, logger: logger)
+        }
+
+        var refused: [String] = []
+        for (index, attempt) in attempts.enumerated() {
             do {
-                let settings = SSHClientSettings(
+                if let jumpClient {
+                    let settings = SSHClientSettings(
+                        host: config.host,
+                        port: config.port,
+                        authenticationMethod: { attempt.method },
+                        hostKeyValidator: validator
+                    )
+                    return try await jumpClient.jump(to: settings)
+                }
+                return try await SSHClient.connect(
                     host: config.host,
                     port: config.port,
-                    authenticationMethod: { authentication },
-                    hostKeyValidator: validator
+                    authenticationMethod: attempt.method,
+                    hostKeyValidator: validator,
+                    reconnect: .never,
+                    group: eventLoopGroup,
+                    connectTimeout: .seconds(15)
                 )
-                return try await jumpClient.jump(to: settings)
             } catch {
-                try? await jumpClient.close()
-                throw mapError(error, config: config, stage: .ssh)
+                if let algorithm = attempt.algorithm {
+                    refused.append(algorithm)
+                    if index < attempts.count - 1, Self.isKeyRefusal(error) {
+                        logger.debug(
+                            "ssh key refused; trying the next algorithm",
+                            metadata: ["refused": "\(algorithm)", "next": "\(attempts[index + 1].algorithm ?? "")"])
+                        continue
+                    }
+                }
+                if let jumpClient { try? await jumpClient.close() }
+                throw mapError(error, config: config, stage: .ssh, refusedAlgorithms: refused)
             }
         }
-
-        do {
-            return try await SSHClient.connect(
-                host: config.host,
-                port: config.port,
-                authenticationMethod: authentication,
-                hostKeyValidator: validator,
-                reconnect: .never,
-                group: eventLoopGroup,
-                connectTimeout: .seconds(15)
-            )
-        } catch {
-            throw mapError(error, config: config, stage: .ssh)
-        }
+        // `authenticationAttempts` never returns an empty list.
+        throw DBError.tunnelFailed(stage: .sshAuth, underlying: "No way to authenticate to \(config.host)")
     }
 
-    /// Builds the authentication method the config asks for.
+    /// Whether the server turned the offered key down, as opposed to the connection failing
+    /// for another reason. Citadel reports the refusal as every option having failed.
+    static func isKeyRefusal(_ error: any Error) -> Bool {
+        if let refused = error as? KeyAuthenticationRefused, case .keyRefused = refused { return true }
+        return String(reflecting: error).contains("allAuthenticationOptionsFailed")
+    }
+
+    /// Builds the authentication attempts the config asks for — one for a password, one per
+    /// signature algorithm for a key file.
     ///
-    /// Private keys are read from disk in OpenSSH format. `ed25519` and `rsa` keys are
-    /// supported; ECDSA keys are not, because Citadel exposes no OpenSSH reader for them
-    /// (see DECISIONS.md ADR-0013).
-    static func authenticationMethod(
+    /// Private keys are read by `OpenSSHPrivateKey` — the OpenSSH format and the older PEM
+    /// ones, encrypted or not — and offered through `SingleKeyAuthenticationDelegate`
+    /// (ADR-0039).
+    static func authenticationAttempts(
         for config: SSHConfig,
         secrets: any SecretStore
-    ) async throws -> SSHAuthenticationMethod {
+    ) async throws -> [SSHAuthenticationAttempt] {
         switch config.auth {
         case let .password(reference):
             guard let password = try await secrets.secret(for: reference) else {
@@ -95,7 +120,7 @@ public struct SSHTunnelProvider: TunnelProvider {
                     stage: .sshAuth, underlying: "No SSH password is stored for \(config.user)@\(config.host)"
                 )
             }
-            return .passwordBased(username: config.user, password: password)
+            return [SSHAuthenticationAttempt(algorithm: nil, method: .passwordBased(username: config.user, password: password))]
 
         case let .privateKey(path, passphraseRef):
             let expanded = (path as NSString).expandingTildeInPath
@@ -126,38 +151,17 @@ public struct SSHTunnelProvider: TunnelProvider {
         contents: String,
         passphrase: Data?,
         path: String
-    ) throws -> SSHAuthenticationMethod {
-        let keyType: SSHKeyType
+    ) throws -> [SSHAuthenticationAttempt] {
+        let key: OpenSSHPrivateKey
         do {
-            keyType = try SSHKeyDetection.detectPrivateKeyType(from: contents)
-        } catch {
-            throw DBError.tunnelFailed(
-                stage: .sshAuth, underlying: "\(path) is not a recognised OpenSSH private key"
-            )
+            key = try OpenSSHPrivateKey.parse(contents, passphrase: passphrase)
+        } catch let error as OpenSSHKeyError {
+            throw DBError.tunnelFailed(stage: .sshAuth, underlying: error.message(path: path))
         }
-        do {
-            switch keyType {
-            case .ed25519:
-                let key = try Curve25519.Signing.PrivateKey(sshEd25519: contents, decryptionKey: passphrase)
-                return .ed25519(username: username, privateKey: key)
-            case .rsa:
-                let key = try Insecure.RSA.PrivateKey(sshRsa: contents, decryptionKey: passphrase)
-                return .rsa(username: username, privateKey: key)
-            default:
-                throw DBError.tunnelFailed(
-                    stage: .sshAuth,
-                    underlying: "\(keyType.description) keys are not supported; use an ed25519 or RSA key"
-                )
-            }
-        } catch let error as DBError {
-            throw error
-        } catch {
-            let hint =
-                passphrase == nil
-                ? " If the key is encrypted, enter its passphrase."
-                : " Check the passphrase."
-            throw DBError.tunnelFailed(
-                stage: .sshAuth, underlying: "Cannot load \(path): \(error)." + hint
+        return KeyFileAuthentication.candidates(for: key).map { candidate in
+            SSHAuthenticationAttempt(
+                algorithm: candidate.algorithm,
+                method: .custom(SingleKeyAuthenticationDelegate(username: username, candidate: candidate))
             )
         }
     }
@@ -195,7 +199,9 @@ public struct SSHTunnelProvider: TunnelProvider {
         }
     }
 
-    static func mapError(_ error: any Error, config: SSHConfig, stage: TunnelStage) -> DBError {
+    static func mapError(
+        _ error: any Error, config: SSHConfig, stage: TunnelStage, refusedAlgorithms: [String] = []
+    ) -> DBError {
         if let dbError = error as? DBError { return dbError }
         let text = String(reflecting: error)
         if error is RevokedHostKey || text.contains("RevokedHostKey") {
@@ -210,14 +216,31 @@ public struct SSHTunnelProvider: TunnelProvider {
                 underlying: "The host key of \(config.host) does not match \(KnownHostsFile.defaultPath)"
             )
         }
-        if text.contains("allAuthenticationOptionsFailed") || text.lowercased().contains("authentication") {
+        if let refused = error as? KeyAuthenticationRefused, case .publicKeyNotAccepted = refused {
             return .tunnelFailed(
                 stage: .sshAuth,
-                underlying: "SSH authentication failed for \(config.user)@\(config.host)"
+                underlying: "SSH authentication failed for \(config.user)@\(config.host): \(refused)"
+            )
+        }
+        if isKeyRefusal(error) || text.lowercased().contains("authentication") {
+            let detail =
+                refusedAlgorithms.isEmpty
+                ? ""
+                : ": the server refused the key (offered \(refusedAlgorithms.joined(separator: ", ")))"
+            return .tunnelFailed(
+                stage: .sshAuth,
+                underlying: "SSH authentication failed for \(config.user)@\(config.host)" + detail
             )
         }
         return .tunnelFailed(stage: stage, underlying: text)
     }
+}
+
+/// One way of authenticating: a password, or a key under one signature algorithm.
+struct SSHAuthenticationAttempt {
+    /// The public-key algorithm name, or nil for a password.
+    let algorithm: String?
+    let method: SSHAuthenticationMethod
 }
 
 /// Refuses a key `known_hosts` marks `@revoked`, whatever the policy; otherwise accepts a

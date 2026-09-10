@@ -51,7 +51,7 @@ allowed_imports() {
         DBPostgres) echo "Foundation Logging DBCore DBSQL PostgresNIO NIO NIOCore NIOPosix NIOSSL NIOConcurrencyHelpers" ;;
         DBMySQL)    echo "Foundation Logging DBCore DBSQL MySQLNIO NIO NIOCore NIOPosix NIOSSL NIOConcurrencyHelpers" ;;
     DBSQLite)   echo "Foundation Logging DBCore DBSQL SQLite3" ;;
-        DBTunnel)   echo "Foundation Logging DBCore Citadel Crypto NIO NIOCore NIOPosix NIOSSH" ;;
+        DBTunnel)   echo "Foundation Logging DBCore Citadel Crypto _CryptoExtras CTinkerBcrypt NIO NIOCore NIOPosix NIOSSH os" ;;
         DBStore)    echo "Foundation Logging DBCore SQLite3 Security" ;;
         DBGrid)     echo "Foundation Logging DBCore DBSQL os zlib" ;;
         DBTestKit)  echo "Foundation Logging DBCore XCTest" ;;

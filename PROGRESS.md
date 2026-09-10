@@ -517,3 +517,81 @@ Asked for by the user as "support sqlite, drag the file like Navicat".
   SQLite a new database is a new file, which the transfer wizard does not offer.
 - No prepare step exists for SQLite because none is needed; `testenv/README.md` is
   unchanged.
+
+## 2026-09-10 — SSH key files against current OpenSSH (ADR-0039)
+
+Reported: connecting through an SSH tunnel with `~/.ssh/id_rsa` failed at `sshAuth` with
+"SSH authentication failed", although `ssh` accepts the same key. Root cause: Citadel signs
+RSA keys as `ssh-rsa` (SHA-1) only, and OpenSSH ≥ 8.8 refuses that algorithm for public-key
+authentication; the server never saw a signature it could accept. Reproduced against the
+machine's own `sshd` (OpenSSH 10.3) before the fix, green after.
+
+### Done
+- `OpenSSHPrivateKey` (DBTunnel) reads key files: `openssh-key-v1` with bcrypt + AES-CTR/CBC
+  encryption; PEM `RSA PRIVATE KEY` (with OpenSSL's `DEK-Info` MD5/AES-CBC encryption), SEC1
+  `EC PRIVATE KEY` (named or explicit curve), PKCS#8 `PRIVATE KEY`. Key types RSA, ed25519,
+  ECDSA P-256/384/521. Every refusal names the file and, where one exists, the `ssh-keygen -p`
+  command that converts it.
+- `RSASSHPrivateKey<Algorithm>` signs through `_CryptoExtras` as `rsa-sha2-512`,
+  `rsa-sha2-256` or `ssh-rsa`; `SSHTunnelProvider.connectClient` offers them in that order,
+  one connection each (Citadel's authentication method gives a delegate a single turn). The
+  error names every algorithm that was refused.
+- `CTinkerBcrypt`: OpenBSD's `bcrypt_pbkdf` vendored as a C target. swift-crypto named as a
+  direct dependency for `_CryptoExtras`; `Package.resolved` unchanged. `Scripts/ci.sh` allows
+  the new imports (`_CryptoExtras`, `CTinkerBcrypt`, `os`) for DBTunnel.
+
+### Tests
+- `OpenSSHInteropTests` (9) start `/usr/sbin/sshd` unprivileged on a free port in a temp
+  directory — no administrator rights, nothing on the machine changed — and forward to an
+  echo server through it: RSA against a default server (the reported failure), RSA against a
+  `PubkeyAcceptedAlgorithms ssh-rsa` server (the fallback), ed25519, ECDSA P-384,
+  passphrase-protected RSA (bcrypt/aes256-ctr), aes256-cbc, PEM RSA, encrypted PEM RSA, and a
+  key the server does not know, whose message lists `rsa-sha2-512, rsa-sha2-256, ssh-rsa`.
+  A failure carries sshd's own log. They skip only when `sshd` is missing or will not start.
+- `OpenSSHPrivateKeyTests` (10, no network): every format `ssh-keygen` writes (7 cases) is
+  read as the right key type; four encrypted variants decrypt; RSA public numbers match the
+  `.pub` file; wrong passphrase vs. missing passphrase vs. damaged file are told apart in
+  three formats; an unsupported cipher is named with the conversion hint; garbage and a
+  truncated file are rejected; messages carry path and hint; `mpint` normalisation;
+  candidates are ordered strongest first; each algorithm's signature verifies only under its
+  own name, and the public-key blob round-trips through the wire format.
+- Existing `KnownHostsTests` (12) and `TunnelIntegrationTests` (8, 2 skipped without
+  `TINKER_TEST_PG_URL`) unchanged in behaviour; `authenticationMethod(for:)` became
+  `authenticationAttempts(for:)`.
+- DBTunnel total: 45 tests, 0 failures, 2 skipped (the PostgreSQL-env ones).
+
+### Not done / deferred
+- RSA *host* keys are still verified through Citadel's `ssh-rsa` type: a server whose only
+  host key is RSA fails at key exchange against OpenSSH ≥ 8.8. Fixing it means registering
+  SHA-2 host-key types with `NIOSSHAlgorithms`, which changes key-exchange negotiation for
+  every connection; not touched here.
+- `chacha20-poly1305@openssh.com`- and 3DES-encrypted key files, encrypted PKCS#8, and FIDO
+  `sk-` keys are refused with a message. Agent authentication remains ADR-0013.
+- Jump hosts and password authentication against a real `sshd` are still only covered when
+  `TINKER_TEST_SSH_*_URL` is set (unchanged).
+
+## 2026-09-10 — Structure editor: Done with pending edits, row selection
+
+Reported: a column added in Structure vanished after Done; the row highlight stayed on
+`org_id` while the cursor was in `user_id`.
+
+### Done
+- `StructureView`: Done with pending statements opens the preview and leaves editing only
+  after a complete run; with nothing pending it leaves at once. Cancel keeps editing.
+- `TableTabController.reloadAfterStructureChange` re-reads with `keepingEdits: true`; it
+  was the path that replaced the pending column. `StructureController.read` announces kept
+  edits only when the server definition changed, because that status text is what makes
+  the table tab reload its grid.
+- `ColumnsPane`: a `@FocusState` keyed by column id on every text field; focus drives
+  `selectedColumnID`. Type, Not null, Auto and the key button select their row too.
+
+### Tests
+- None added: the app was not built at the user's request ("jangan build apapun"), so the
+  changes are parse-checked (`swift-format lint`) but not compiled or run. To verify:
+  build, open a table's Structure, Edit, Add Column, Done → the preview appears; Execute →
+  the column is on the server and editing ends. Click into any cell → its row highlights.
+
+### Not done
+- The highlight seen under the sidebar was the sidebar's own selection of the last-clicked
+  item (`rekrut_sekolah`), on the same line by coincidence; nothing in the grid draws
+  outside its pane. Left as is.

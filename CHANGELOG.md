@@ -6,6 +6,25 @@ All notable changes to Tinker are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **Structure: Done no longer loses a pending change.** Done only left editing, so a column
+  added without pressing Preview stayed as an invisible pending edit that the next re-read
+  of the table replaced. Done now shows the pending statements and leaves editing once they
+  have run; a re-read keeps unsaved edits and says so only when the server's definition
+  really changed.
+- **Structure: the highlighted row is the one being edited.** A click inside a cell's text
+  field never reached the row's tap gesture, so the highlight and the detail panel stayed on
+  the previous row. The selection now follows the focused field, and changing a type,
+  checkbox or key marks its row as well.
+- **SSH key files work against current servers.** An RSA key was signed only as `ssh-rsa`
+  (SHA-1), which OpenSSH 8.8 and later refuse, so every `id_rsa` failed with "SSH
+  authentication failed". Keys are now offered as `rsa-sha2-512`, then `rsa-sha2-256`, then
+  `ssh-rsa` for servers that know nothing newer, and the message names what was refused.
+- Key files in the older PEM formats (`BEGIN RSA PRIVATE KEY`, `BEGIN EC PRIVATE KEY`,
+  PKCS#8), with or without a passphrase, and ECDSA keys are read; before, the first was not
+  recognised and the last was refused. Files Tinker cannot read say why and how to convert
+  them (`ssh-keygen -p`).
+
 ### Added
 - **SQLite.** A database file is a connection: drop a `.sqlite`, `.sqlite3`, `.db` or `.db3`
   file on the window, open it from Finder, or choose File › Open SQLite Database… (⌥⌘O),

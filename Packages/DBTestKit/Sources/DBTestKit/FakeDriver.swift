@@ -34,6 +34,12 @@ public actor FakeDriverControl {
     private var failNextConnects = 0
     private var connectError: DBError = .connectionFailed(underlying: "fake failure", hint: nil)
     private var pingFails = false
+    /// How long `ping()` and `resetSessionState()` take, so a test can interleave another
+    /// call with them and prove the pool stays consistent across the suspension.
+    public private(set) var pingDelay: Duration = .zero
+    public private(set) var resetDelay: Duration = .zero
+    /// `rollback()` calls across every fake connection, whether or not one was open.
+    public private(set) var rollbackCount = 0
 
     public init() {}
 
@@ -44,7 +50,14 @@ public actor FakeDriverControl {
         endpoints = []
         failNextConnects = 0
         pingFails = false
+        pingDelay = .zero
+        resetDelay = .zero
+        rollbackCount = 0
     }
+
+    public func setPingDelay(_ delay: Duration) { pingDelay = delay }
+    public func setResetDelay(_ delay: Duration) { resetDelay = delay }
+    func noteRollback() { rollbackCount += 1 }
 
     /// Makes the next `count` connection attempts fail with `error`.
     public func failNext(_ count: Int, with error: DBError = .connectionFailed(underlying: "fake failure", hint: nil)) {
@@ -132,11 +145,22 @@ public actor FakeConnection: SQLConnection {
 
     public func beginTransaction() async throws { transactionOpen = true }
     public func commit() async throws { transactionOpen = false }
-    public func rollback() async throws { transactionOpen = false }
+    public func rollback() async throws {
+        transactionOpen = false
+        await control.noteRollback()
+    }
     public var isInTransaction: Bool { transactionOpen }
 
     public func ping() async throws {
+        let delay = await control.pingDelay
+        if delay > .zero { try await Task.sleep(for: delay) }
         if await control.shouldPingFail { throw DBError.notConnected }
+    }
+
+    public func resetSessionState() async throws {
+        let delay = await control.resetDelay
+        if delay > .zero { try await Task.sleep(for: delay) }
+        executed.append("RESET ALL")
     }
 
     public func close() async {

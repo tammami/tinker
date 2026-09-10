@@ -47,6 +47,9 @@ public actor ConnectionSession {
     public static let maximumPoolSize = 8
     /// How long an unused connection is kept before it is closed.
     public static let idleTimeout: Duration = .seconds(300)
+    /// How long ``lease()`` waits for a connection when every one is in use before it
+    /// gives up. Waiting forever showed as a tab stuck on "Running…" with nothing to cancel.
+    public static let leaseWaitTimeout: Duration = .seconds(15)
 
     public nonisolated let config: ConnectionConfig
     private let registry: DriverRegistry
@@ -54,6 +57,7 @@ public actor ConnectionSession {
     private let tunnelProvider: (any TunnelProvider)?
     private let logger: Logger
     private let clock: any Clock<Duration>
+    private let leaseWaitTimeout: Duration
 
     private var tunnel: (any Tunnel)?
     private var pool: [PooledConnection] = []
@@ -63,17 +67,36 @@ public actor ConnectionSession {
     private var stateSubscribers: [UUID: AsyncStream<ConnectionState>.Continuation] = [:]
     /// Set when the user unlocks a read-only connection for this session (`⌘⇧L`).
     private var readOnlyOverridden = false
+    /// True while ``disconnect()`` is closing the pool; a lease that arrives then is
+    /// refused rather than opening a connection the close would leak.
+    private var isClosing = false
+
+    /// Who has a pooled connection. Every state change happens between suspension
+    /// points, so no two callers can find the same connection free.
+    private enum Occupancy: Equatable {
+        case idle
+        case leased(UUID)
+        /// Being rolled back and reset after a release; not free until that finishes.
+        case resetting
+        /// Being pinged before it is handed out; not free until the ping answers.
+        case checking
+    }
 
     /// One physical connection and who is using it.
     private struct PooledConnection {
         let id: Int
         let connection: any SQLConnection
-        var leasedTo: UUID?
+        var occupancy: Occupancy
         var lastUsed: ContinuousClock.Instant
         /// The read-only state last told to the server on this connection; nil when it
         /// has to be told again (never yet, or the lock changed while it was leased).
         var readOnlyApplied: Bool?
+
+        var isIdle: Bool { occupancy == .idle }
+        var leasedTo: UUID? { if case let .leased(id) = occupancy { id } else { nil } }
     }
+
+    private func poolIndex(of id: Int) -> Int? { pool.firstIndex { $0.id == id } }
 
     /// The session whose SSH tunnel this one rides on, for a session opened on another
     /// database of the same server. Nil for the connection's own session.
@@ -86,7 +109,8 @@ public actor ConnectionSession {
         tunnelProvider: (any TunnelProvider)? = nil,
         tunnelSource: ConnectionSession? = nil,
         logger: Logger = Logger(label: "tinker.session"),
-        clock: any Clock<Duration> = ContinuousClock()
+        clock: any Clock<Duration> = ContinuousClock(),
+        leaseWaitTimeout: Duration = ConnectionSession.leaseWaitTimeout
     ) {
         self.config = config
         self.registry = registry
@@ -95,6 +119,7 @@ public actor ConnectionSession {
         self.tunnelSource = tunnelSource
         self.logger = logger
         self.clock = clock
+        self.leaseWaitTimeout = leaseWaitTimeout
     }
 
     // MARK: - State
@@ -138,13 +163,19 @@ public actor ConnectionSession {
     /// a leased one gets it the next time it is handed out.
     public func setReadOnlyOverride(_ overridden: Bool) async {
         readOnlyOverridden = overridden
-        for index in pool.indices {
-            if pool[index].leasedTo == nil {
-                await applyReadOnlyGuard(to: pool[index].connection)
-                pool[index].readOnlyApplied = isReadOnly
-            } else {
+        // The pool can change across every await below, so work from ids, never indices.
+        for id in pool.map(\.id) {
+            guard let index = poolIndex(of: id) else { continue }
+            guard pool[index].isIdle else {
                 pool[index].readOnlyApplied = nil
+                continue
             }
+            let connection = pool[index].connection
+            pool[index].occupancy = .checking
+            await applyReadOnlyGuard(to: connection)
+            guard let current = poolIndex(of: id) else { continue }
+            pool[current].occupancy = .idle
+            pool[current].readOnlyApplied = isReadOnly
         }
     }
 
@@ -183,18 +214,27 @@ public actor ConnectionSession {
             return await existing.connection.serverVersion
         }
         let connection = try await makeConnection()
+        if isClosing {
+            await connection.close()
+            throw DBError.notConnected
+        }
         pool.append(
             PooledConnection(
-                id: nextConnectionID(), connection: connection, leasedTo: nil, lastUsed: .now
+                id: nextConnectionID(), connection: connection, occupancy: .idle, lastUsed: .now
             ))
         setState(.connected)
         return await connection.serverVersion
     }
 
     /// Runs the whole connect path and reports each stage, for the editor's Test Connection.
+    ///
+    /// The published state is what it was before the test when the test returns: a
+    /// connected session stays connected in the sidebar, not stuck on "connecting".
     public func testConnection(
         report: @escaping @Sendable (TunnelStage, String) -> Void
     ) async -> Result<ServerVersion, DBError> {
+        let previous = stateValue
+        defer { setState(previous) }
         do {
             let resolved = try await resolveConfig(report: report)
             report(.startup, "Connecting to \(resolved.host):\(resolved.port)…")
@@ -306,84 +346,116 @@ public actor ConnectionSession {
     public func lease() async throws -> (Lease, any SQLConnection) {
         // A loop rather than recursion: a busy pool can be retried many times and the
         // stack must not grow with each retry.
+        var waitedSince: ContinuousClock.Instant?
         while true {
             try Task.checkCancellation()
+            guard !isClosing else { throw DBError.notConnected }
             try await reapIdleConnections()
 
-            if let index = pool.firstIndex(where: { $0.leasedTo == nil }) {
+            if let index = pool.firstIndex(where: \.isIdle) {
                 // A pooled connection may have died while it sat idle; prove it is alive
-                // before handing it out.
+                // before handing it out. It is marked first so that no other caller finds
+                // it free during the ping, and everything after the await goes back
+                // through its id: the pool can have changed shape meanwhile.
+                let candidate = pool[index]
+                pool[index].occupancy = .checking
                 do {
-                    try await pool[index].connection.ping()
+                    try await candidate.connection.ping()
                 } catch {
-                    guard let current = pool.firstIndex(where: { $0.id == pool[index].id }) else { continue }
-                    let dead = pool.remove(at: current)
-                    await dead.connection.close()
+                    if let current = poolIndex(of: candidate.id) { pool.remove(at: current) }
+                    await candidate.connection.close()
                     continue
                 }
-                guard let index = pool.firstIndex(where: { $0.leasedTo == nil }) else { continue }
-                let newLease = Lease(id: UUID(), connectionID: pool[index].id)
-                pool[index].leasedTo = newLease.id
-                pool[index].lastUsed = .now
-                if config.readOnly, pool[index].readOnlyApplied != isReadOnly {
-                    await applyReadOnlyGuard(to: pool[index].connection)
-                    pool[index].readOnlyApplied = isReadOnly
+                guard let current = poolIndex(of: candidate.id) else {
+                    // Only a disconnect (or a drop) removes a connection that is being
+                    // checked: the session was torn down under this caller, and the
+                    // close was left to whoever held the statement in flight.
+                    await candidate.connection.close()
+                    throw DBError.notConnected
+                }
+                let newLease = Lease(id: UUID(), connectionID: candidate.id)
+                pool[current].occupancy = .leased(newLease.id)
+                pool[current].lastUsed = .now
+                if config.readOnly, pool[current].readOnlyApplied != isReadOnly {
+                    await applyReadOnlyGuard(to: candidate.connection)
+                    if let again = poolIndex(of: candidate.id) { pool[again].readOnlyApplied = isReadOnly }
                 }
                 setState(.connected)
-                return (newLease, pool[index].connection)
+                return (newLease, candidate.connection)
             }
 
             guard pool.count < Self.maximumPoolSize else {
-                // Every connection is in use. Waiting beats failing, and the pool frees up
-                // as soon as any tab finishes its statement.
+                // Every connection is in use. The pool frees up as soon as any tab finishes
+                // its statement or closes, so a short wait is normal; a long one is a tab
+                // that will never let go, and the caller is told so instead of hanging.
+                let since = waitedSince ?? .now
+                waitedSince = since
+                if since.duration(to: .now) >= leaseWaitTimeout {
+                    throw DBError.connectionFailed(
+                        underlying:
+                            "All \(Self.maximumPoolSize) connections of “\(config.name)” are in use",
+                        hint: "close a tab or wait for a running statement to finish")
+                }
                 try await clock.sleep(for: .milliseconds(50))
                 continue
             }
 
             let connection = try await makeConnection()
+            if isClosing {
+                await connection.close()
+                throw DBError.notConnected
+            }
             let id = nextConnectionID()
             let newLease = Lease(id: UUID(), connectionID: id)
-            var applied: Bool?
-            if config.readOnly {
-                await applyReadOnlyGuard(to: connection)
-                applied = isReadOnly
-            }
             pool.append(
                 PooledConnection(
-                    id: id, connection: connection, leasedTo: newLease.id, lastUsed: .now, readOnlyApplied: applied
+                    id: id, connection: connection, occupancy: .leased(newLease.id), lastUsed: .now
                 ))
+            if config.readOnly {
+                await applyReadOnlyGuard(to: connection)
+                if let current = poolIndex(of: id) { pool[current].readOnlyApplied = isReadOnly }
+            }
             setState(.connected)
             return (newLease, connection)
         }
     }
 
-    /// Returns a connection to the pool. A connection left inside a transaction is rolled
-    /// back first, so the next tab never inherits someone else's uncommitted work, and
-    /// session state (`USE`, `search_path`, `SET ROLE`, variables) is put back so the
-    /// next tab starts where a fresh connection would.
+    /// Returns a connection to the pool.
+    ///
+    /// Whatever the connection was doing is rolled back — unconditionally, because a
+    /// transaction the driver did not see open (`SET autocommit = 0` typed on MySQL, a
+    /// `BEGIN` inside a `DO` block) would otherwise be committed by the reset that
+    /// follows — and session state (`USE`, `search_path`, `SET ROLE`, variables) is put
+    /// back so the next tab starts where a fresh connection would. The connection is not
+    /// free until all of that has finished: a lease that arrives meanwhile takes another.
     public func release(_ lease: Lease) async {
-        guard let index = pool.firstIndex(where: { $0.id == lease.connectionID }) else { return }
-        pool[index].leasedTo = nil
-        pool[index].lastUsed = .now
+        guard let index = poolIndex(of: lease.connectionID),
+            pool[index].leasedTo == lease.id
+        else { return }
+        pool[index].occupancy = .resetting
         let connection = pool[index].connection
-        if await connection.isInTransaction {
-            try? await connection.rollback()
-        }
+        // ROLLBACK outside a transaction is a warning on every engine, never an error.
+        try? await connection.rollback()
         do {
             try await connection.resetSessionState()
-            // The reset also clears the server-side read-only guard; the next lease
-            // applies it again rather than trusting what this one remembers.
-            if let current = pool.firstIndex(where: { $0.id == lease.connectionID }) {
-                pool[current].readOnlyApplied = nil
-            }
         } catch {
             // A connection that cannot be reset is not handed out again.
             logger.debug("session reset failed; dropping the connection", metadata: ["error": "\(error)"])
-            if let current = pool.firstIndex(where: { $0.id == lease.connectionID }) {
-                let removed = pool.remove(at: current)
-                await removed.connection.close()
-            }
+            if let current = poolIndex(of: lease.connectionID) { pool.remove(at: current) }
+            await connection.close()
+            return
         }
+        guard let current = poolIndex(of: lease.connectionID) else {
+            // Disconnected while resetting; the disconnect left the close to this
+            // release so that the reset's statement was not cut off mid-flight.
+            await connection.close()
+            return
+        }
+        pool[current].occupancy = .idle
+        pool[current].lastUsed = .now
+        // The reset also clears the server-side read-only guard; the next lease applies
+        // it again rather than trusting what this one remembers.
+        pool[current].readOnlyApplied = nil
     }
 
     /// The transport of this session's connections, as the server reported it: whether
@@ -398,14 +470,15 @@ public actor ConnectionSession {
     private func reapIdleConnections() async throws {
         let deadline = ContinuousClock.Instant.now - Self.idleTimeout
         // Keep at least one connection so the session stays warm.
-        let expired = pool.enumerated()
-            .filter { $0.element.leasedTo == nil && $0.element.lastUsed < deadline }
-            .map(\.offset)
-        guard pool.count - expired.count >= 1 else { return }
-        for index in expired.reversed() {
-            let removed = pool.remove(at: index)
-            await removed.connection.close()
+        var expired = pool.filter { $0.isIdle && $0.lastUsed < deadline }
+        // When every connection has expired, the most recently used one stays.
+        if expired.count == pool.count, let newest = expired.max(by: { $0.lastUsed < $1.lastUsed }) {
+            expired.removeAll { $0.id == newest.id }
         }
+        // Remove before the first await, so nothing else can lease a connection that is
+        // about to be closed.
+        pool.removeAll { candidate in expired.contains { $0.id == candidate.id } }
+        for removed in expired { await removed.connection.close() }
     }
 
     public var pooledConnectionCount: Int { pool.count }
@@ -419,7 +492,7 @@ public actor ConnectionSession {
     /// open, because silently starting a new session would discard uncommitted work
     /// without saying so (SPEC §9).
     public func noteConnectionDropped(lease: Lease, hadOpenTransaction: Bool) async {
-        if let index = pool.firstIndex(where: { $0.id == lease.connectionID }) {
+        if let index = poolIndex(of: lease.connectionID) {
             let removed = pool.remove(at: index)
             await removed.connection.close()
         }
@@ -432,8 +505,19 @@ public actor ConnectionSession {
 
     /// Closes the tunnel and every connection.
     public func disconnect() async {
-        for pooled in pool { await pooled.connection.close() }
+        // Take the pool first, so a lease that arrives while the closes are in flight
+        // finds nothing to reuse and is refused rather than handed a closing connection.
+        isClosing = true
+        defer { isClosing = false }
+        let closing = pool
         pool.removeAll()
+        // A connection in the middle of a ping or a reset has a statement in flight;
+        // closing it now would tear the channel out from under that statement (mysql-nio
+        // asserts on it). The lease or release that owns the statement finds the
+        // connection gone from the pool when it resumes and closes it then.
+        for pooled in closing where pooled.occupancy != .resetting && pooled.occupancy != .checking {
+            await pooled.connection.close()
+        }
         cache.invalidateAll()
         // A borrowed tunnel belongs to the connection's own session and outlives this one.
         if tunnelSource == nil { await tunnel?.close() }
@@ -457,8 +541,16 @@ public actor ConnectionSession {
     ) async throws -> Value {
         if let cached: Value = cache.value(for: key) { return cached }
         let (lease, connection) = try await lease()
-        defer { Task { await release(lease) } }
-        let value = try await load(connection.introspector)
+        // Released before returning, not in a detached task: the caller's next lease
+        // must find this connection free rather than racing the release for a new one.
+        let value: Value
+        do {
+            value = try await load(connection.introspector)
+        } catch {
+            await release(lease)
+            throw error
+        }
+        await release(lease)
         cache.store(value, for: key)
         return value
     }

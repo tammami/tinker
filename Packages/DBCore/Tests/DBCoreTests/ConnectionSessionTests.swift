@@ -174,6 +174,118 @@ final class ConnectionSessionTests: XCTestCase {
         XCTAssertEqual(pooled, 0)
     }
 
+    /// A released connection is not free until its rollback and reset have finished.
+    ///
+    /// It was marked free first: a lease arriving during the reset was handed the same
+    /// connection, applied its read-only guard, and then had that guard wiped by the
+    /// `RESET ALL` that was still running — a production read-only lock silently lost.
+    func testAConnectionBeingResetIsNotHandedOut() async throws {
+        await FakeDriver.control.setResetDelay(.milliseconds(200))
+        let session = makeSession()
+        let (first, firstConnection) = try await session.lease()
+        let releasing = Task { await session.release(first) }
+        try await Task.sleep(for: .milliseconds(30))
+
+        let (second, secondConnection) = try await session.lease()
+        XCTAssertFalse(
+            firstConnection === secondConnection,
+            "the connection still being reset must not be leased again")
+        let connects = await FakeDriver.control.connectCount
+        XCTAssertEqual(connects, 2)
+        await releasing.value
+        await session.release(second)
+        let leased = await session.leasedConnectionCount
+        XCTAssertEqual(leased, 0)
+    }
+
+    /// A release rolls back even when the driver believes no transaction is open, so a
+    /// transaction it could not see (`SET autocommit = 0` typed on MySQL) is not committed
+    /// by the reset that follows.
+    func testReleaseRollsBackUnconditionally() async throws {
+        let session = makeSession()
+        let (lease, connection) = try await session.lease()
+        let open = await connection.isInTransaction
+        XCTAssertFalse(open)
+        await session.release(lease)
+        let rollbacks = await FakeDriver.control.rollbackCount
+        XCTAssertEqual(rollbacks, 1)
+    }
+
+    /// Disconnecting while a lease is pinging an idle connection must neither crash nor
+    /// hand that connection out afterwards. It crashed: the lease indexed the pool after
+    /// its `await`, and the disconnect had emptied it.
+    func testDisconnectDuringAPingRefusesTheLease() async throws {
+        let session = makeSession()
+        let (lease, _) = try await session.lease()
+        await session.release(lease)
+        await FakeDriver.control.setPingDelay(.milliseconds(200))
+
+        let pending = Task { try await session.lease() }
+        try await Task.sleep(for: .milliseconds(30))
+        await session.disconnect()
+
+        do {
+            _ = try await pending.value
+            XCTFail("a lease interrupted by a disconnect must not succeed")
+        } catch let error as DBError {
+            XCTAssertEqual(error, .notConnected)
+        }
+        let pooled = await session.pooledConnectionCount
+        XCTAssertEqual(pooled, 0)
+        let state = await session.state
+        XCTAssertEqual(state, .disconnected)
+    }
+
+    /// When every connection stays busy, a lease fails with a message instead of waiting
+    /// forever behind a tab that will never let go.
+    func testAFullPoolFailsTheLeaseAfterTheWaitTimeout() async throws {
+        let session = ConnectionSession(
+            config: makeConfig(), registry: registry, secrets: EphemeralSecretStore(),
+            logger: logger, leaseWaitTimeout: .milliseconds(150)
+        )
+        for _ in 0 ..< ConnectionSession.maximumPoolSize { _ = try await session.lease() }
+        do {
+            _ = try await session.lease()
+            XCTFail("expected the lease to give up")
+        } catch let error as DBError {
+            guard case let .connectionFailed(underlying, hint) = error else {
+                return XCTFail("expected .connectionFailed, got \(error)")
+            }
+            XCTAssertTrue(underlying.contains("8 connections"), underlying)
+            XCTAssertNotNil(hint)
+        }
+        let pooled = await session.pooledConnectionCount
+        XCTAssertEqual(pooled, ConnectionSession.maximumPoolSize)
+    }
+
+    /// Test Connection from the editor must not leave a connected session showing
+    /// "connecting" in the sidebar.
+    func testTestConnectionRestoresThePublishedState() async throws {
+        let session = makeSession()
+        try await session.connect()
+        let result = await session.testConnection { _, _ in }
+        guard case .success = result else { return XCTFail("expected success, got \(result)") }
+        let state = await session.state
+        XCTAssertEqual(state, .connected)
+
+        await FakeDriver.control.failNext(1, with: .authenticationFailed(user: "app"))
+        _ = await session.testConnection { _, _ in }
+        let afterFailure = await session.state
+        XCTAssertEqual(afterFailure, .connected, "a failed test is reported, not published as the session's state")
+    }
+
+    /// An introspection read returns its lease before it returns, so the caller's next
+    /// lease reuses the connection instead of racing a detached release for a new one.
+    func testIntrospectionReleasesItsLeaseBeforeReturning() async throws {
+        let session = makeSession()
+        _ = try await session.introspection(.databases) { try await $0.databases() }
+        let leased = await session.leasedConnectionCount
+        XCTAssertEqual(leased, 0)
+        _ = try await session.lease()
+        let connects = await FakeDriver.control.connectCount
+        XCTAssertEqual(connects, 1, "the introspection's connection should have been reused")
+    }
+
     // MARK: - Secrets and tunnel
 
     func testPasswordIsReadFromTheSecretStore() async throws {

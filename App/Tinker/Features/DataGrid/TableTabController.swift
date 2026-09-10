@@ -36,11 +36,11 @@ public final class TableTabController: DataGridDelegate {
     /// tab when it creates the controller, not by a view, so it is there before the tab
     /// has appeared. With none set (a headless run) the question is answered "yes".
     @ObservationIgnored public var confirm: ((DestructiveConfirmation) -> Void)?
+    /// One write at a time, requests during a write merged into the next (shared with the
+    /// query tab's result grids).
+    private let writes = GridWriteQueue()
     /// True while an auto-commit write is on the server.
-    public private(set) var isWriting = false
-    @ObservationIgnored private var writeTask: Task<Void, Never>?
-    /// A write asked for while one was running; it goes as soon as that one is done.
-    @ObservationIgnored private var queuedWrite: CommitScope?
+    public var isWriting: Bool { writes.isWriting }
 
     public let table: TableRef
     public let connectionID: UUID
@@ -95,8 +95,28 @@ public final class TableTabController: DataGridDelegate {
         await structure.load(force: true, keepingEdits: true)
     }
 
+    @ObservationIgnored private var startTask: Task<Void, Never>?
+
     /// Reads the table's shape, restores remembered preferences, and loads the first page.
+    ///
+    /// Single-flight: the view's `.task` and a "follow this foreign key" both call it when
+    /// the model is still nil, and two starts built two grids, the later one silently
+    /// replacing the first and any filter applied to it.
     public func start() async {
+        if let startTask {
+            await startTask.value
+            return
+        }
+        let task = Task<Void, Never> { [weak self] in
+            guard let self else { return }
+            await performStart()
+        }
+        startTask = task
+        await task.value
+        startTask = nil
+    }
+
+    private func performStart() async {
         guard let session else {
             errorText = "This connection is no longer configured"
             return
@@ -385,16 +405,7 @@ public final class TableTabController: DataGridDelegate {
             apply()
             return
         }
-        let count = rows.count
-        confirm(
-            DestructiveConfirmation(
-                title: "Delete \(count) row\(count == 1 ? "" : "s") from “\(table.name)”?",
-                message:
-                    "Auto-commit is on, so the DELETE runs on the server as soon as you confirm. "
-                    + "Turn auto-commit off to review deletions in the commit sheet first.",
-                confirmTitle: "Delete \(count == 1 ? "Row" : "\(count) Rows")",
-                action: { apply() }
-            ))
+        confirm(GridEditPrompts.deleteRows(count: rows.count, from: table.name) { apply() })
     }
 
     /// Runs `action` unless edits are pending, in which case the user is asked first:
@@ -406,17 +417,14 @@ public final class TableTabController: DataGridDelegate {
             await action()
             return
         }
-        let count = model.edits.pendingStatementCount
         confirm(
-            DestructiveConfirmation(
-                title: "Discard \(count) pending change\(count == 1 ? "" : "s")?",
-                message: "\(what) re-reads the page from the server, which throws away what has not been committed.",
-                confirmTitle: "Discard and \(what)",
-                action: {
-                    model.edits.discardAll()
-                    await action()
-                }
-            ))
+            GridEditPrompts.discardPendingEdits(
+                count: model.edits.pendingStatementCount, before: what,
+                reason: "\(what) re-reads the page from the server, which throws away what has not been committed."
+            ) {
+                model.edits.discardAll()
+                await action()
+            })
     }
 
     public func setSelectionNull() {
@@ -447,40 +455,12 @@ public final class TableTabController: DataGridDelegate {
     /// queue drains, so an edit made during a write is neither lost nor written twice.
     @discardableResult
     private func enqueueWrite(_ scope: CommitScope) -> Task<Void, Never> {
-        if let writeTask {
-            queuedWrite = (queuedWrite == .everything || scope == .everything) ? .everything : .loadedRowsOnly
-            return writeTask
-        }
-        isWriting = true
-        let task = Task { [weak self] in
-            guard let self else { return }
-            var initial: CommitScope? = scope
-            repeat {
-                var current = initial
-                initial = nil
-                var failed = false
-                while let scope = current {
-                    current = nil
-                    if (model?.edits.pendingStatementCount(scope) ?? 0) > 0, !(await performCommit(scope)) {
-                        failed = true
-                        break
-                    }
-                    current = queuedWrite
-                    queuedWrite = nil
-                }
-                if failed {
-                    queuedWrite = nil
-                    break
-                }
-                await reloadAfterWrite()
-                initial = queuedWrite
-                queuedWrite = nil
-            } while initial != nil
-            isWriting = false
-            writeTask = nil
-        }
-        writeTask = task
-        return task
+        writes.enqueue(
+            scope,
+            hasPending: { [weak self] scope in (self?.model?.edits.pendingStatementCount(scope) ?? 0) > 0 },
+            perform: { [weak self] scope in await self?.performCommit(scope) ?? false },
+            afterDrain: { [weak self] in await self?.reloadAfterWrite() }
+        )
     }
 
     /// Re-reads the page after a write, so a value the server set (a default, a trigger's
@@ -501,9 +481,7 @@ public final class TableTabController: DataGridDelegate {
         guard autoCommitsEdits, !isWriting, let model, !model.edits.pendingInserts.isEmpty,
             !model.isPendingInsertRow(focusRow)
         else { return }
-        for insert in model.edits.pendingInserts where insert.values.isEmpty {
-            model.edits.removeInsert(id: insert.id)
-        }
+        model.edits.removeEmptyInserts()
         bumpRevision()
         updateStatus()
         writeIfAutoCommit(.everything)

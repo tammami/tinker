@@ -325,6 +325,10 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         // it is plain that every statement ran; the strip switches between the rest.
         if results.count > 1 { selectedResultID = results.first?.id }
         bumpRevision()
+        // With nothing to keep on this connection — auto-commit on, no transaction open —
+        // the lease goes back now. Eight idle query tabs used to hold the whole pool, and
+        // the ninth caller (a table tab, the sidebar) waited on them.
+        if commitsAutomatically, !isInTransaction { await releaseHeldConnection() }
     }
 
     /// Runs one statement and appends its result. Returns true when it failed.
@@ -454,9 +458,28 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
                     duration: clockStart.duration(to: .now),
                     error: SQLRedactor.redactSecrets(banner.message), succeeded: false
                 ))
+            if let dbError = error as? DBError, dbError.indicatesLostConnection {
+                await noteHeldConnectionDropped(session: session)
+            }
             bumpRevision()
             return true
         }
+    }
+
+    /// The held connection is gone: the session is told (SPEC §9.6), the lease is
+    /// forgotten so the next run takes a fresh one, and a transaction that was open is
+    /// reported as lost rather than quietly continued on a new connection.
+    private func noteHeldConnectionDropped(session: ConnectionSession) async {
+        guard let heldLease else { return }
+        let hadOpenTransaction = isInTransaction
+        await session.noteConnectionDropped(lease: heldLease, hadOpenTransaction: hadOpenTransaction)
+        self.heldLease = nil
+        heldConnection = nil
+        isInTransaction = false
+        statusText =
+            hadOpenTransaction
+            ? "Connection lost — the open transaction is gone; reconnect from the sidebar to continue"
+            : "Connection lost — the next run reconnects"
     }
 
     /// The one table a SELECT reads, resolved against the tab's database, or nil when the
@@ -570,25 +593,19 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             apply()
             return
         }
-        let count = rows.count
-        let name = grid.writableTable?.name ?? "the result"
         confirm(
-            DestructiveConfirmation(
-                title: "Delete \(count) row\(count == 1 ? "" : "s") from “\(name)”?",
-                message:
-                    "Auto-commit is on, so the DELETE runs on the server as soon as you confirm. "
-                    + "Turn auto-commit off to review deletions in the commit sheet first.",
-                confirmTitle: "Delete \(count == 1 ? "Row" : "\(count) Rows")",
-                action: { apply() }
-            ))
+            GridEditPrompts.deleteRows(count: rows.count, from: grid.writableTable?.name ?? "the result") {
+                apply()
+            })
     }
 
     // MARK: - Auto-commit of result edits
 
+    /// One write at a time, requests during a write merged into the next (shared with the
+    /// table tab).
+    private let writes = GridWriteQueue()
     /// True while a write of result edits is on the server.
-    public private(set) var isWritingEdits = false
-    @ObservationIgnored private var writeTask: Task<Void, Never>?
-    @ObservationIgnored private var queuedWrite: CommitScope?
+    public var isWritingEdits: Bool { writes.isWriting }
     /// The result whose edits the write task is committing.
     @ObservationIgnored private var writeTarget: QueryResultTab?
     /// A write asked for while statements were running; it goes when they finish, since
@@ -610,49 +627,29 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     /// would share the held connection. The page is re-read once the queue drains.
     @discardableResult
     private func enqueueWrite(_ scope: CommitScope, on result: QueryResultTab?) -> Task<Void, Never> {
-        if let writeTask {
-            queuedWrite = (queuedWrite == .everything || scope == .everything) ? .everything : .loadedRowsOnly
-            return writeTask
-        }
-        if isRunning {
-            writeAfterRun = (writeAfterRun == .everything || scope == .everything) ? .everything : .loadedRowsOnly
+        if isRunning, !writes.isWriting {
+            // Statements are on the tab's one held connection; the write follows them.
+            writeAfterRun = GridWriteQueue.merge(writeAfterRun, scope)
             return runTask.map { task in Task { await task.value } } ?? Task {}
         }
-        guard let result, let grid = result.grid else { return Task {} }
-        isWritingEdits = true
-        writeTarget = result
-        let task = Task { [weak self] in
-            guard let self else { return }
-            var initial: CommitScope? = scope
-            repeat {
-                var current = initial
-                initial = nil
-                var failed = false
-                while let scope = current {
-                    current = nil
-                    if grid.edits.pendingStatementCount(scope) > 0, !(await performCommitEdits(scope, on: result)) {
-                        failed = true
-                        break
-                    }
-                    current = queuedWrite
-                    queuedWrite = nil
-                }
-                if failed {
-                    queuedWrite = nil
-                    break
-                }
+        guard let target = writeTarget ?? result, let grid = target.grid else { return Task {} }
+        writeTarget = target
+        return writes.enqueue(
+            scope,
+            hasPending: { grid.edits.pendingStatementCount($0) > 0 },
+            perform: { [weak self] scope in
+                let written = await self?.performCommitEdits(scope, on: target) ?? false
+                // A refusal ends the queue without a drain; the target is let go here.
+                if !written { self?.writeTarget = nil }
+                return written
+            },
+            afterDrain: { [weak self] in
                 await grid.reload(keepingNewRows: !grid.edits.pendingInserts.isEmpty)
-                result.message = Self.pageMessage(grid, exactTotal: result.exactTotal, duration: .zero)
-                bumpRevision()
-                initial = queuedWrite
-                queuedWrite = nil
-            } while initial != nil
-            isWritingEdits = false
-            writeTarget = nil
-            writeTask = nil
-        }
-        writeTask = task
-        return task
+                target.message = Self.pageMessage(grid, exactTotal: target.exactTotal, duration: .zero)
+                self?.writeTarget = nil
+                self?.bumpRevision()
+            }
+        )
     }
 
     /// A new row goes when the user leaves it; one left untouched holds nothing and is
@@ -661,9 +658,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         guard autoCommitsEdits, !isWritingEdits, let grid = selectedResult?.grid,
             !grid.edits.pendingInserts.isEmpty, !grid.isPendingInsertRow(focusRow)
         else { return }
-        for insert in grid.edits.pendingInserts where insert.values.isEmpty {
-            grid.edits.removeInsert(id: insert.id)
-        }
+        grid.edits.removeEmptyInserts()
         bumpRevision()
         writeIfAutoCommit(.everything)
     }
@@ -859,14 +854,13 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         switch dialect {
         case .mysql:
             do {
-                let (lease, connection) = try await session.lease()
-                defer { Task { await session.release(lease) } }
-                // Profiling is off by default and is per session, so it has to be asked
-                // for; the numbers then describe the statements run after this point.
-                _ = try? await connection.executeCollecting("SET profiling = 1")
-                let profiles = try await connection.executeCollecting(
-                    "SHOW PROFILE CPU, BLOCK IO"
-                )
+                let profiles = try await session.withLease { connection in
+                    // Profiling is off by default and is per session, so it has to be
+                    // asked for; the numbers then describe the statements run after this
+                    // point.
+                    _ = try? await connection.executeCollecting("SET profiling = 1")
+                    return try await connection.executeCollecting("SHOW PROFILE CPU, BLOCK IO")
+                }
                 guard !profiles.rows.isEmpty else {
                     result.profileNote =
                         "No profile yet. MySQL records one for the "
@@ -914,9 +908,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
                 """
             }
         do {
-            let (lease, connection) = try await session.lease()
-            defer { Task { await session.release(lease) } }
-            let read = try await connection.executeCollecting(sql)
+            let read = try await session.withLease { connection in try await connection.executeCollecting(sql) }
             result.statusColumns = read.columns.map(\.name)
             if dialect == .postgresql {
                 // One wide row reads better turned on its side.
@@ -977,15 +969,16 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         sessionDatabase = name
         guard let session = environment.session(for: connectionID) else { return }
         do {
-            let connection: any SQLConnection
             if let heldConnection {
-                connection = heldConnection
+                try await applySessionDatabase(on: heldConnection)
             } else {
-                let (lease, fresh) = try await session.lease()
-                defer { Task { await session.release(lease) } }
-                connection = fresh
+                // Held for the whole switch. The `defer` that released the lease used to sit
+                // inside this branch, so the `USE` ran on a connection already back in the
+                // pool — the next tab could inherit the database, or take it from under us.
+                try await session.withLease { connection in
+                    try await applySessionDatabase(on: connection)
+                }
             }
-            try await applySessionDatabase(on: connection)
             statusText = "Using \(name)"
         } catch {
             sessionDatabase = previous

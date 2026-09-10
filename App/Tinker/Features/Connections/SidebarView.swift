@@ -675,6 +675,15 @@ struct SidebarRow: View {
             } label: {
                 Label("Refresh", systemImage: Icon.refresh)
             }
+            // A session that lost a transaction waits for this: it will not reconnect on
+            // its own, because that would discard the uncommitted work silently (SPEC §9.6).
+            if case .degraded = sidebar.state(of: id) {
+                Button {
+                    Task { await sidebar.reconnect(connectionID: id) }
+                } label: {
+                    Label("Reconnect", systemImage: Icon.refresh)
+                }
+            }
             Button {
                 onDisconnect(id)
             } label: {

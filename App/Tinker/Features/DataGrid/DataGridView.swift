@@ -795,18 +795,21 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         let rect = tableView.frameOfCell(atColumn: position, row: row)
         let popover = NSPopover()
         popover.behavior = .transient
+        // `popover` is captured weakly: the popover owns the hosting controller, which
+        // owns this view, which owns these closures — a strong capture kept every picker
+        // ever opened alive, together with its model and session reference.
         let view = ReferencePickerView(
             model: model,
-            onChoose: { [weak self] key in
-                popover.close()
+            onChoose: { [weak self, weak popover] key in
+                popover?.close()
                 self?.delegate?.gridDidPickReference(row: row, column: column, key: key)
             },
-            onSetNull: { [weak self] in
-                popover.close()
+            onSetNull: { [weak self, weak popover] in
+                popover?.close()
                 self?.delegate?.gridDidCommitEdit(row: row, column: column, text: "")
                 self?.delegate?.gridDidRequestSetNull()
             },
-            onCancel: { popover.close() }
+            onCancel: { [weak popover] in popover?.close() }
         )
         popover.contentViewController = NSHostingController(rootView: view)
         popover.contentSize = NSSize(width: 360, height: 440)

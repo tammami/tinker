@@ -47,11 +47,11 @@ Target user: an individual developer working daily against dev/staging/prod data
 
 | Purpose | Package | Notes |
 |---|---|---|
-| PostgreSQL driver | `vapor/postgres-nio` | Use `PostgresClient` (structured concurrency API), not `PostgresConnection` directly |
+| PostgreSQL driver | `vapor/postgres-nio` | `PostgresConnection` per physical connection, pooled by `ConnectionSession` (amended by ADR-0007; §7.3 says why `PostgresClient` is not used) |
 | MySQL driver | `vapor/mysql-nio` | If auth or type coverage proves insufficient, escalate; fallback is `libmysqlclient` via C module (see §7.3) |
 | SQLite driver | the system `SQLite3` module (`libsqlite3` shipped with macOS) | No package. One dedicated thread per open file (ADR-0036) |
 | SSH tunnel | `orlandos-nl/Citadel` | Pure Swift SSH on NIO. Needs `direct-tcpip` channel forwarding. Fallback: libssh2 via C module |
-| SQL parsing/highlighting | `ChimeHQ/SwiftTreeSitter` + `tree-sitter-sql` grammar | Highlighting and statement boundary detection only |
+| SQL parsing/highlighting | none — `DBSQL.SQLTokenizer` and `StatementSplitter` | Amended by ADR-0018: tree-sitter was not adopted; a hand-written tokenizer highlights and the splitter finds statement boundaries |
 | Logging | `apple/swift-log` | Single logger per subsystem |
 | Updates | `sparkle-project/Sparkle` | Phase 4 only |
 | Test servers | The developer's existing local PostgreSQL and MySQL, plus optional remote servers, all supplied via env vars | See §17. No Docker, no installs. |
@@ -272,7 +272,7 @@ Drivers do not split statements. `DBSQL.StatementSplitter` splits user SQL into 
 - Auth: `mysql_native_password`, `caching_sha2_password` (including the RSA public-key exchange path when TLS is off), `sha256_password`. This is a hard requirement; MySQL 8 defaults to caching_sha2.
 - TLS: off, preferred, required, verify-ca, verify-identity.
 - Cancel: keep one spare connection in the session for `KILL QUERY <threadId>`.
-- Type mapping (minimum): TINYINT(1)→bool only if the column is declared `tinyint(1)` (expose as int otherwise, with a per-connection toggle), all integer types with signed/unsigned, FLOAT/DOUBLE, DECIMAL→decimal, all string types, BINARY/VARBINARY/BLOB→bytes, DATE, TIME, DATETIME (hasTimeZone=false), TIMESTAMP (hasTimeZone=false but server converts; document), YEAR→int, JSON→json, ENUM/SET→string, BIT→bytes, GEOMETRY→raw.
+- Type mapping (minimum): TINYINT(1)→bool only if the column is declared `tinyint(1)` (expose as int otherwise, with a per-connection toggle), all integer types with signed/unsigned, FLOAT/DOUBLE, DECIMAL→decimal, all string types, BINARY/VARBINARY/BLOB→bytes, DATE, TIME, DATETIME (hasTimeZone=false), TIMESTAMP (hasTimeZone=false but server converts; document), YEAR→int, JSON→json, ENUM/SET→string, BIT→raw (the bit string as text for display, the bytes bound back on write; amended by ADR-0040), GEOMETRY→raw.
 - `sql_mode`, `time_zone`, `character_set_results=utf8mb4` set on connect.
 - `affectedRows` and `lastInsertID` populated from OK packet.
 - Escalation rule: if `mysql-nio` cannot satisfy the auth or type list above after a genuine attempt, write the gap in DECISIONS.md and implement the driver over `libmysqlclient` via a system-library SwiftPM target instead. Do not ship a driver that fails MySQL 8 default auth.
@@ -281,7 +281,7 @@ Drivers do not split statements. `DBSQL.StatementSplitter` splits user SQL into 
 - A connection is a file: `ConnectionConfig.database` holds the path; `host`, `port`, `user`, password, TLS and SSH are empty and the editor does not show them. The file is refused unless it starts with the SQLite 3 header (or is empty); a missing file is an error unless the `sqliteCreateIfMissing` option is set.
 - Threading: every `sqlite3*` call for one file runs on one dedicated thread (a `SerialExecutor` over a `Thread`), never on the cooperative pool. Cancel is `sqlite3_interrupt` from any thread; the stream then throws `.cancelled`. The statement timeout is a progress handler and throws `.timeout`.
 - Type mapping: the storage class of each cell decides (`INTEGER`→int, `REAL`→double, `TEXT`→string, `BLOB`→bytes, `NULL`→null), refined by the declared type when the value fits: `BOOL*`→bool, `DATE`/`TIME`/`DATETIME`/`TIMESTAMP`→date/time/timestamp when the text is ISO-8601, `JSON`→json, `UUID`→uuid. Numeric affinity (`DECIMAL`, `NUMERIC`) stores a REAL with fifteen significant digits, and the driver reports the REAL it finds; there is no exact decimal in SQLite and the driver must not invent one. An undeclared column is typed by its first value.
-- `affectedRows` is the difference in `sqlite3_total_changes` across the statement, reported only for INSERT/UPDATE/DELETE/REPLACE (`sqlite3_changes` is not reset by DDL). `lastInsertID` from `sqlite3_last_insert_rowid` for INSERT/REPLACE. `INSERT … RETURNING` is used by the grid (3.35+).
+- `affectedRows` is `sqlite3_changes64` read right after an INSERT/UPDATE/DELETE/REPLACE — the statement's own rows, not the rows its triggers or `ON DELETE CASCADE` touched, which `total_changes` would add and which made the grid refuse a correct one-row delete (amended by ADR-0040). DDL never reads it, so it cannot inherit the previous statement's count. `lastInsertID` from `sqlite3_last_insert_rowid` for INSERT/REPLACE. `INSERT … RETURNING` is used by the grid (3.35+).
 - Errors: `sqlite3_errmsg` verbatim, the extended result code in `ServerError.code`, and `sqlite3_error_offset` converted from bytes to a one-based character position.
 - Session state: `PRAGMA foreign_keys = ON` on connect (option `sqliteForeignKeys`), re-applied by `resetSessionState` after a `PRAGMA`/`ATTACH`. The read-only guard is `PRAGMA query_only`, held by the file. `lower()`/`upper()` are overridden on the connection with Unicode case folding, because Apple's SQLite has no ICU and the built-ins fold ASCII only; the grid's quick search relies on it.
 - Introspection: `PRAGMA database_list` (databases), one pseudo-schema `main` per database (`SchemaRef.sqlite`), `sqlite_master` and the `pragma_*` table-valued functions for tables, columns (`table_xinfo`), indexes, foreign keys and the primary key; `sqlite_stat1` for row estimates (nil until `ANALYZE`); `dbstat` for sizes when compiled in; check constraints, foreign-key names, partial-index predicates and trigger timing are read from the DDL text, which is the only place SQLite keeps them. No routines, no partitioning, no comments, no users, no sessions beyond the connection's own; the `ServerIntrospector` reports pragmas and compile options as the "variables".
@@ -404,6 +404,8 @@ One `NSWindow` per workspace. A workspace contains:
 - Dark/light follow system; all colors from a `DesignTokens` enum mapping to `NSColor` system colors. No hard-coded hex except connection colors.
 
 ### 10.2 Keyboard shortcuts (complete list, must all work)
+
+Amended by ADR-0041: Run is ⌘R, Run All ⌘⌥R, Run Selected ⌘⌃R, Refresh F5, Export ⌘⌥E and Copy as INSERT ⌘⌃C, for the reasons recorded there. Every other row below is as the app has it.
 
 | Action | Shortcut |
 |---|---|
@@ -779,7 +781,7 @@ Each phase lists deliverables and acceptance criteria. Do not reorder.
 - Tests: the SQLite suite runs against a temporary database file the suite creates itself, so it never skips and needs no environment variable (`TINKER_TEST_SQLITE_DISABLED` leaves it out); the grid, transfer and sync suites run against SQLite alongside the configured servers. Fixtures in `testenv/fixtures/sqlite/` mirror the other engines' where SQLite can.
 - Accept: every §12.6 and §13.3 criterion that a file can meet, on the SQLite fixture; the rebuild of a column change verified by reading the table back; a trigger body imported whole; `EXPLAIN QUERY PLAN` recognised as read-only.
 
-Deferred to v0.2 (do not build now, do not stub): import, data transfer, backup/restore, EXPLAIN visual, saved queries/snippets, editing of multi-table results, client-cert TLS, Redis, other engines, attached SQLite databases beyond listing them.
+Deferred to v0.2 (do not build now, do not stub): EXPLAIN visual, editing of multi-table results, client-cert TLS, Redis, other engines, attached SQLite databases beyond listing them. (Amended: import, data transfer, dump/restore, snippets and the table designer were pulled into Phases 8–9 by ADR-0028 and exist; they are no longer deferred.)
 
 ---
 

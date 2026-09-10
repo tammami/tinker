@@ -27,19 +27,13 @@ public final class WorkspaceTab: Identifiable {
     public let kind: Kind
     public let connectionID: UUID
     public var title: String
-    /// The grid shown by a table tab, or by a query tab's selected result.
-    public var grid: GridModel?
-    /// The editor's text, for a query tab.
+    /// The editor's text, for a query tab. Mirrored from the controller so a tab
+    /// survives its controller being rebuilt.
     public var sql: String = ""
-    /// One result per statement the editor ran (SPEC §13.2).
-    public var results: [QueryResultTab] = []
-    public var selectedResultID: UUID?
-    public var isRunning = false
-    public var runningElapsed: Duration = .zero
     /// Off means the tab holds its transaction open until the user commits.
     public var autoCommit = true
-    public var errorBanner: QueryErrorBanner?
-    public var statusMessage: String = ""
+    // The grid, the results, the running state and the banner live on the tab's
+    // controller, which the views observe directly; copies here had no readers.
 
     public init(kind: Kind, connectionID: UUID, title: String) {
         self.kind = kind
@@ -51,10 +45,6 @@ public final class WorkspaceTab: Identifiable {
 
     public var tableRef: TableRef? {
         if case let .table(table) = kind { table } else { nil }
-    }
-
-    public var selectedResult: QueryResultTab? {
-        results.first { $0.id == selectedResultID } ?? results.first
     }
 
     /// The symbol the tab strip and the command palette draw for this tab.

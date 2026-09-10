@@ -671,3 +671,54 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
   non-superuser can run on the local server produces one.
 - Reconnect policy, keepalive, backpressure, the cancel-hits-next-statement race, and
   releasing a query tab's lease when idle are Phase 2/3.
+
+## 2026-09-11 — Review, Phase 2: architectural improvements (ADR-0042, ADR-0043)
+
+### Done
+- Reconnect policy (SPEC §9.6) exists in code, not only in a comment: `DBError.
+  indicatesLostConnection` names the drop errors; the query tab tells the session, forgets
+  its lease, and the next run takes a fresh connection; a drop with a transaction open
+  makes the session wait — `lease()` and `connect()` refuse with the reason — until the
+  sidebar's new **Reconnect** item calls `reconnect()`; `makeConnection` retries a
+  network-class failure once and a server answer never.
+- A query tab releases its lease after a run when auto-commit is on and no transaction
+  is open, so idle tabs no longer hold the pool.
+- `GridModel` drops the answer of a page load that a later reload superseded (two header
+  clicks used to leave the rows under the wrong arrow). `TableTabController.start()` is
+  single-flight.
+- `ConnectionSession.withLease` releases before returning, on the caller's actor;
+  `SessionGridLoader`, `ReferenceLookup`, `DDLExecutor` and the query tab's profile,
+  status and database-switch reads use it. The database switch had released its lease
+  *before* running `USE` on the connection.
+- `GridWriteQueue` (DBGrid) replaces the two copies of the single-flight write loop;
+  `GridEditPrompts` words the delete and discard questions once; `EditBuffer.
+  removeEmptyInserts()` replaces two copies of a loop. `WorkspaceTab` loses seven
+  properties nobody read. The sidebar cancels watchers for deleted connections. The
+  reference-picker popover no longer retains itself.
+- PostgreSQL: `WITH … INSERT/UPDATE/DELETE` without RETURNING reports the server's
+  affected-row count (it reported "WITH 0").
+- The swift-nio-ssh fork Citadel pulls in is recorded (ADR-0042) with its pinned
+  revision and the review obligation on every Citadel bump.
+- SPEC amended in place: §2.1 (no tree-sitter; `PostgresConnection`), §7.3 (BIT, SQLite
+  `affectedRows`), §10.2 (the keys ADR-0041 keeps), §16 (features that shipped are no
+  longer listed as deferred). `Scripts/ci.sh` allows `Observation` in DBGrid.
+
+### Tests
+- `ConnectionSessionTests` (+4): `testALostTransactionWaitsForTheUserToReconnect`,
+  `testADropWithoutATransactionReconnectsOnNextUseWithOneRetry`,
+  `testAnAuthenticationFailureIsNotRetried`, `testWithLeaseReleasesBeforeReturningAndOnThrow`;
+  `testFailedConnectMarksTheSessionDegraded` now fails two attempts, since one is retried.
+- `GridModelTests.testAStaleLoadDoesNotOverwriteANewerOne` (a slow sort answers after a
+  fast one and is dropped). `GridWriteQueueTests` (4): merge during a write, refusal stops
+  the queue and drops what was merged, an empty scope still drains, merge widens.
+- `PostgresIntegrationTests.testWithPrefixedDMLReportsTheServersAffectedRowCount`.
+- `Scripts/ci.sh`: 677 tests, 0 failures, 1 skip (the local server trusts the user);
+  app built with zero warnings; smoke test passed.
+
+### Not done / deferred
+- `EditBuffer` keyed by row identity (edits surviving a reload): deferred, reason in
+  ADR-0043.
+- Fourteen app call sites keep `defer { Task { await session.release(lease) } }`; correct
+  since ADR-0040 (a released connection is not free until its reset ends), at the cost of
+  an occasional extra connection. Converting them is mechanical and listed for Phase 4.
+- Keepalive, backpressure and the cancel-hits-next-statement race are Phase 3.

@@ -393,3 +393,32 @@ Date: 2026-09-11 (review, Phase 1)
 - Auto-commit stays on by default, as ADR-0031 chose at the user's request, but a delete under auto-commit asks first, in a sheet that names the table and the row count, on both table tabs and result grids. Sort, filter, quick search, page changes and Refresh ask before discarding pending edits; closing a tab, closing the other tabs and quitting ask when a tab holds uncommitted edits or an open transaction (SPEC §13.2). The confirmation callback is set by the workspace when it creates a controller, not by a view on appear, so a tab that has not been shown yet can still ask.
 
 **Consequences.** The help page lists the keys as they now are. `SmokeFeaturePass` exercises the confirmation through the controller's `confirm` property. There is no unit test for the shortcut table itself: `Commands` are not observable from XCTest; the page and the code were reconciled by hand.
+
+## ADR-0042 — The SSH transport is a fork of swift-nio-ssh, pulled in by Citadel
+Date: 2026-09-11 (review, Phase 2)
+
+**Context.** The review found that `Package.resolved` resolves `swift-nio-ssh` from `https://github.com/Wellz26/swift-nio-ssh.git` (0.3.6, revision `a05e6bbe6b141ee68da3030e00275504c0595d4d`), a personal fork of `apple/swift-nio-ssh`, because Citadel's own manifest names it. Nothing in this repository mentioned it: `Package.swift` names Citadel, and the transport underneath — key exchange, host-key verification, the cipher suite — came from a source no one here had chosen or reviewed.
+
+**Decision.** Recorded here rather than replaced. SwiftPM cannot pin a transitive dependency from the root manifest; `Package.resolved` pins the exact revision above and is committed, so a build reproduces the audited tree. Any bump of Citadel is a bump of this fork and must be diffed against upstream `apple/swift-nio-ssh` before it is committed; the review notes go in this file. Moving to upstream is Citadel's decision, not ours, and is not attempted.
+
+**Consequences.** Nothing changes for a user. A maintainer updating Citadel has a written obligation: read the fork's diff, record what it changes, and refuse the bump if the diff is not understood. The dependency lint in `Scripts/ci.sh` is unaffected: DBTunnel imports `NIOSSH` under either origin.
+
+## ADR-0043 — Phase 2 of the review: the session decides about reconnecting, the grid drops stale answers, one write queue
+Date: 2026-09-11 (review, Phase 2)
+
+**Context.** After Phase 1 the architectural findings remained: SPEC §9.6's reconnect policy existed only as a doc comment (`noteConnectionDropped` had no caller, `makeConnection` no retry, and a query tab kept a dead held connection for its whole life); every query tab held a pooled connection for its lifetime whether or not it had a transaction to keep; two overlapping page loads let the later answer win regardless of which sort or filter it belonged to; `TableTabController.start()` could run twice and build two grids; twenty call sites released their lease with `defer { Task { await session.release(lease) } }`, a detached task the caller's next lease races (in `selectDatabase` the defer sat inside an inner block and released the connection *before* the `USE` ran on it); the two tab controllers each carried a copy of the single-flight write queue; `WorkspaceTab` carried seven properties nobody read; and the sidebar's state watchers were never cancelled.
+
+**Decision.**
+- `DBError.indicatesLostConnection` names the errors that mean the connection is gone. On one of them the query tab calls `noteConnectionDropped`, forgets its lease, and the next run takes a fresh one. A drop while a transaction was open sets the session waiting: `lease()` and `connect()` refuse with the reason until `reconnect()`, which only the sidebar's Reconnect item calls — nothing the app does on its own (a transfer, a dump, the query builder) can discard the user's uncommitted work for them. `makeConnection` retries once on a network-class failure and never on a server answer such as a refused password.
+- A query tab releases its lease after a run when auto-commit is on and no transaction is open. Eight idle tabs no longer hold the pool.
+- `GridModel` carries a load generation; a page load started before a reload drops its rows when they arrive.
+- `TableTabController.start()` is single-flight.
+- `ConnectionSession.withLease` leases for the duration of a body and releases before returning, on the caller's actor. The package call sites and the query tab's use it; the remaining app sites keep the detached form, which is now harmless for correctness (a released connection is marked resetting until its reset finishes, ADR-0040) and costs at most one extra connection.
+- `GridWriteQueue` (DBGrid) is the one single-flight write gate; both controllers own one and pass in what differs (which grid, how a commit runs, how the page is re-read). `GridEditPrompts` words the delete and discard questions once. `EditBuffer.removeEmptyInserts()` replaces two copies of the same loop.
+- `WorkspaceTab` keeps `sql` and `autoCommit`; the rest lives on the controllers. The sidebar cancels watchers for connections that no longer exist.
+- `WITH … INSERT/UPDATE/DELETE` without RETURNING takes the collecting path on PostgreSQL, so its affected-row count is the server's.
+- SPEC §2.1, §7.3, §10.2 and §16 are amended in place with a pointer to the ADR that changed them, so the spec no longer names tree-sitter, `PostgresClient`, or "deferred" features that ship.
+
+**Not done, and why.** `EditBuffer` is still keyed by row index. Keying it by row identity would let edits survive a reload; the Phase 1 guards ask before every reload that would discard them, which removes the loss, and re-keying touches `RowBuffer`, `GridModel` and every grid view's row addressing for a smaller gain. Deferred, not forgotten.
+
+**Consequences.** Tests: `ConnectionSessionTests` (+4: lost transaction waits for the user, drop without a transaction reconnects with one retry, authentication failure is not retried, `withLease` releases on return and on throw), `GridModelTests.testAStaleLoadDoesNotOverwriteANewerOne`, `GridWriteQueueTests` (4), `PostgresIntegrationTests.testWithPrefixedDMLReportsTheServersAffectedRowCount`.

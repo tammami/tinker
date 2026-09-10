@@ -60,6 +60,34 @@ public final class SidebarModel {
     /// their connections inside, then the connections that belong to no folder.
     public func rebuildRoots() {
         roots = buildLevel(path: [])
+        // A watcher for a connection that no longer exists would run for the life of the
+        // window; nothing cancelled them before.
+        let known = Set(environment.connections.map(\.id))
+        for id in stateWatchers.keys where !known.contains(id) {
+            stateWatchers.removeValue(forKey: id)?.cancel()
+            states.removeValue(forKey: id)
+            mainStates.removeValue(forKey: id)
+        }
+        for key in databaseStateWatchers.keys
+        where !known.contains(where: { key.hasPrefix($0.uuidString + "/") }) {
+            databaseStateWatchers.removeValue(forKey: key)?.cancel()
+        }
+    }
+
+    /// The user's answer to a dropped connection: connect again, giving up whatever
+    /// transaction was open on the old one. The session refuses to do this on its own
+    /// (SPEC §9.6), which is why the menu item exists.
+    public func reconnect(connectionID: UUID) async {
+        for session in environment.sessions(for: connectionID) {
+            do {
+                try await session.reconnect()
+            } catch {
+                // The session published its `.degraded` state with the reason; the dot
+                // and its tooltip show it, and the next attempt is one click away.
+                continue
+            }
+        }
+        await refresh(connectionID: connectionID)
     }
 
     private func connectionItem(_ config: ConnectionConfig) -> SidebarItem {

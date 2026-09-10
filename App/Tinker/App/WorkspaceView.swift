@@ -453,7 +453,8 @@ public struct WorkspaceView: View {
                 controller: controller.sourceController(for: tab, object: object),
                 fontName: settings.editorFontName,
                 fontSize: settings.editorFontSize,
-                onEditInQuery: { sql in newQuery(tab.connectionID, sql) }
+                onEditInQuery: { sql in newQuery(tab.connectionID, sql) },
+                onOpenInBuilder: viewBuilderOpener(for: object, connectionID: tab.connectionID)
             )
             .id(tab.id)
         case let .queryBuilder(schema):
@@ -466,6 +467,22 @@ public struct WorkspaceView: View {
                 onSchemaChanged: { Task { await sidebar.refresh(connectionID: tab.connectionID) } }
             )
             .id(tab.id)
+        }
+    }
+
+    /// A closure that reopens a view on the builder canvas, or nil for a routine. The
+    /// completion reports whether the canvas could be reconstructed.
+    private func viewBuilderOpener(
+        for object: SourceObject, connectionID: UUID
+    ) -> ((@escaping (String?) -> Void) -> Void)? {
+        guard case let .view(ref) = object.kind else { return nil }
+        return { completion in
+            Task {
+                switch await controller.openViewInBuilder(ref, connectionID: connectionID) {
+                case .remembered, .imported: completion(nil)
+                case let .unavailable(reason): completion(reason)
+                }
+            }
         }
     }
 

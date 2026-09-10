@@ -49,7 +49,8 @@ enum UIDemo {
         let databases = sidebar.find(id: root.id)?.children ?? []
         // The map scene wants the seeded test database whatever the connection defaults to;
         // `--ui-demo-database <name>` picks any other.
-        var preferredDatabase = wanted.contains { $0.hasPrefix("map") } ? "tinker_test" : (config.database ?? "")
+        var preferredDatabase =
+            wanted.contains { $0.hasPrefix("map") || $0 == "reference" } ? "tinker_test" : (config.database ?? "")
         if let index = arguments.firstIndex(of: "--ui-demo-database"), index + 1 < arguments.count {
             preferredDatabase = arguments[index + 1]
         }
@@ -73,6 +74,10 @@ enum UIDemo {
         for item in wanted {
             switch item {
             case "table":
+                if let preferred { controller.openTable(preferred.ref, connectionID: config.id) }
+            case "reference":
+                // The orders table's customer_id is a foreign key; open the picker over it.
+                UserDefaults.standard.set(true, forKey: "uiDemo.referencePick")
                 if let preferred { controller.openTable(preferred.ref, connectionID: config.id) }
             case "inspector":
                 workspace.isInspectorVisible = true
@@ -164,7 +169,8 @@ enum UIDemo {
                 let tab = controller.newQueryTab(connectionID: config.id, sql: sql)
                 if let query = controller.queryController(for: tab) {
                     await query.loadSessionChoices()
-                    if !config.dialect.hasSchemaLayer, let name = demoSchemaRef(schema, dialect: config.dialect)?.schema {
+                    if !config.dialect.hasSchemaLayer, let name = demoSchemaRef(schema, dialect: config.dialect)?.schema
+                    {
                         await query.selectDatabase(name)
                     }
                     await query.loadCompletionSources()
@@ -206,6 +212,28 @@ enum UIDemo {
                     builder.selectStar(ofTableNamed: "customers")
                     builder.pane = .select
                     builder.runPreview()
+                }
+            case "designview":
+                // End-to-end: build a view on the canvas, save it, then reopen it in the
+                // builder from its remembered canvas.
+                if let ref = demoSchemaRef(schema) {
+                    let id = config.id
+                    let tab = controller.openQueryBuilder(ref, connectionID: id)
+                    let builder = controller.builderController(for: tab, schema: ref)
+                    await builder.loadTables()
+                    if let customers = builder.availableTables.first(where: { $0.name == "customers" }) {
+                        await builder.add(customers.ref, at: CGPoint(x: 60, y: 60))
+                        builder.selectStar(ofTableNamed: "customers")
+                    }
+                    let viewRef = TableRef(schema: ref, name: "demo_customer_view")
+                    if await builder.createView(named: viewRef.name) != nil {
+                        let reopened = await controller.openViewInBuilder(viewRef, connectionID: id)
+                        Self.logger.info("designview reopened", metadata: ["outcome": "\(reopened)"])
+                    }
+                    // A view made outside Tinker has no remembered canvas; it is read back.
+                    let imported = await controller.openViewInBuilder(
+                        TableRef(schema: ref, name: "customer_totals"), connectionID: id)
+                    Self.logger.info("designview imported", metadata: ["outcome": "\(imported)"])
                 }
             case "source":
                 if let view = tables.first(where: { $0.kind == .view }) {

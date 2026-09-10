@@ -12,10 +12,17 @@ public final class SourceController {
     public let dialect: SQLDialect
 
     public private(set) var source: String?
+    /// True when the object is a view (not a routine), so it can be designed on the canvas.
+    public var isView: Bool { if case .view = object.kind { true } else { false } }
     public private(set) var isLoading = false
     public private(set) var errorText: String?
+    /// Something to know before editing, such as why the canvas is not available.
+    public private(set) var noticeText: String?
 
     private let environment: AppEnvironment
+
+    public func notice(_ text: String) { noticeText = text }
+    public func clearNotice() { noticeText = nil }
 
     public init(object: SourceObject, connectionID: UUID, dialect: SQLDialect, environment: AppEnvironment) {
         self.object = object
@@ -92,6 +99,9 @@ public struct SourceView: View {
     let fontName: String
     let fontSize: Double
     let onEditInQuery: (String) -> Void
+    /// Reopens a view in the query builder; nil for routines. Hands back the reason when the
+    /// canvas cannot show the view, which is then said here, beside Edit in Query Tab.
+    var onOpenInBuilder: ((@escaping (String?) -> Void) -> Void)?
 
     public var body: some View {
         VStack(spacing: 0) {
@@ -102,6 +112,19 @@ public struct SourceView: View {
                 }
                 Badge(text: "READ-ONLY")
                 Spacer()
+                if controller.isView, let onOpenInBuilder {
+                    Button {
+                        onOpenInBuilder { reason in
+                            if let reason {
+                                controller.notice(
+                                    "This view cannot be shown on the canvas: \(reason). Edit it as SQL instead.")
+                            }
+                        }
+                    } label: {
+                        Label("Open in Query Builder", systemImage: Icon.builder)
+                    }
+                    .help("Design this view on the visual canvas")
+                }
                 Button {
                     if let source = controller.source { onEditInQuery(source) }
                 } label: {
@@ -123,6 +146,10 @@ public struct SourceView: View {
 
             if let error = controller.errorText {
                 InlineBanner(kind: .error, message: error) { controller.clearError() }
+                Divider()
+            }
+            if let notice = controller.noticeText {
+                InlineBanner(kind: .info, message: notice) { controller.clearNotice() }
                 Divider()
             }
 

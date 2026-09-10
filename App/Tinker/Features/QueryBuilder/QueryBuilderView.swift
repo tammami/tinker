@@ -31,6 +31,10 @@ public struct QueryBuilderView: View {
                 InlineBanner(kind: .error, message: error) { controller.clearError() }
                 Divider()
             }
+            if let status = controller.statusText {
+                InlineBanner(kind: .success, message: status) { controller.clearStatus() }
+                Divider()
+            }
             HSplitView {
                 tableList
                     .frame(minWidth: 160, idealWidth: 200, maxWidth: 240)
@@ -61,7 +65,11 @@ public struct QueryBuilderView: View {
         PaneBar {
             HStack(spacing: DesignTokens.Spacing.xs + 2) {
                 Image(systemName: Icon.builder).foregroundStyle(Color.accentColor)
-                Text("Query Builder").font(.system(size: 13, weight: .semibold))
+                Text(controller.editingView == nil ? "Query Builder" : "Designing View")
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            if let view = controller.editingView {
+                Badge(text: view.name, color: .purple)
             }
             BarDivider()
             Picker(
@@ -99,13 +107,25 @@ public struct QueryBuilderView: View {
                 Label("Open in Query Tab", systemImage: Icon.query)
             }
             .disabled(controller.sql == nil)
-            Button {
-                isCreateViewPresented = true
-            } label: {
-                Label("Create View…", systemImage: Icon.view)
+            if controller.editingView != nil {
+                Button {
+                    Task { await controller.saveView() }
+                } label: {
+                    Label("Save View", systemImage: Icon.commit)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(controller.sql == nil)
+                .help("Replace the view with what is on the canvas")
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+            } else {
+                Button {
+                    isCreateViewPresented = true
+                } label: {
+                    Label("Create View…", systemImage: Icon.view)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(controller.sql == nil)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(controller.sql == nil)
         }
         .controlSize(.small)
     }

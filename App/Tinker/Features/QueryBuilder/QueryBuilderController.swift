@@ -29,6 +29,11 @@ public final class QueryBuilderController {
     public var selectedTable: UUID?
     /// A column being dragged towards another, to draw the join line while it happens.
     public var pendingConnection: PendingConnection?
+    /// The view this canvas is editing, when it was opened from an existing view. In that
+    /// mode the toolbar saves in place rather than offering Create View.
+    public private(set) var editingView: TableRef?
+    /// A short line shown after a save; cleared on the next change.
+    public private(set) var statusText: String?
 
     /// The preview is an ordinary query tab: same streaming, same cancel, same errors.
     public let preview: QueryTabController
@@ -62,6 +67,29 @@ public final class QueryBuilderController {
     }
 
     private var session: ConnectionSession? { environment.session(for: connectionID, schema: schema) }
+
+    /// Loads a saved canvas to edit an existing view: the model is placed as it was, and
+    /// each table's columns are read so the cards show their fields.
+    public func beginEditing(view: TableRef, model savedModel: QueryBuilderModel) async {
+        editingView = view
+        model = savedModel
+        selectedTable = savedModel.tables.first?.id
+        await hydrate()
+    }
+
+    /// Reads the columns and foreign keys of every table already on the canvas, which a
+    /// freshly seeded model has not loaded yet.
+    public func hydrate() async {
+        for table in model.tables {
+            if columns[table.id] == nil {
+                let loaded =
+                    (try? await session?.introspection(.columns(table.ref)) {
+                        try await $0.columns(of: table.ref)
+                    }) ?? []
+                columns[table.id] = loaded
+            }
+        }
+    }
 
     /// The connection's name when it is marked production, else nil.
     public var productionName: String? {
@@ -235,6 +263,8 @@ public final class QueryBuilderController {
             _ = try await connection.executeCollecting(statement)
             await session.invalidateIntrospection()
             errorText = nil
+            await saveSidecar(for: ref)
+            editingView = ref
             return ref
         } catch {
             errorText = (error as? DBError)?.errorDescription ?? String(describing: error)
@@ -242,5 +272,57 @@ public final class QueryBuilderController {
         }
     }
 
+    /// Saves the edited view in place: the same `CREATE OR REPLACE` (or drop-and-create on
+    /// SQLite) the create sheet runs, then updates the remembered canvas.
+    @discardableResult
+    public func saveView() async -> Bool {
+        guard let session, let view = editingView else { return false }
+        guard let statement = model.createViewSQL(name: view, dialect: dialect) else {
+            errorText = "There is nothing to save yet — add a table and a column first."
+            return false
+        }
+        do {
+            if await session.isReadOnly {
+                throw DBError.protocolError("This connection is read-only. Unlock it with ⌘⇧L first.")
+            }
+            let (lease, connection) = try await session.lease()
+            defer { Task { await session.release(lease) } }
+            _ = try await connection.executeCollecting(statement)
+            await session.invalidateIntrospection()
+            errorText = nil
+            await saveSidecar(for: view)
+            statusText = "Saved \(view.name)."
+            return true
+        } catch {
+            errorText = (error as? DBError)?.errorDescription ?? String(describing: error)
+            return false
+        }
+    }
+
+    /// The generated `CREATE`/`REPLACE` statement for the view being edited, for its preview.
+    public var saveViewStatement: String? {
+        guard let view = editingView else { return nil }
+        return model.createViewSQL(name: view, dialect: dialect)
+    }
+
+    /// Where a view's remembered canvas lives, keyed by connection and view.
+    public static func sidecarKey(connectionID: UUID, view: TableRef) -> String {
+        "viewBuilder/\(connectionID.uuidString)/\(view.id)"
+    }
+
+    /// Reads the server's own definition of `view`, pairs it with the current canvas, and
+    /// remembers both so the view reopens in the builder.
+    private func saveSidecar(for view: TableRef) async {
+        guard let session else { return }
+        let definition =
+            try? await session.introspection(.viewDefinition(view)) { introspector in
+                guard let server = introspector.server else { return "" }
+                return (try? await server.viewDefinition(view)) ?? ""
+            }
+        let sidecar = ViewBuilderSidecar(model: model, serverDefinition: definition ?? "")
+        await environment.setSetting(sidecar, for: Self.sidecarKey(connectionID: connectionID, view: view))
+    }
+
     public func clearError() { errorText = nil }
+    public func clearStatus() { statusText = nil }
 }

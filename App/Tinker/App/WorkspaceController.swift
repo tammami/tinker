@@ -99,6 +99,77 @@ public final class WorkspaceController {
         return tab
     }
 
+    /// How a view reached the builder canvas, or why it could not.
+    public enum ViewCanvasOutcome: Equatable {
+        /// The canvas the view was designed with, unchanged on the server since.
+        case remembered
+        /// The canvas read back from the server's definition.
+        case imported
+        /// Neither: the reason, for the person to read before editing the text instead.
+        case unavailable(String)
+    }
+
+    /// Reopens a view in the query builder.
+    ///
+    /// The canvas the view was designed with is used when its fingerprint still matches the
+    /// server's definition. Otherwise — a view made elsewhere, or changed since — the
+    /// definition is read back into a canvas for the subset the builder can draw, and
+    /// anything beyond that subset is reported rather than approximated.
+    @discardableResult
+    public func openViewInBuilder(_ view: TableRef, connectionID: UUID) async -> ViewCanvasOutcome {
+        guard let session = environment.session(for: connectionID, table: view) else {
+            return .unavailable("the connection is not open")
+        }
+        let definition =
+            (try? await session.introspection(.viewDefinition(view)) { introspector in
+                guard let server = introspector.server else { return "" }
+                return (try? await server.viewDefinition(view)) ?? ""
+            }) ?? ""
+
+        let key = QueryBuilderController.sidecarKey(connectionID: connectionID, view: view)
+        let empty = ViewBuilderSidecar(model: QueryBuilderModel(), serverDefinition: "\u{0}sentinel")
+        let sidecar = await environment.setting(key, default: empty)
+        if sidecar != empty, !sidecar.model.tables.isEmpty, sidecar.matches(serverDefinition: definition) {
+            await showBuilder(for: view, connectionID: connectionID, model: sidecar.model)
+            return .remembered
+        }
+
+        guard !definition.isEmpty else { return .unavailable("its definition could not be read") }
+        let tables = await knownTables(in: view.schemaRef, connectionID: connectionID, session: session)
+        do {
+            let model = try QueryBuilderImporter.model(from: definition, dialect: dialect(for: connectionID)) {
+                name, qualifier in
+                tables.first { table in
+                    table.name == name
+                        && (qualifier == nil || qualifier == table.schema || qualifier == table.database
+                            || qualifier == "\(table.database).\(table.schema)")
+                }
+            }
+            await showBuilder(for: view, connectionID: connectionID, model: model)
+            return .imported
+        } catch let failure as QueryBuilderImporter.Failure {
+            return .unavailable(failure.description)
+        } catch {
+            return .unavailable(String(describing: error))
+        }
+    }
+
+    private func showBuilder(for view: TableRef, connectionID: UUID, model: QueryBuilderModel) async {
+        let tab = openQueryBuilder(view.schemaRef, connectionID: connectionID)
+        tab.title = view.name
+        if let controller = builderControllers[tab.id] {
+            await controller.beginEditing(view: view, model: model)
+        }
+    }
+
+    /// The tables and views of a schema, through the session's cache, so the importer can
+    /// tell a table name from a stray word.
+    private func knownTables(in schema: SchemaRef, connectionID: UUID, session: ConnectionSession) async -> [TableRef] {
+        let listed: [TableInfo] =
+            (try? await session.introspection(.tables(schema)) { try await $0.tables(in: schema) }) ?? []
+        return listed.map(\.ref)
+    }
+
     public func builderController(for tab: WorkspaceTab, schema: SchemaRef) -> QueryBuilderController {
         if let existing = builderControllers[tab.id] { return existing }
         let made = QueryBuilderController(

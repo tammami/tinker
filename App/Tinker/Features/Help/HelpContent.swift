@@ -70,7 +70,7 @@ enum HelpContent {
                     heading: "Run a query",
                     paragraphs: [
                         "Press ⌘T for a query tab. The pop-ups in its toolbar choose the connection and the database (or schema) unqualified names resolve against.",
-                        "⌘R runs the statement under the cursor or the highlighted block; ⌘⇧R runs only the selection; ⌘⌥R runs everything. ⌘. cancels on the server.",
+                        "⌘R runs the statement under the cursor or the highlighted block; ⌘⌃R runs only the selection; ⌘⌥R runs everything. ⌘. cancels on the server.",
                     ]),
             ]),
         HelpTopic(
@@ -135,7 +135,7 @@ enum HelpContent {
                 HelpSection(
                     heading: "How writes work",
                     paragraphs: [
-                        "Edit a cell in place, add a row with ⌘⌥A, delete rows with ⌘⌫, set NULL with ⌘⌥⌫. Nothing reaches the server until you commit (⌘⇧S); Rollback (⌘⇧⌫) discards everything pending.",
+                        "Edit a cell in place, add a row with ⌘+, delete rows with ⌘−, set NULL with ⌘⌫. With auto-commit off, nothing reaches the server until you commit (⌘⇧S) and Rollback (⌘⇧R) discards everything pending; with it on, a delete asks before it runs.",
                         "Commit shows the exact statements first. Every UPDATE and DELETE targets the primary key with the row's original values and runs inside one transaction that verifies each statement touched exactly one row; otherwise the whole transaction rolls back and the server's message is shown verbatim.",
                     ]),
                 HelpSection(
@@ -267,7 +267,7 @@ enum HelpContent {
                     shortcuts: [
                         HelpShortcut(
                             keys: "⌘R", action: "Run the statement under the cursor, or the highlighted block"),
-                        HelpShortcut(keys: "⌘⇧R", action: "Run the selection only"),
+                        HelpShortcut(keys: "⌘⌃R", action: "Run the selection only"),
                         HelpShortcut(keys: "⌘⌥R", action: "Run all"),
                         HelpShortcut(keys: "⌘.", action: "Cancel"),
                         HelpShortcut(keys: "⌘⇧E", action: "Explain"),
@@ -285,10 +285,11 @@ enum HelpContent {
                     heading: "Data",
                     shortcuts: [
                         HelpShortcut(keys: "⌘⇧S", action: "Commit"),
-                        HelpShortcut(keys: "⌘⇧⌫", action: "Rollback"),
-                        HelpShortcut(keys: "⌘⌥A", action: "Add row"),
-                        HelpShortcut(keys: "⌘⌫", action: "Delete selected rows"),
-                        HelpShortcut(keys: "⌘⌥⌫", action: "Set NULL"),
+                        HelpShortcut(keys: "⌘⇧R", action: "Rollback"),
+                        HelpShortcut(keys: "⌘+", action: "Add row"),
+                        HelpShortcut(keys: "⌘−", action: "Delete selected rows"),
+                        HelpShortcut(keys: "⌘⌫", action: "Set NULL"),
+                        HelpShortcut(keys: "⌘⇧W", action: "Close window"),
                         HelpShortcut(keys: "⌘⌃C", action: "Copy as INSERT"),
                         HelpShortcut(keys: "⌥↓", action: "Choose a foreign-key value from the referenced table"),
                         HelpShortcut(keys: "F5", action: "Refresh"),

@@ -595,3 +595,79 @@ Reported: a column added in Structure vanished after Done; the row highlight sta
 - The highlight seen under the sidebar was the sidebar's own selection of the last-clicked
   item (`rekrut_sekolah`), on the same line by coincidence; nothing in the grid draws
   outside its pane. Left as is.
+
+## 2026-09-11 — Review, Phase 1: critical fixes (ADR-0040, ADR-0041)
+
+An eight-perspective review (architecture, internals, correctness, performance, security,
+reliability, DX, UX) ranked ten findings as critical. This phase closes them.
+
+### Done
+- `ConnectionSession`: per-connection occupancy (idle / leased / resetting / checking) that
+  only changes between suspension points; `lease()` snapshots the candidate before its
+  `await` and re-finds it by id (it crashed on a subscript after a concurrent disconnect);
+  `release()` rolls back unconditionally, resets, and only then marks the connection idle
+  (a concurrent lease could receive it and lose its read-only guard to the reset);
+  `disconnect()` takes the pool before its first `await` and refuses leases meanwhile;
+  `lease()` fails after 15 s with a message when every connection stays busy; the
+  introspection read releases its lease before returning; `testConnection` restores the
+  published state; idle reaping keeps the most recently used connection.
+- PostgreSQL: SQLSTATE 57014 is `.cancelled` only after this client's own cancel, else the
+  server's verbatim message (`statement_timeout`); class 28 after connect is verbatim;
+  `float4` shows `0.1`, not `0.10000000149011612`; `money` carries `12.34`, which the
+  server reads back as the same amount (it carried `1234`).
+- MySQL: no reconnect in the clear after a failed TLS handshake (the retry keyed on the
+  words "ssl"/"tls"/"handshake" in the error); `BIT` binds its bytes back, not the text
+  `"1010"`; `FLOAT` keeps its shortest text; `Int64(exactly:)` on `affectedRows` and
+  `lastInsertID` (a trap past 2⁶³).
+- SQLite: `affectedRows` is `sqlite3_changes64`, the statement's own rows, not the cascade
+  and trigger rows `total_changes` added (a one-row delete with three children was
+  refused by the grid as "touched 4 rows").
+- `SQLStatement` carries its dialect: a MySQL script opening with `# note` had no leading
+  keyword and a `DROP` behind it passed the production gate. `CALL` and `DO` ask for the
+  connection's name on production.
+- App: ⌘⌫ is Set NULL again (it deleted rows, and with auto-commit on the DELETE was on
+  the server before the status bar updated); Delete Rows is ⌘−, Add Row ⌘+, Rollback ⌘⇧R,
+  Run Selected ⌘⌃R, Close Window ⌘⇧W; New Window opens the scene (it sent
+  `newDocument(_:)` to nothing). A delete under auto-commit asks first. Sort, filter,
+  quick search, page changes and Refresh ask before discarding pending edits (they
+  discarded silently — on production, where auto-commit is off, that was every pending
+  edit). Closing a tab, the other tabs, or quitting asks when a tab has uncommitted edits
+  or an open transaction. The confirmation callback is injected by the workspace at
+  controller creation, not by a view on appear. The query tab's memory cap now leaves
+  the stream (`break` left only the `switch`), and a run whose task was cancelled reports
+  `.cancelled` instead of "OK — 0 rows".
+- Connection editor: each TLS mode says what it checks; `require` and `prefer` say the
+  certificate is not checked.
+- `Scripts/ci.sh --strict` (or `TINKER_CI_STRICT=1`): fails when an engine URL is unset,
+  when any test skips, or when the smoke test cannot run. Default remains warn-and-green.
+- `--smoke-test` only takes a PostgreSQL connection whose database is `tinker_test`, and
+  restores the stored connection on failure (it flipped it to production and read-only
+  and restored it only on the happy path). The five grid integration suites no longer
+  turn a misconfigured URL into "SQLite only" with `try?`.
+
+### Tests
+- `ConnectionSessionTests` (+6): `testAConnectionBeingResetIsNotHandedOut`,
+  `testReleaseRollsBackUnconditionally`, `testDisconnectDuringAPingRefusesTheLease`,
+  `testAFullPoolFailsTheLeaseAfterTheWaitTimeout`,
+  `testTestConnectionRestoresThePublishedState`,
+  `testIntrospectionReleasesItsLeaseBeforeReturning`. `FakeDriver` gained ping/reset
+  delays and a rollback count.
+- `PostgresIntegrationTests` (+2): `testStatementTimeoutKeepsTheServersMessageAndIsNotACancel`,
+  `testFloat4AndMoneyKeepTextTheServerAccepts`.
+- `MySQLIntegrationTests` (+1): `testBitValuesRoundTripThroughParametersAndFloatKeepsItsText`.
+- `SQLiteIntegrationTests` (+1): `testAffectedRowsCountsDirectRowsNotCascadesOrTriggers`.
+- `StatementSplitterTests` (+2): `testLeadingKeywordRespectsTheDialectsComments`,
+  `testOpaqueBodiesCountAsDestructive`.
+- `Scripts/ci.sh` green against local PostgreSQL 16 and MySQL 9.4 plus the SQLite file:
+  one skip (`testWrongPasswordSurfacesAsAuthenticationFailure`: the local server trusts
+  the user), app built with zero warnings, smoke test passed.
+
+### Not done / deferred
+- The delete confirmation, pending-edit guards, close/quit questions and shortcut changes
+  have no automated test: `Commands` and sheets are not reachable from XCTest, and the
+  smoke pass drives controllers with `confirm` unset (which answers "yes"). Verified by
+  hand in the built app is still owed; listed under Phase 5's UI-test work.
+- Class-28-after-connect verbatim mapping has no integration test: nothing a
+  non-superuser can run on the local server produces one.
+- Reconnect policy, keepalive, backpressure, the cancel-hits-next-statement race, and
+  releasing a query tab's lease when idle are Phase 2/3.

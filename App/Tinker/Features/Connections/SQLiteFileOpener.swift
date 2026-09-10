@@ -89,6 +89,28 @@ enum SQLiteFileOpener {
 /// Receives the files Finder hands the app — a double-clicked database, "Open With", a
 /// drop on the Dock icon — and opens them once a workspace window exists to open them in.
 final class TinkerAppDelegate: NSObject, NSApplicationDelegate {
+    /// Quitting with uncommitted edits or an open transaction in any window asks first
+    /// (SPEC §13.2). The question goes through the frontmost workspace's confirmation
+    /// sheet; the answer is handed back to AppKit, which finishes or cancels the quit.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let workspaces = CommandCenter.shared.all
+        let unsaved = workspaces.filter(\.hasAnyUnsavedWork)
+        guard !unsaved.isEmpty, let front = workspaces.first else { return .terminateNow }
+        let tabs = unsaved.reduce(0) { total, workspace in
+            total + workspace.workspace.tabs.filter { workspace.hasUnsavedWork($0) }.count
+        }
+        front.workspace.confirmation = DestructiveConfirmation(
+            title: "Quit \(Product.name)?",
+            message:
+                "\(tabs) tab\(tabs == 1 ? " has" : "s have") uncommitted changes or an open transaction. "
+                + "Quitting rolls the transactions back and discards the changes.",
+            confirmTitle: "Quit",
+            action: { sender.reply(toApplicationShouldTerminate: true) },
+            onCancel: { sender.reply(toApplicationShouldTerminate: false) }
+        )
+        return .terminateLater
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         Task { @MainActor in
             // The first window may still be on its way when the app is launched by a file.

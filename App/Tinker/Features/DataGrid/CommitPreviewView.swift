@@ -130,8 +130,11 @@ public struct DestructiveConfirmationView: View {
         } footer: {
             Spacer()
             if !isInformational {
-                Button("Cancel", role: .cancel, action: onDismiss)
-                    .keyboardShortcut(.cancelAction)
+                Button("Cancel", role: .cancel) {
+                    confirmation.onCancel?()
+                    onDismiss()
+                }
+                .keyboardShortcut(.cancelAction)
             }
             Button(isRunning ? "Working…" : confirmation.confirmTitle, role: isInformational ? nil : .destructive) {
                 isRunning = true

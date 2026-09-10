@@ -250,9 +250,11 @@ public final class WorkspaceController {
         let tab = workspace.openTable(table, connectionID: connectionID, forceNew: forceNew)
         if tableControllers[tab.id] == nil {
             let dialect = environment.connections.first { $0.id == connectionID }?.dialect ?? .postgresql
-            tableControllers[tab.id] = TableTabController(
+            let controller = TableTabController(
                 table: table, connectionID: connectionID, dialect: dialect, environment: environment
             )
+            controller.confirm = { [weak self] in self?.workspace.confirmation = $0 }
+            tableControllers[tab.id] = controller
         }
         return tab
     }
@@ -265,6 +267,7 @@ public final class WorkspaceController {
             connectionID: connectionID, dialect: dialect, environment: environment
         )
         controller.sql = sql
+        controller.confirm = { [weak self] in self?.workspace.confirmation = $0 }
         queryControllers[tab.id] = controller
         return tab
     }
@@ -275,15 +278,56 @@ public final class WorkspaceController {
     }
 
     /// Closes a tab and releases everything it owned: its grid, its held connection.
+    ///
+    /// A tab with uncommitted edits or an open transaction asks first (SPEC §13.2):
+    /// closing rolls the transaction back and drops the edits.
     public func closeTab(_ id: UUID) {
-        workspace.closeTab(id)
-        pruneControllers()
+        guard let tab = workspace.tabs.first(where: { $0.id == id }) else { return }
+        closeAfterAsking([tab], title: "Close “\(tab.title)”?", confirmTitle: "Close Tab") { [weak self] in
+            self?.workspace.closeTab(id)
+            self?.pruneControllers()
+        }
     }
 
     public func closeOtherTabs(_ id: UUID) {
-        workspace.closeOtherTabs(id)
-        pruneControllers()
+        let others = workspace.tabs.filter { $0.id != id }
+        closeAfterAsking(others, title: "Close the other tabs?", confirmTitle: "Close Tabs") { [weak self] in
+            self?.workspace.closeOtherTabs(id)
+            self?.pruneControllers()
+        }
     }
+
+    /// Runs `close` at once when none of `tabs` holds unsaved work, and after a
+    /// confirmation naming what would be lost otherwise.
+    private func closeAfterAsking(
+        _ tabs: [WorkspaceTab], title: String, confirmTitle: String, close: @escaping @MainActor () -> Void
+    ) {
+        let unsaved = tabs.filter { hasUnsavedWork($0) }
+        guard !unsaved.isEmpty else {
+            close()
+            return
+        }
+        var parts: [String] = []
+        for tab in unsaved {
+            if let query = queryControllers[tab.id] {
+                if query.isInTransaction { parts.append("“\(tab.title)” has an open transaction, which will be rolled back") }
+                if query.hasPendingEdits { parts.append("“\(tab.title)” has uncommitted result edits") }
+            } else if let table = tableControllers[tab.id], let model = table.model {
+                let count = model.edits.pendingStatementCount
+                parts.append("“\(tab.title)” has \(count) uncommitted change\(count == 1 ? "" : "s")")
+            }
+        }
+        workspace.confirmation = DestructiveConfirmation(
+            title: title,
+            message: parts.joined(separator: ".\n") + ".",
+            confirmTitle: confirmTitle,
+            action: { close() }
+        )
+    }
+
+    /// True when any tab of this workspace holds edits or an open transaction; what
+    /// quitting the app would throw away.
+    public var hasAnyUnsavedWork: Bool { workspace.tabs.contains { hasUnsavedWork($0) } }
 
     /// Closes a connection's tabs and disconnects it, asking first when tabs are open.
     ///

@@ -15,9 +15,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 SKIP_APP=0
+# Strict mode (--strict or TINKER_CI_STRICT=1): a run that skipped anything is not green.
+# Every engine URL must be set, no test may skip, and the app smoke test must run. This
+# is what a release or a "the driver feature is done" claim has to pass (CLAUDE.md: a
+# skipped test is not a passing test).
+STRICT="${TINKER_CI_STRICT:-0}"
 for arg in "$@"; do
     case "$arg" in
         --skip-app) SKIP_APP=1 ;;
+        --strict) STRICT=1 ;;
         *) echo "unknown argument: $arg" >&2; exit 2 ;;
     esac
 done
@@ -80,8 +86,13 @@ echo "  ok"
 bold "Tests"
 PG_SET=0;    [[ -n "${TINKER_TEST_PG_URL:-}${TINKER_TEST_PG_URLS:-}" ]]       && PG_SET=1
 MYSQL_SET=0; [[ -n "${TINKER_TEST_MYSQL_URL:-}${TINKER_TEST_MYSQL_URLS:-}" ]] && MYSQL_SET=1
-[[ $PG_SET == 1 ]]    || warn "TINKER_TEST_PG_URL not set — PostgreSQL integration tests will be SKIPPED"
-[[ $MYSQL_SET == 1 ]] || warn "TINKER_TEST_MYSQL_URL not set — MySQL integration tests will be SKIPPED"
+if [[ $STRICT == 1 ]]; then
+    [[ $PG_SET == 1 ]]    || fail "strict: TINKER_TEST_PG_URL not set — PostgreSQL integration tests would be skipped"
+    [[ $MYSQL_SET == 1 ]] || fail "strict: TINKER_TEST_MYSQL_URL not set — MySQL integration tests would be skipped"
+else
+    [[ $PG_SET == 1 ]]    || warn "TINKER_TEST_PG_URL not set — PostgreSQL integration tests will be SKIPPED"
+    [[ $MYSQL_SET == 1 ]] || warn "TINKER_TEST_MYSQL_URL not set — MySQL integration tests will be SKIPPED"
+fi
 
 TEST_LOG="$(mktemp -t tinker-ci-tests)"
 # `swift test` reports skipped tests as "skipped" with the XCTSkip reason; keep the full log.
@@ -122,7 +133,13 @@ if [[ $SKIP_APP == 0 ]]; then
         set -e
         case $SMOKE_STATUS in
             0) echo "  ok" ;;
-            2) warn "no connection configured in the app store — smoke test SKIPPED" ;;
+            2)
+                if [[ $STRICT == 1 ]]; then
+                    fail "strict: no tinker_test connection in the app store — smoke test did not run"
+                else
+                    warn "no tinker_test connection configured in the app store — smoke test SKIPPED"
+                fi
+                ;;
             *) fail "app smoke test failed" ;;
         esac
     fi
@@ -133,6 +150,9 @@ bold "Coverage summary"
 skipped_count="$(grep -cE "skipped \([0-9.]+ seconds\)" "$TEST_LOG" || true)"
 echo "  skipped tests: $skipped_count"
 grep -E "Test skipped" "$TEST_LOG" | sed -E 's/^.*: (Test skipped.*)$/    \1/' | sort -u || true
+if [[ $STRICT == 1 && "$skipped_count" != "0" ]]; then
+    fail "strict: $skipped_count test(s) were skipped; a skipped test is not a passing test"
+fi
 echo
 echo "  PostgreSQL integration: $([[ $PG_SET == 1 ]] && echo "configured: ${TINKER_TEST_PG_URL:-<PG_URLS>}" | sed -E 's#://([^:@/]+):[^@]*@#://\1:***@#' || echo "NOT RUN (env unset)")"
 echo "  MySQL integration:      $([[ $MYSQL_SET == 1 ]] && echo "configured: ${TINKER_TEST_MYSQL_URL:-<MYSQL_URLS>}" | sed -E 's#://([^:@/]+):[^@]*@#://\1:***@#' || echo "NOT RUN (env unset)")"

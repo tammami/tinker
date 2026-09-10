@@ -103,7 +103,6 @@ public struct QueryTabView: View {
         toolbarContent
             .onAppear {
                 controller.onRequestInspector = { workspace.isInspectorVisible = true }
-                controller.onConfirmProduction = { workspace.confirmation = $0 }
                 controller.onFollowReference = { table, rules in
                     workspace.followReference(to: table, connectionID: controller.connectionID, filter: rules)
                 }

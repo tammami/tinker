@@ -16,6 +16,9 @@ enum SmokeTest {
         CommandLine.arguments.contains("--smoke-test")
     }
 
+    /// The only database the pass will write to (SPEC §17.1).
+    static let testDatabaseName = "tinker_test"
+
     /// Runs the checks and exits the process with 0 on success, 1 on the first failure.
     static func run() async -> Never {
         var failures: [String] = []
@@ -29,15 +32,19 @@ enum SmokeTest {
         let environment = AppEnvironment()
         await environment.load()
         check("store opens", environment.startupError == nil)
-        // The pass is written against PostgreSQL (pg_sleep, the public schema), so it takes
-        // the first PostgreSQL connection wherever it sits in the store.
+        // The pass is written against PostgreSQL (pg_sleep, the public schema), and it
+        // creates, edits and drops tables, so it only ever takes a connection to the
+        // isolated `tinker_test` database (SPEC §17.1) — never whatever happens to be
+        // first in the store, which could be staging.
         guard
-            let config = environment.connections.first(where: { $0.dialect == .postgresql })
-                ?? environment.connections.first
+            let config = environment.connections.first(where: {
+                $0.dialect == .postgresql && $0.database == Self.testDatabaseName
+            })
         else {
             FileHandle.standardError.write(
                 Data(
-                    "no connection configured; add one in the app first\n".utf8
+                    "no PostgreSQL connection to the “\(Self.testDatabaseName)” database is configured; add one in the app first (see testenv/README.md)\n"
+                        .utf8
                 ))
             exit(2)
         }

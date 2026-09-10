@@ -13,6 +13,9 @@ enum Product {
 }
 
 struct TinkerApp: App {
+    /// The workspace scene's id, so File › New Window can open another of it.
+    static let workspaceWindowID = "workspace"
+
     @NSApplicationDelegateAdaptor(TinkerAppDelegate.self) private var delegate
     @State private var environment = AppEnvironment()
     @State private var settings: AppSettings
@@ -27,7 +30,7 @@ struct TinkerApp: App {
     }
 
     var body: some Scene {
-        WindowGroup(Product.name) {
+        WindowGroup(Product.name, id: Self.workspaceWindowID) {
             WorkspaceView(environment: environment, settings: settings)
                 .frame(minWidth: 960, minHeight: 600)
                 // A database file dropped anywhere on the window opens as a connection.
@@ -110,10 +113,10 @@ struct TinkerCommands: Commands {
         CommandGroup(replacing: .newItem) {
             Button("New Query Tab") { workspace?.newQueryTab() }
                 .keyboardShortcut("t", modifiers: .command)
-            Button("New Window") {
-                NSApp.sendAction(#selector(NSDocumentController.newDocument(_:)), to: nil, from: nil)
-            }
-            .keyboardShortcut("n", modifiers: .command)
+            // Through the scene, not `NSDocumentController.newDocument`, which has no
+            // responder in an app without documents and so did nothing.
+            Button("New Window") { openWindow(id: TinkerApp.workspaceWindowID) }
+                .keyboardShortcut("n", modifiers: .command)
             Divider()
             Button("Open SQL File…") { workspace?.openSQLFile() }
                 .keyboardShortcut("o", modifiers: .command)
@@ -130,8 +133,10 @@ struct TinkerCommands: Commands {
         CommandGroup(replacing: .saveItem) {
             Button("Commit") { workspace?.commit() }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
+            // ⌘⇧R as SPEC §10.2 says. It used to run the selection, so a Rollback typed
+            // from memory of the spec (or of the help page) ran SQL instead (ADR-0041).
             Button("Rollback") { workspace?.rollback() }
-                .keyboardShortcut(.delete, modifiers: [.command, .shift])
+                .keyboardShortcut("r", modifiers: [.command, .shift])
         }
 
         CommandGroup(after: .pasteboard) {
@@ -147,12 +152,15 @@ struct TinkerCommands: Commands {
             }
             Button("Paste into Grid") { workspace?.paste() }
             Divider()
+            // The three grid keys as SPEC §10.2 assigns them. ⌘⌫ deleted rows before —
+            // and with auto-commit on, sent the DELETE — while the spec, the help page
+            // and TablePlus all mean "set the cell to NULL" by it (ADR-0041).
             Button("Set NULL") { workspace?.setNull() }
-                .keyboardShortcut(.delete, modifiers: [.command, .option])
-            Button("Add Row") { workspace?.addRow() }
-                .keyboardShortcut("a", modifiers: [.command, .option])
-            Button("Delete Selected Rows") { workspace?.deleteRows() }
                 .keyboardShortcut(.delete, modifiers: .command)
+            Button("Add Row") { workspace?.addRow() }
+                .keyboardShortcut("+", modifiers: .command)
+            Button("Delete Selected Rows") { workspace?.deleteRows() }
+                .keyboardShortcut("-", modifiers: .command)
         }
 
         CommandGroup(replacing: .textEditing) {
@@ -169,7 +177,7 @@ struct TinkerCommands: Commands {
             Button("Run") { workspace?.run(all: false) }
                 .keyboardShortcut("r", modifiers: .command)
             Button("Run Selected") { workspace?.runSelection() }
-                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .keyboardShortcut("r", modifiers: [.command, .control])
             Button("Run All") { workspace?.run(all: true) }
                 .keyboardShortcut("r", modifiers: [.command, .option])
             Button("Cancel") { workspace?.cancel() }
@@ -240,6 +248,8 @@ struct TinkerCommands: Commands {
             Divider()
             Button("Close Tab") { workspace?.closeSelectedTab() }
                 .keyboardShortcut("w", modifiers: .command)
+            Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
             Button("Next Tab") { workspace?.workspace.cycleTab(forward: true) }
                 .keyboardShortcut("]", modifiers: [.command, .shift])
             Button("Previous Tab") { workspace?.workspace.cycleTab(forward: false) }

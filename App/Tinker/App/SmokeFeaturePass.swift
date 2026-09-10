@@ -306,7 +306,7 @@ extension SmokeTest {
             await environment.save(production)
             check("a production connection never auto-commits grid edits", !table.autoCommitsEdits)
             var asked: DestructiveConfirmation?
-            query.onConfirmProduction = { asked = $0 }
+            query.confirm = { asked = $0 }
             query.sql = "DELETE FROM smoke_features WHERE id = -1"
             query.caretOffset = 0
             query.run(all: true)
@@ -331,7 +331,7 @@ extension SmokeTest {
                 "Explain Analyze of a write on production asks for the connection's name",
                 asked?.requiredTypedName == config.name)
             // With no way to ask, a production write does not run at all.
-            query.onConfirmProduction = nil
+            query.confirm = nil
             let before = await count()
             query.sql = "DELETE FROM smoke_features WHERE id = (SELECT min(id) FROM smoke_features)"
             query.caretOffset = 0
@@ -671,6 +671,9 @@ extension SmokeTest {
             check("scratch objects are dropped", true)
         } catch {
             check("feature pass error: \(error)", false)
+            // The pass flips the stored connection to production and read-only along the
+            // way; a failure in between must not leave it that way in the user's store.
+            await environment.save(config)
             _ = try? await sql(
                 "DROP VIEW IF EXISTS \(Identifier.qualified(TableRef(schema: schema, name: "smoke_builder_view"), dialect: dialect))",
                 "DROP TABLE IF EXISTS \(Identifier.qualified(TableRef(schema: schema, name: "smoke_features_copy"), dialect: dialect))",

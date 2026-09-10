@@ -152,6 +152,29 @@ public struct ConnectionEditorView: View {
                                 Text(mode.rawValue).tag(mode)
                             }
                         }
+                        // What each mode does and does not check, said where it is chosen:
+                        // `require` reads like a guarantee and only encrypts.
+                        switch config.tls.mode {
+                        case .disable:
+                            Text("Nothing on the wire is encrypted.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        case .prefer:
+                            Text(
+                                "Encrypts when the server offers it and continues in the clear when it does not. The certificate is not checked, so an impostor server is not detected."
+                            )
+                            .font(.caption).foregroundStyle(.orange)
+                        case .require:
+                            Text(
+                                "Encrypts the wire, or fails. The certificate is not checked, so an impostor server is not detected; choose verify-full for that."
+                            )
+                            .font(.caption).foregroundStyle(.secondary)
+                        case .verifyCA:
+                            Text("Encrypts and checks the certificate against the CA, but not the server's name.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        case .verifyFull:
+                            Text("Encrypts and checks the certificate and the server's name.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         if config.tls.mode.verifiesCertificate {
                             TextField(
                                 "CA file",

@@ -96,8 +96,10 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     /// write is held in a transaction until Commit, so a mistake can still be rolled back.
     public var commitsAutomatically: Bool { autoCommit && !isProduction }
 
-    /// Set by the tab view: shows a confirmation sheet before statements run on production.
-    @ObservationIgnored public var onConfirmProduction: ((DestructiveConfirmation) -> Void)?
+    /// Asks the user before something irreversible: a write on production, a delete that
+    /// auto-commit would send at once. Set by the workspace that creates the controller,
+    /// not by a view, so it is there before the tab has appeared.
+    @ObservationIgnored public var confirm: ((DestructiveConfirmation) -> Void)?
 
     /// Starts the statements, after asking on a production connection when any of them
     /// writes. Reads run without a question; nothing else does. With no way to ask (the
@@ -108,7 +110,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             runTask = Task { await execute(statements) }
             return
         }
-        guard let onConfirmProduction else {
+        guard let confirm else {
             statusText = "Not run: production writes need the tab's confirmation sheet"
             errorBanner = QueryErrorBanner(
                 error: DBError.protocolError(
@@ -124,7 +126,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             + "will change data on the production connection “\(config.name)”:\n\n" + listed.joined(separator: "\n")
         if writes.count > listed.count { message += "\n• … and \(writes.count - listed.count) more" }
         if destructive { message += "\n\nType the connection's name to run them." }
-        onConfirmProduction(
+        confirm(
             DestructiveConfirmation(
                 title: "Run on “\(config.name)”?",
                 message: message,
@@ -391,7 +393,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             var rowTotal = 0
             var completion: QueryCompletion?
 
-            for try await event in connection.execute(statement.text, parameters: []) {
+            events: for try await event in connection.execute(statement.text, parameters: []) {
                 switch event {
                 case let .columns(value):
                     columns = value
@@ -408,11 +410,18 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
                     rowTotal += batch.count
                     // Redraw as rows arrive so a long query shows progress.
                     if rowTotal % 5_000 < batch.count { bumpRevision() }
-                    if let model, model.hasReachedMemoryCap { break }
+                    // Leaving the loop ends the stream, which tells the driver to cancel
+                    // the statement on the server; a bare `break` only left the switch,
+                    // and every remaining row was still pulled through the main actor.
+                    if let model, model.hasReachedMemoryCap { break events }
                 case let .complete(value):
                     completion = value
                 }
             }
+            // A stream ends quietly when its consumer is cancelled; the server's own
+            // "canceling statement" may still be on its way. What the user asked for was
+            // a cancel, and that is what is reported (SPEC §4), not "OK — 0 rows".
+            if completion == nil, Task.isCancelled { throw DBError.cancelled }
             model?.markStreamComplete()
             result.completion = completion
             let duration = clockStart.duration(to: .now)
@@ -545,11 +554,33 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         writeIfAutoCommit(.loadedRowsOnly)
     }
 
+    /// Marks the selected result rows for deletion. With auto-commit on the DELETE reaches
+    /// the server at once, so it asks first, as the table tab does.
     public func deleteSelectedRows() {
         guard let grid = selectedResult?.grid, grid.isEditable else { return }
-        grid.markDeleted(rows: selection.rows(totalRows: grid.displayRowCount))
-        bumpRevision()
-        writeIfAutoCommit(.loadedRowsOnly)
+        let rows = selection.rows(totalRows: grid.displayRowCount)
+        guard !rows.isEmpty else { return }
+        let apply = { [weak self] in
+            guard let self else { return }
+            grid.markDeleted(rows: rows)
+            bumpRevision()
+            writeIfAutoCommit(.loadedRowsOnly)
+        }
+        guard autoCommitsEdits, let confirm else {
+            apply()
+            return
+        }
+        let count = rows.count
+        let name = grid.writableTable?.name ?? "the result"
+        confirm(
+            DestructiveConfirmation(
+                title: "Delete \(count) row\(count == 1 ? "" : "s") from “\(name)”?",
+                message:
+                    "Auto-commit is on, so the DELETE runs on the server as soon as you confirm. "
+                    + "Turn auto-commit off to review deletions in the commit sheet first.",
+                confirmTitle: "Delete \(count == 1 ? "Row" : "\(count) Rows")",
+                action: { apply() }
+            ))
     }
 
     // MARK: - Auto-commit of result edits
@@ -731,14 +762,33 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
 
     public func goToPage(_ page: Int) async {
         guard let result = selectedResult, let grid = result.grid, grid.isPaged else { return }
-        let started = ContinuousClock.now
-        await grid.goToPage(page)
-        if let failure = grid.lastError {
-            errorBanner = QueryErrorBanner(error: failure, statement: result.statement)
-        } else {
-            result.message = Self.pageMessage(grid, exactTotal: result.exactTotal, duration: started.duration(to: .now))
+        let move = { [weak self] in
+            guard let self else { return }
+            let started = ContinuousClock.now
+            await grid.goToPage(page)
+            if let failure = grid.lastError {
+                errorBanner = QueryErrorBanner(error: failure, statement: result.statement)
+            } else {
+                result.message = Self.pageMessage(grid, exactTotal: result.exactTotal, duration: started.duration(to: .now))
+            }
+            bumpRevision()
         }
-        bumpRevision()
+        // Another page re-runs the statement, which throws away edits pending on this one.
+        let pending = grid.edits.pendingStatementCount
+        guard pending > 0, !isWritingEdits, let confirm else {
+            await move()
+            return
+        }
+        confirm(
+            DestructiveConfirmation(
+                title: "Discard \(pending) pending change\(pending == 1 ? "" : "s")?",
+                message: "Changing page re-runs the statement, which throws away what has not been committed.",
+                confirmTitle: "Discard and Change Page",
+                action: {
+                    grid.edits.discardAll()
+                    await move()
+                }
+            ))
     }
 
     public func goToFirstPage() async { await goToPage(0) }

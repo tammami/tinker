@@ -32,6 +32,10 @@ public final class TableTabController: DataGridDelegate {
     public var columnsInfo: [ColumnInfo] = []
     /// On, an edit writes as soon as it is made; off, edits wait for Commit (SPEC §12.3).
     public var autoCommit = true
+    /// Asks the user before something irreversible. Set by the workspace that owns the
+    /// tab when it creates the controller, not by a view, so it is there before the tab
+    /// has appeared. With none set (a headless run) the question is answered "yes".
+    @ObservationIgnored public var confirm: ((DestructiveConfirmation) -> Void)?
     /// True while an auto-commit write is on the server.
     public private(set) var isWriting = false
     @ObservationIgnored private var writeTask: Task<Void, Never>?
@@ -218,10 +222,12 @@ public final class TableTabController: DataGridDelegate {
 
     public func goToPage(_ page: Int) async {
         guard let model else { return }
-        await model.goToPage(page)
-        surfaceLoadError()
-        bumpRevision()
-        updateStatus()
+        await guardingPendingEdits("Change page") { [weak self] in
+            await model.goToPage(page)
+            self?.surfaceLoadError()
+            self?.bumpRevision()
+            self?.updateStatus()
+        }
     }
 
     public func goToFirstPage() async { await goToPage(0) }
@@ -250,10 +256,13 @@ public final class TableTabController: DataGridDelegate {
 
     public func refresh() async {
         guard let model else { return }
-        await session?.invalidateIntrospection(.rowCount(table))
-        await model.reload()
-        bumpRevision()
-        updateStatus()
+        await guardingPendingEdits("Refresh") { [weak self] in
+            guard let self else { return }
+            await session?.invalidateIntrospection(.rowCount(table))
+            await model.reload()
+            bumpRevision()
+            updateStatus()
+        }
     }
 
     /// The conditions the server sees: the filter rows plus the quick search, if any.
@@ -289,12 +298,15 @@ public final class TableTabController: DataGridDelegate {
         let task = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled, let self else { return }
-            await model?.setFilter(effectiveFilter)
-            guard !Task.isCancelled else { return }
-            surfaceLoadError()
-            bumpRevision()
-            updateStatus()
-            if persist { await persistPreferences() }
+            await guardingPendingEdits("Filter") { [weak self] in
+                guard let self else { return }
+                await model?.setFilter(effectiveFilter)
+                guard !Task.isCancelled else { return }
+                surfaceLoadError()
+                bumpRevision()
+                updateStatus()
+                if persist { await persistPreferences() }
+            }
         }
         liveFilterTask = task
         await task.value
@@ -311,13 +323,17 @@ public final class TableTabController: DataGridDelegate {
 
     public func applyFilter(_ rules: [FilterRule]) async {
         filterRules = rules
-        await model?.setFilter(effectiveFilter)
-        // A filter that the server refuses used to fail silently: the rows never arrived,
-        // and the grid drew the unfiltered estimate as empty rows instead of saying why.
-        surfaceLoadError()
-        bumpRevision()
-        updateStatus()
-        await persistPreferences()
+        await guardingPendingEdits("Filter") { [weak self] in
+            guard let self else { return }
+            await model?.setFilter(effectiveFilter)
+            // A filter that the server refuses used to fail silently: the rows never
+            // arrived, and the grid drew the unfiltered estimate as empty rows instead of
+            // saying why.
+            surfaceLoadError()
+            bumpRevision()
+            updateStatus()
+            await persistPreferences()
+        }
     }
 
     /// Shows whatever the last page load failed with, verbatim (SPEC §6).
@@ -332,11 +348,14 @@ public final class TableTabController: DataGridDelegate {
 
     public func cycleSort(columnIndex: Int, additive: Bool) async {
         guard let model, model.columns.indices.contains(columnIndex) else { return }
-        await model.cycleSort(column: model.columns[columnIndex].name, additive: additive)
-        surfaceLoadError()
-        bumpRevision()
-        updateStatus()
-        await persistPreferences()
+        await guardingPendingEdits("Sort") { [weak self] in
+            guard let self else { return }
+            await model.cycleSort(column: model.columns[columnIndex].name, additive: additive)
+            surfaceLoadError()
+            bumpRevision()
+            updateStatus()
+            await persistPreferences()
+        }
     }
 
     public func addRow() {
@@ -348,13 +367,56 @@ public final class TableTabController: DataGridDelegate {
         updateStatus()
     }
 
+    /// Marks the selected rows for deletion. With auto-commit on the DELETE reaches the
+    /// server at once, so it asks first: there is no preview sheet and no Discard to
+    /// catch a ⌘⌫ meant for a neighbouring key.
     public func deleteSelectedRows() {
         guard let model else { return }
         let rows = selection.rows(totalRows: model.displayRowCount)
-        model.markDeleted(rows: rows)
-        bumpRevision()
-        updateStatus()
-        writeIfAutoCommit(.loadedRowsOnly)
+        guard !rows.isEmpty else { return }
+        let apply = { [weak self] in
+            guard let self, let model = self.model else { return }
+            model.markDeleted(rows: rows)
+            bumpRevision()
+            updateStatus()
+            writeIfAutoCommit(.loadedRowsOnly)
+        }
+        guard autoCommitsEdits, let confirm else {
+            apply()
+            return
+        }
+        let count = rows.count
+        confirm(
+            DestructiveConfirmation(
+                title: "Delete \(count) row\(count == 1 ? "" : "s") from “\(table.name)”?",
+                message:
+                    "Auto-commit is on, so the DELETE runs on the server as soon as you confirm. "
+                    + "Turn auto-commit off to review deletions in the commit sheet first.",
+                confirmTitle: "Delete \(count == 1 ? "Row" : "\(count) Rows")",
+                action: { apply() }
+            ))
+    }
+
+    /// Runs `action` unless edits are pending, in which case the user is asked first:
+    /// every reload reads the page afresh and throws the pending edits away. With
+    /// auto-commit on, edits are only pending while a write is failing, which is exactly
+    /// when losing them silently would hurt most.
+    private func guardingPendingEdits(_ what: String, _ action: @escaping @MainActor () async -> Void) async {
+        guard let model, model.edits.pendingStatementCount > 0, !isWriting, let confirm else {
+            await action()
+            return
+        }
+        let count = model.edits.pendingStatementCount
+        confirm(
+            DestructiveConfirmation(
+                title: "Discard \(count) pending change\(count == 1 ? "" : "s")?",
+                message: "\(what) re-reads the page from the server, which throws away what has not been committed.",
+                confirmTitle: "Discard and \(what)",
+                action: {
+                    model.edits.discardAll()
+                    await action()
+                }
+            ))
     }
 
     public func setSelectionNull() {

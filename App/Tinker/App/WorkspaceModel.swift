@@ -493,18 +493,23 @@ public struct DestructiveConfirmation: Identifiable {
     public let requiredTypedName: String?
     public let confirmTitle: String
     public let action: @MainActor () async -> Void
+    /// Runs when the user declines, for a caller that has to answer either way (AppKit
+    /// waiting on whether it may quit).
+    public let onCancel: (@MainActor () -> Void)?
 
     public init(
         title: String,
         message: String,
         requiredTypedName: String? = nil,
         confirmTitle: String = "Delete",
-        action: @escaping @MainActor () async -> Void
+        action: @escaping @MainActor () async -> Void,
+        onCancel: (@MainActor () -> Void)? = nil
     ) {
         self.title = title
         self.message = message
         self.requiredTypedName = requiredTypedName
         self.confirmTitle = confirmTitle
         self.action = action
+        self.onCancel = onCancel
     }
 }

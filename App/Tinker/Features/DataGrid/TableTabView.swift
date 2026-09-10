@@ -433,7 +433,8 @@ public struct TableTabView: View {
                     }
                     .controlSize(.small)
                     .buttonStyle(.borderedProminent)
-                    .keyboardShortcut("s", modifiers: [.command, .shift])
+                    // ⌘⇧S belongs to File › Commit, which reaches this tab through the
+                    // workspace; a second registration here made the key ambiguous.
                     .disabled(controller.isWriting)
                 }
             }

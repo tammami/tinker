@@ -17,13 +17,30 @@ public final class CommandCenter {
     /// The frontmost workspace, or nil before the first window appears.
     public private(set) var current: WorkspaceController?
 
+    /// Every workspace that has appeared and not gone away, frontmost or not, so that
+    /// quitting can ask about unsaved work in a window that is behind another.
+    private var registered: [ObjectIdentifier: WeakWorkspace] = [:]
+
     private init() {}
 
     public func activate(_ controller: WorkspaceController) {
         current = controller
+        registered[ObjectIdentifier(controller)] = WeakWorkspace(controller)
     }
 
     public func deactivate(_ controller: WorkspaceController) {
         if current === controller { current = nil }
+    }
+
+    /// Every live workspace, frontmost first.
+    public var all: [WorkspaceController] {
+        registered = registered.filter { $0.value.controller != nil }
+        let others = registered.values.compactMap(\.controller).filter { $0 !== current }
+        return (current.map { [$0] } ?? []) + others
+    }
+
+    private struct WeakWorkspace {
+        weak var controller: WorkspaceController?
+        init(_ controller: WorkspaceController) { self.controller = controller }
     }
 }

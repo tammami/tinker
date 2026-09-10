@@ -1,4 +1,5 @@
 import AppKit
+import DBCore
 import SwiftUI
 
 /// Which help page the window shows. The menu sets it before opening the window, so
@@ -21,9 +22,12 @@ struct HelpView: View {
     @State private var query = ""
 
     private var topics: [HelpTopic] {
-        let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let needle = query.trimmingCharacters(in: .whitespaces)
         guard !needle.isEmpty else { return HelpContent.topics }
-        return HelpContent.topics.filter { $0.searchText.contains(needle) }
+        // A title fuzzily; the page text when it contains the words.
+        return HelpContent.topics.filter {
+            FuzzyMatch.matches(needle, in: $0.title) || $0.searchText.contains(needle.lowercased())
+        }
     }
 
     private var selected: HelpTopic? {

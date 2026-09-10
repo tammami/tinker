@@ -183,14 +183,14 @@ public final class ServerActivityController {
     }
 
     public var visibleUsers: [ServerUserInfo] {
-        guard !search.isEmpty else { return users }
-        return users.filter { $0.id.localizedCaseInsensitiveContains(search) }
+        FuzzyMatch.filter(users, query: search, text: \.id)
     }
 
     public var visibleVariables: [ServerVariableInfo] {
         guard !search.isEmpty else { return variables }
+        // The name fuzzily; a value or category only when it contains the words.
         return variables.filter {
-            $0.name.localizedCaseInsensitiveContains(search)
+            FuzzyMatch.matches(search, in: $0.name)
                 || $0.value.localizedCaseInsensitiveContains(search)
                 || ($0.category?.localizedCaseInsensitiveContains(search) ?? false)
         }

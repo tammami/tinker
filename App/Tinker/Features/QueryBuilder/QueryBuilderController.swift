@@ -101,8 +101,7 @@ public final class QueryBuilderController {
     public var sql: String? { model.sql(dialect: dialect) }
 
     public var visibleTables: [TableInfo] {
-        guard !search.isEmpty else { return availableTables }
-        return availableTables.filter { $0.name.localizedCaseInsensitiveContains(search) }
+        FuzzyMatch.filter(availableTables, query: search, text: \.name)
     }
 
     // MARK: - Loading

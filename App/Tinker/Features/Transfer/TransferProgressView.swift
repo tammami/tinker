@@ -87,7 +87,7 @@ struct TransferTableList: View {
     @State private var filter = ""
 
     private var shown: [TableInfo] {
-        filter.isEmpty ? tables : tables.filter { $0.name.localizedCaseInsensitiveContains(filter) }
+        FuzzyMatch.filter(tables, query: filter, text: \.name)
     }
 
     var body: some View {

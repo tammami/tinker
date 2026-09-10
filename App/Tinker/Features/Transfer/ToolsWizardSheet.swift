@@ -515,7 +515,7 @@ struct ToolsWizardSheet: View {
         title: String, icon: String, items: [String], all: Binding<Bool>, selected: Binding<Set<String>>,
         allowsCustom: Bool = true
     ) -> some View {
-        let shown = objectFilter.isEmpty ? items : items.filter { $0.localizedCaseInsensitiveContains(objectFilter) }
+        let shown = FuzzyMatch.filter(items, query: objectFilter, text: { $0 })
         Section {
             Toggle(isOn: all) {
                 Label("All \(title.lowercased()) during execution (\(items.count))", systemImage: icon)

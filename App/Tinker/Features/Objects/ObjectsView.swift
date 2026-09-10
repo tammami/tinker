@@ -83,7 +83,7 @@ public final class ObjectsController {
         let filtered =
             search.isEmpty
             ? byKind
-            : byKind.filter { $0.name.localizedCaseInsensitiveContains(search) }
+            : byKind.filter { FuzzyMatch.matches(search, in: $0.name) }
         return filtered.sorted { left, right in
             let ordered: Bool =
                 switch sortColumn {
@@ -104,7 +104,7 @@ public final class ObjectsController {
         let filtered =
             search.isEmpty
             ? routines
-            : routines.filter { $0.name.localizedCaseInsensitiveContains(search) }
+            : routines.filter { FuzzyMatch.matches(search, in: $0.name) }
         return filtered.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 

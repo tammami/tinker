@@ -56,7 +56,7 @@ public struct SnippetsView: View {
     private var visible: [Snippet] {
         guard !search.isEmpty else { return snippets }
         return snippets.filter {
-            $0.name.localizedCaseInsensitiveContains(search) || $0.body.localizedCaseInsensitiveContains(search)
+            FuzzyMatch.matches(search, in: $0.name) || $0.body.localizedCaseInsensitiveContains(search)
         }
     }
 

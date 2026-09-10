@@ -1,4 +1,5 @@
 import AppKit
+import DBCore
 
 /// The autocomplete list the editor shows while typing (SPEC §13.1).
 ///
@@ -231,15 +232,17 @@ private final class CompletionRowView: NSView {
     private static func highlighted(_ text: String, matching prefix: String) -> NSAttributedString {
         let font = DesignTokens.Fonts.editor(size: 12)
         let attributed = NSMutableAttributedString(string: text, attributes: [.font: font])
-        // Only the leading run is marked: candidates are offered by prefix.
+        // The letters are matched fuzzily, so each one the query landed on is marked:
+        // `kel` bolds the `kel` of `aset_kelompok`, `ak` its `a` and `k`.
         let tail = prefix.split(separator: ".").last.map(String.init) ?? prefix
-        // The range is measured on the candidate itself: lower-casing can change a
-        // string's length (`İ`), and the range must fit the text it marks.
-        guard !tail.isEmpty else { return attributed }
-        let range = (text as NSString).range(of: tail, options: [.caseInsensitive, .anchored])
-        guard range.location != NSNotFound else { return attributed }
-        attributed.addAttribute(
-            .font, value: NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask), range: range)
+        guard !tail.isEmpty, let match = FuzzyMatch.match(tail, in: text) else { return attributed }
+        let bold = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+        let characters = Array(text)
+        for position in match.positions where characters.indices.contains(position) {
+            let start = text.index(text.startIndex, offsetBy: position)
+            let range = NSRange(start ..< text.index(after: start), in: text)
+            attributed.addAttribute(.font, value: bold, range: range)
+        }
         return attributed
     }
 

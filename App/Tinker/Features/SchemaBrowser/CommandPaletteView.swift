@@ -196,16 +196,11 @@ public struct CommandPaletteView: View {
             // With nothing typed: the open tabs, then the actions. Tables wait for a word.
             return all.filter { $0.group == .tabs || $0.group == .actions }
         }
-        return
-            all
-            .compactMap { command -> (Int, PaletteCommand)? in
-                let haystack = (command.title + " " + (command.subtitle ?? "")).lowercased()
-                guard let score = SidebarModel.fuzzyScore(needle: needle, haystack: haystack) else { return nil }
-                return (score, command)
-            }
-            .sorted { ($0.0, $0.1.group.rawValue) < ($1.0, $1.1.group.rawValue) }
-            .prefix(60)
-            .map(\.1)
+        // Every typed word must land somewhere in the title or subtitle; the best fit
+        // first, then by group.
+        let ordered = all.sorted { $0.group.rawValue < $1.group.rawValue }
+        return Array(
+            FuzzyMatch.filter(ordered, query: needle, text: { $0.title + " " + ($0.subtitle ?? "") }).prefix(60))
     }
 
     private func runHighlighted() {

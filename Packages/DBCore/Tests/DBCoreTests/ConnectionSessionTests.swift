@@ -80,7 +80,8 @@ final class ConnectionSessionTests: XCTestCase {
     }
 
     func testFailedConnectMarksTheSessionDegraded() async throws {
-        await FakeDriver.control.failNext(1, with: .connectionFailed(underlying: "refused", hint: nil))
+        // Two failures: a network refusal is retried once (SPEC §9.6) before it counts.
+        await FakeDriver.control.failNext(2, with: .connectionFailed(underlying: "refused", hint: nil))
         let session = makeSession()
         do {
             try await session.connect()
@@ -284,6 +285,94 @@ final class ConnectionSessionTests: XCTestCase {
         _ = try await session.lease()
         let connects = await FakeDriver.control.connectCount
         XCTAssertEqual(connects, 1, "the introspection's connection should have been reused")
+    }
+
+    /// `withLease` returns the connection before it returns, whether the body returned or
+    /// threw, so the caller's next lease reuses it instead of racing a detached release.
+    func testWithLeaseReleasesBeforeReturningAndOnThrow() async throws {
+        let session = makeSession()
+        let value = try await session.withLease { connection in
+            _ = try await connection.executeCollecting("SELECT 1")
+            return 42
+        }
+        XCTAssertEqual(value, 42)
+        let leasedAfterReturn = await session.leasedConnectionCount
+        XCTAssertEqual(leasedAfterReturn, 0)
+
+        struct Boom: Error {}
+        do {
+            try await session.withLease { _ in throw Boom() }
+            XCTFail("expected the body's error")
+        } catch is Boom {}
+        let leasedAfterThrow = await session.leasedConnectionCount
+        XCTAssertEqual(leasedAfterThrow, 0)
+        let connects = await FakeDriver.control.connectCount
+        XCTAssertEqual(connects, 1, "both bodies should have used the one pooled connection")
+    }
+
+    // MARK: - Reconnect policy (SPEC §9.6)
+
+    /// A connection that dropped while a transaction was open is not replaced behind
+    /// the user's back: leases and plain connects are refused until the user reconnects.
+    func testALostTransactionWaitsForTheUserToReconnect() async throws {
+        let session = makeSession()
+        let (lease, _) = try await session.lease()
+        await session.noteConnectionDropped(lease: lease, hadOpenTransaction: true)
+        let waiting = await session.isWaitingForReconnect
+        XCTAssertTrue(waiting)
+
+        do {
+            _ = try await session.lease()
+            XCTFail("a lease must be refused while the lost transaction is unacknowledged")
+        } catch let error as DBError {
+            guard case let .connectionFailed(underlying, hint) = error else {
+                return XCTFail("expected .connectionFailed, got \(error)")
+            }
+            XCTAssertTrue(underlying.contains("transaction"), underlying)
+            XCTAssertTrue(hint?.contains("econnect") == true, hint ?? "")
+        }
+        do {
+            _ = try await session.connect()
+            XCTFail("an implicit connect must not clear the refusal either")
+        } catch {}
+
+        try await session.reconnect()
+        let cleared = await session.isWaitingForReconnect
+        XCTAssertFalse(cleared)
+        _ = try await session.lease()
+        let state = await session.state
+        XCTAssertEqual(state, .connected)
+    }
+
+    /// A drop with no transaction open reconnects on the next use, with one retry when
+    /// the network refuses the first attempt.
+    func testADropWithoutATransactionReconnectsOnNextUseWithOneRetry() async throws {
+        let session = makeSession()
+        let (lease, _) = try await session.lease()
+        await session.noteConnectionDropped(lease: lease, hadOpenTransaction: false)
+        let waiting = await session.isWaitingForReconnect
+        XCTAssertFalse(waiting)
+
+        await FakeDriver.control.failNext(1, with: .connectionFailed(underlying: "reset by peer", hint: nil))
+        _ = try await session.lease()
+        let connects = await FakeDriver.control.connectCount
+        XCTAssertEqual(connects, 2, "the first connect plus the one that succeeded after the retry")
+        let state = await session.state
+        XCTAssertEqual(state, .connected)
+    }
+
+    /// A refused password is the server's answer, not the network's; it is not retried.
+    func testAnAuthenticationFailureIsNotRetried() async throws {
+        let session = makeSession()
+        await FakeDriver.control.failNext(2, with: .authenticationFailed(user: "app"))
+        do {
+            _ = try await session.lease()
+            XCTFail("expected the authentication failure")
+        } catch let error as DBError {
+            XCTAssertEqual(error, .authenticationFailed(user: "app"))
+        }
+        let connects = await FakeDriver.control.connectCount
+        XCTAssertEqual(connects, 0)
     }
 
     // MARK: - Secrets and tunnel

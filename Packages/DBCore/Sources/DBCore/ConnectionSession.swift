@@ -70,6 +70,10 @@ public actor ConnectionSession {
     /// True while ``disconnect()`` is closing the pool; a lease that arrives then is
     /// refused rather than opening a connection the close would leak.
     private var isClosing = false
+    /// Set when a connection dropped while a transaction was open. The session then
+    /// refuses to reconnect on its own — a new session would silently discard the
+    /// uncommitted work — until the user reconnects explicitly (SPEC §9.6).
+    private var lostTransaction: String?
 
     /// Who has a pooled connection. Every state change happens between suspension
     /// points, so no two callers can find the same connection free.
@@ -209,6 +213,9 @@ public actor ConnectionSession {
     /// Calling it when already connected is a no-op.
     @discardableResult
     public func connect() async throws -> ServerVersion {
+        if let lostTransaction {
+            throw DBError.connectionFailed(underlying: lostTransaction, hint: "reconnect from the sidebar to continue")
+        }
         if let existing = pool.first {
             setState(.connected)
             return await existing.connection.serverVersion
@@ -224,6 +231,16 @@ public actor ConnectionSession {
             ))
         setState(.connected)
         return await connection.serverVersion
+    }
+
+    /// The user's explicit answer to a lost transaction: give up the uncommitted work and
+    /// connect again. Only this clears the refusal that ``noteConnectionDropped`` set,
+    /// so that nothing the app does on its own (a transfer, a dump, the query builder)
+    /// can make that decision for the user.
+    @discardableResult
+    public func reconnect() async throws -> ServerVersion {
+        lostTransaction = nil
+        return try await connect()
     }
 
     /// Runs the whole connect path and reports each stage, for the editor's Test Connection.
@@ -317,10 +334,22 @@ public actor ConnectionSession {
         )
     }
 
+    /// Opens one physical connection, with one retry when the failure is the network's
+    /// rather than the server's answer (SPEC §9.6: "reconnect on next use with one
+    /// retry"). A refused password or a missing database is not retried: the second
+    /// attempt would only say the same thing later.
     private func makeConnection() async throws -> any SQLConnection {
         do {
             let resolved = try await resolveConfig()
-            return try await registry.connect(resolved, logger: logger)
+            do {
+                return try await registry.connect(resolved, logger: logger)
+            } catch let error as DBError where error.indicatesLostConnection {
+                logger.debug("connect failed; retrying once", metadata: ["error": "\(error)"])
+                try Task.checkCancellation()
+                // The tunnel may be what fell; resolving again reopens it if so.
+                let again = try await resolveConfig()
+                return try await registry.connect(again, logger: logger)
+            }
         } catch {
             let message = (error as? DBError)?.errorDescription ?? String(reflecting: error)
             setState(.degraded(reason: message))
@@ -350,6 +379,10 @@ public actor ConnectionSession {
         while true {
             try Task.checkCancellation()
             guard !isClosing else { throw DBError.notConnected }
+            if let lostTransaction {
+                throw DBError.connectionFailed(
+                    underlying: lostTransaction, hint: "reconnect from the sidebar to continue")
+            }
             try await reapIdleConnections()
 
             if let index = pool.firstIndex(where: \.isIdle) {
@@ -458,6 +491,28 @@ public actor ConnectionSession {
         pool[current].readOnlyApplied = nil
     }
 
+    /// Leases a connection for the duration of `body` and returns it before returning,
+    /// whichever way `body` ends.
+    ///
+    /// The alternative — `defer { Task { await release(lease) } }` — hands the connection
+    /// back on a task nobody waits for, so the caller's next lease races it and opens a
+    /// connection the pool did not need. Runs on the caller's actor, so `body` may touch
+    /// the caller's own state.
+    public nonisolated(nonsending) func withLease<T>(
+        _ body: (any SQLConnection) async throws -> T
+    ) async throws -> T {
+        let (lease, connection) = try await lease()
+        let value: T
+        do {
+            value = try await body(connection)
+        } catch {
+            await release(lease)
+            throw error
+        }
+        await release(lease)
+        return value
+    }
+
     /// The transport of this session's connections, as the server reported it: whether
     /// the wire is encrypted and whether it runs through an SSH tunnel. Nil before the
     /// first connection is up.
@@ -496,12 +551,17 @@ public actor ConnectionSession {
             let removed = pool.remove(at: index)
             await removed.connection.close()
         }
-        setState(
-            .degraded(
-                reason: hadOpenTransaction
-                    ? "The connection dropped while a transaction was open. Reconnect to continue; uncommitted work is lost."
-                    : "The connection dropped. It will be reopened on next use."))
+        let reason =
+            hadOpenTransaction
+            ? "The connection dropped while a transaction was open. Reconnect to continue; uncommitted work is lost."
+            : "The connection dropped. It will be reopened on next use."
+        if hadOpenTransaction { lostTransaction = reason }
+        setState(.degraded(reason: reason))
     }
+
+    /// True while the session waits for the user to reconnect after a transaction was
+    /// lost; leases are refused until ``connect()`` is called.
+    public var isWaitingForReconnect: Bool { lostTransaction != nil }
 
     /// Closes the tunnel and every connection.
     public func disconnect() async {

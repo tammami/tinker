@@ -268,10 +268,15 @@ public actor PostgresSQLConnection: SQLConnection {
     static func streamsManyRows(_ sql: String) -> Bool {
         let statement = SQLStatement(text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil)
         let keyword = statement.leadingKeyword
-        if ["SELECT", "WITH", "VALUES", "TABLE", "SHOW", "EXPLAIN"].contains(keyword) { return true }
         // `… RETURNING` streams rows, and its row count equals its affected-row count.
-        return SQLTokenizer.tokenize(sql, dialect: .postgresql)
+        let returning = SQLTokenizer.tokenize(sql, dialect: .postgresql)
             .contains { $0.kind == .keyword && $0.text.uppercased() == "RETURNING" }
+        if returning { return true }
+        // `WITH … INSERT/UPDATE/DELETE` with no RETURNING streams nothing; on the streaming
+        // path its command tag was discarded and it reported "WITH 0" rows affected. The
+        // splitter's read-only classification already tells the two apart.
+        if keyword == "WITH" { return statement.isProbablyReadOnly }
+        return ["SELECT", "VALUES", "TABLE", "SHOW", "EXPLAIN"].contains(keyword)
     }
 
     private func runStreaming(

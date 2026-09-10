@@ -533,6 +533,28 @@ final class PostgresIntegrationTests: XCTestCase {
         }
     }
 
+    /// `WITH … INSERT` without RETURNING streams nothing, so its affected-row count has to
+    /// come from the command tag, not from the (empty) row stream it was routed to.
+    func testWithPrefixedDMLReportsTheServersAffectedRowCount() async throws {
+        try await withEachServer { connection, _ in
+            _ = try await connection.executeCollecting("CREATE TEMP TABLE with_probe (a int)")
+            let insert = try await connection.executeCollecting(
+                "WITH v AS (SELECT generate_series(1, 3) AS n) INSERT INTO with_probe SELECT n FROM v"
+            )
+            XCTAssertEqual(insert.completion.affectedRows, 3)
+            XCTAssertEqual(insert.completion.serverTag, "INSERT 0 3")
+            let update = try await connection.executeCollecting(
+                "WITH big AS (SELECT a FROM with_probe WHERE a > 1) UPDATE with_probe SET a = a * 10 WHERE a IN (SELECT a FROM big)"
+            )
+            XCTAssertEqual(update.completion.affectedRows, 2)
+            // With RETURNING the rows stream, and their count is the affected count.
+            let returning = try await connection.executeCollecting(
+                "WITH v AS (SELECT 99 AS n) INSERT INTO with_probe SELECT n FROM v RETURNING a")
+            XCTAssertEqual(returning.rows, [[.int(99)]])
+            XCTAssertEqual(returning.completion.affectedRows, 1)
+        }
+    }
+
     // MARK: - Transactions
 
     func testTransactionsCommitAndRollBack() async throws {

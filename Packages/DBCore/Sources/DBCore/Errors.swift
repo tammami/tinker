@@ -58,6 +58,28 @@ public enum DBError: Error, Sendable, Hashable {
     case notConnected
 }
 
+extension DBError {
+    /// True when the error means the connection itself is gone — the socket closed, the
+    /// backend was terminated, the tunnel fell — rather than that a statement was
+    /// refused. The session treats the first as a drop (SPEC §9.6) and the second as a
+    /// result.
+    public var indicatesLostConnection: Bool {
+        switch self {
+        case .notConnected, .connectionFailed, .tunnelFailed:
+            return true
+        case let .server(error):
+            // Class 08 is "connection exception"; 57P01/57P02 are a terminated or crashed
+            // backend. MySQL reports a lost connection as 2006/2013 (class HY000).
+            if let state = error.sqlState, state.hasPrefix("08") || state == "57P01" || state == "57P02" {
+                return true
+            }
+            return error.code == 2006 || error.code == 2013
+        default:
+            return false
+        }
+    }
+}
+
 extension DBError: LocalizedError {
     public var errorDescription: String? {
         switch self {

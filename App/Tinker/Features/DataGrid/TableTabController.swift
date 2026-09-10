@@ -84,7 +84,8 @@ public final class TableTabController: DataGridDelegate {
     /// primary key makes the grid editable without the tab being reopened.
     public func reloadAfterStructureChange() async {
         await start()
-        await structure.load(force: true)
+        // Edits that have not run yet survive the re-read; only a run replaces them.
+        await structure.load(force: true, keepingEdits: true)
     }
 
     /// Reads the table's shape, restores remembered preferences, and loads the first page.

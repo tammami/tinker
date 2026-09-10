@@ -12,6 +12,8 @@ public struct StructureView: View {
 
     @State private var pane: Pane = .columns
     @State private var ownPreviewPresented = false
+    /// Set when Done opened the preview: a successful run then leaves editing.
+    @State private var finishAfterRun = false
     /// A sheet that hosts the editor drives the preview from its own footer.
     private let externalPreview: Binding<Bool>?
     /// False hides Edit / Discard / Preview / Done, for a host that supplies its own.
@@ -85,8 +87,18 @@ public struct StructureView: View {
                 onExecute: {
                     await controller.execute()
                     isPreviewPresented.wrappedValue = false
+                    if finishAfterRun {
+                        finishAfterRun = false
+                        // Only when everything ran: a failed or partial run stays editable.
+                        if !controller.hasPendingChanges, controller.errorText == nil {
+                            controller.isEditing = false
+                        }
+                    }
                 },
-                onCancel: { isPreviewPresented.wrappedValue = false }
+                onCancel: {
+                    finishAfterRun = false
+                    isPreviewPresented.wrappedValue = false
+                }
             )
         }
     }
@@ -128,8 +140,21 @@ public struct StructureView: View {
                     .buttonStyle(.borderedProminent)
                     .fixedSize()
 
-                    Button("Done") { controller.isEditing = false }
-                        .fixedSize()
+                    // Done never drops work silently: with statements pending it shows
+                    // them, and leaves editing only once they have run.
+                    Button("Done") {
+                        if controller.hasPendingChanges {
+                            finishAfterRun = true
+                            isPreviewPresented.wrappedValue = true
+                        } else {
+                            controller.isEditing = false
+                        }
+                    }
+                    .help(
+                        controller.hasPendingChanges
+                            ? "Preview and run the changes, then stop editing" : "Stop editing"
+                    )
+                    .fixedSize()
                 } else {
                     Button {
                         controller.isEditing = true
@@ -236,6 +261,9 @@ struct ColumnsPane: View {
     private let widths: [CGFloat?] = [30, 170, 140, 64, 68, 60, 46, 140, nil]
 
     private var selectedIndex: Int? { controller.selectedColumnIndex }
+    /// The column whose text field has keyboard focus. A click inside a field goes to
+    /// AppKit, not to the row's tap gesture, so the selection follows focus instead.
+    @FocusState private var focusedColumn: UUID?
 
     private func move(_ index: Int, by offset: Int) {
         guard var columns = controller.edited?.columns,
@@ -268,6 +296,9 @@ struct ColumnsPane: View {
                 case .down: controller.moveSelection(by: 1)
                 default: break
                 }
+            }
+            .onChange(of: focusedColumn) { _, focused in
+                if let focused { controller.selectedColumnID = focused }
             }
 
             if let index = selectedIndex, let column = controller.edited?.columns[safe: index] {
@@ -325,6 +356,7 @@ struct ColumnsPane: View {
         return HStack(spacing: 0) {
             Cell(width: widths[0]) {
                 Button {
+                    controller.selectedColumnID = column.id
                     primaryKeyBinding(for: column.name).wrappedValue.toggle()
                 } label: {
                     Image(systemName: Icon.key)
@@ -340,14 +372,14 @@ struct ColumnsPane: View {
                 .accessibilityLabel("\(column.name) primary key")
             }
             Cell(width: widths[1]) {
-                field(index, \.name, placeholder: "name")
+                field(index, column.id, \.name, placeholder: "name")
             }
             Cell(width: widths[2]) {
                 typePicker(index, spec: spec)
             }
             Cell(width: widths[3]) {
                 numberField(
-                    index,
+                    index, column.id,
                     value: spec.length,
                     enabled: choice?.takesLength ?? true,
                     label: "\(column.name) length"
@@ -360,7 +392,7 @@ struct ColumnsPane: View {
             }
             Cell(width: widths[4]) {
                 numberField(
-                    index,
+                    index, column.id,
                     value: spec.decimals,
                     enabled: choice?.takesDecimals ?? (spec.length != nil),
                     label: "\(column.name) decimals"
@@ -371,7 +403,10 @@ struct ColumnsPane: View {
                     "",
                     isOn: Binding(
                         get: { !(controller.edited?.columns[safe: index]?.isNullable ?? true) },
-                        set: { controller.edited?.columns[safe: index]?.isNullable = !$0 }
+                        set: {
+                            controller.selectedColumnID = column.id
+                            controller.edited?.columns[safe: index]?.isNullable = !$0
+                        }
                     )
                 )
                 .labelsHidden()
@@ -383,7 +418,10 @@ struct ColumnsPane: View {
                     "",
                     isOn: Binding(
                         get: { controller.edited?.columns[safe: index]?.isAutoIncrement ?? false },
-                        set: { controller.edited?.columns[safe: index]?.isAutoIncrement = $0 }
+                        set: {
+                            controller.selectedColumnID = column.id
+                            controller.edited?.columns[safe: index]?.isAutoIncrement = $0
+                        }
                     )
                 )
                 .labelsHidden()
@@ -391,10 +429,10 @@ struct ColumnsPane: View {
                 .accessibilityLabel("\(column.name) auto increment")
             }
             Cell(width: widths[7]) {
-                optionalField(index, \.defaultExpression, placeholder: "none")
+                optionalField(index, column.id, \.defaultExpression, placeholder: "none")
             }
             Cell(width: widths[8]) {
-                optionalField(index, \.comment, placeholder: "")
+                optionalField(index, column.id, \.comment, placeholder: "")
             }
         }
         .foregroundStyle(isSelected ? Color.white : Color.primary)
@@ -441,7 +479,7 @@ struct ColumnsPane: View {
     }
 
     private func numberField(
-        _ index: Int, value: Int?, enabled: Bool, label: String,
+        _ index: Int, _ id: UUID, value: Int?, enabled: Bool, label: String,
         apply: @escaping (inout ColumnTypeSpec, Int?) -> Void
     ) -> some View {
         TextField(
@@ -458,6 +496,7 @@ struct ColumnsPane: View {
         .textFieldStyle(.plain)
         .multilineTextAlignment(.trailing)
         .monospacedDigit()
+        .focused($focusedColumn, equals: id)
         .disabled(!controller.isEditing || !enabled)
         .accessibilityLabel(label)
     }
@@ -465,13 +504,14 @@ struct ColumnsPane: View {
     /// Rewrites one column's type through its parts.
     private func updateType(_ index: Int, _ change: (inout ColumnTypeSpec) -> Void) {
         guard let column = controller.edited?.columns[safe: index] else { return }
+        controller.selectedColumnID = column.id
         var spec = ColumnTypeSpec.parse(column.type)
         change(&spec)
         controller.edited?.columns[safe: index]?.type = spec.render(dialect: controller.dialect)
     }
 
     private func field(
-        _ index: Int, _ path: WritableKeyPath<ColumnDefinition, String>, placeholder: String
+        _ index: Int, _ id: UUID, _ path: WritableKeyPath<ColumnDefinition, String>, placeholder: String
     ) -> some View {
         TextField(
             placeholder,
@@ -481,11 +521,12 @@ struct ColumnsPane: View {
             )
         )
         .textFieldStyle(.plain)
+        .focused($focusedColumn, equals: id)
         .disabled(!controller.isEditing)
     }
 
     private func optionalField(
-        _ index: Int, _ path: WritableKeyPath<ColumnDefinition, String?>, placeholder: String
+        _ index: Int, _ id: UUID, _ path: WritableKeyPath<ColumnDefinition, String?>, placeholder: String
     ) -> some View {
         TextField(
             placeholder,
@@ -495,6 +536,7 @@ struct ColumnsPane: View {
             )
         )
         .textFieldStyle(.plain)
+        .focused($focusedColumn, equals: id)
         .disabled(!controller.isEditing)
     }
 

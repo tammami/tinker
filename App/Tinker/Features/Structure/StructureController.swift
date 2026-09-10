@@ -191,10 +191,16 @@ public final class StructureController {
             // Column identities are fresh every read; the selection follows the name.
             let selectedName = edited?.columns.first { $0.id == selectedColumnID }?.name
             let keptEdits = keepingEdits && hasUnsavedEdits ? edited : nil
+            // Said only when the server's definition actually moved: the table tab reloads
+            // its grid whenever this text changes, and a re-read that found nothing new
+            // must not set that off.
+            let serverChanged = loaded != nil && loaded != definition
             loaded = definition
             if let keptEdits {
                 edited = keptEdits
-                statusText = "The table changed on the server; your unsaved edits are kept."
+                if serverChanged {
+                    statusText = "The table changed on the server; your unsaved edits are kept."
+                }
             } else {
                 edited = definition
             }

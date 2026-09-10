@@ -17,6 +17,12 @@ enum UIDemo {
         return arguments[index + 1]
     }
 
+    /// `--ui-demo help` opens the help window; the workspace view does it, since only a
+    /// view can reach `openWindow`.
+    static var wantsHelpWindow: Bool {
+        requestedScene?.split(separator: "+").contains("help") ?? false
+    }
+
     /// The schema a tree row stands for: a schema row's own, or a MySQL or SQLite
     /// database's pseudo-schema.
     static let logger = Logger(label: "tinker.demo")
@@ -306,7 +312,7 @@ enum UIDemo {
             case "paste":
                 if let preferred, let ref = demoSchemaRef(schema) {
                     let copied = CopiedObjects(
-                        connectionID: config.id, connectionName: config.name, dialect: config.dialect,
+                        connectionID: config.id, connectionName: config.qualifiedName, dialect: config.dialect,
                         schema: ref, tables: [preferred])
                     workspace.objectClipboard = copied
                     workspace.pendingPaste = PasteRequest(

@@ -7,6 +7,21 @@ All notable changes to Tinker are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Help that exists.** Help › Tinker Help (⌘?) opens a window of built-in pages — getting
+  started, connections, browsing and editing data, the SQL editor, structure, tools, every
+  keyboard shortcut, updates and diagnostics — with a search field. The Help menu also
+  offers Keyboard Shortcuts, Release Notes, Report an Issue… and Tinker on GitHub.
+- **Updates that work.** Check for Updates… is live: the project carries the release feed
+  (the latest GitHub release's `appcast.xml`) and the Sparkle public key, `Scripts/release.sh`
+  signs each DMG and writes the appcast, and `--publish` creates the GitHub release that
+  carries them. Settings › Diagnostics shows the running version and offers automatic daily
+  checks, off by default. The Sparkle keys were set in the project as `INFOPLIST_KEY_*`
+  settings, which Xcode only honours for keys it knows, so no build ever carried them; they
+  live in `App/Info.plist` now.
+- **Connection pickers name the folder.** Every place that lists connections — the query
+  tab's pop-up, Dump, Import SQL File, Data Transfer, Data and Structure Synchronization,
+  Paste, Structure Sync, the command palette — shows `Localhost › MySQL` rather than
+  `MySQL`, adds `user@host` when two still read the same, and marks production with `PROD`.
 - **Foreign keys read like names.** A foreign-key cell shows what it points at beside the
   key — `1 · Ada` — resolved one batched query per page and cached. Editing such a cell
   offers **Choose from Referenced Table…** (context menu, `⌥↓`, or Choose… in the

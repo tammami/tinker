@@ -9,6 +9,7 @@ public struct WorkspaceView: View {
     @State private var controller: WorkspaceController
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var isFirstRunPresented = false
+    @Environment(\.openWindow) private var openWindow
     /// What the displayed connection's wire looks like, read once it is connected.
     @State private var transport: TransportSummary?
 
@@ -92,6 +93,7 @@ public struct WorkspaceView: View {
             let seen = await environment.setting("firstRun.seen", default: false)
             if !seen, environment.connections.isEmpty { isFirstRunPresented = true }
             await UIDemo.apply(to: controller)
+            if UIDemo.wantsHelpWindow { openWindow(id: HelpView.windowID) }
         }
         .onChange(of: environment.connections) { _, _ in sidebar.rebuildRoots() }
         .onChange(of: environment.groups) { _, _ in sidebar.rebuildRoots() }

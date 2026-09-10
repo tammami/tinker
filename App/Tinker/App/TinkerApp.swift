@@ -53,6 +53,13 @@ struct TinkerApp: App {
         Settings {
             SettingsView(settings: settings, crashReporter: crashReporter, updater: updater)
         }
+
+        // The Help menu's own window: pages ship in the binary, no Help book to index.
+        Window("\(Product.name) Help", id: HelpView.windowID) {
+            HelpView()
+        }
+        .defaultSize(width: 900, height: 620)
+        .keyboardShortcut("?", modifiers: .command)
     }
 }
 
@@ -67,6 +74,14 @@ struct TinkerCommands: Commands {
     /// stale capture and never depends on where first responder happens to be.
     private var workspace: WorkspaceController? { CommandCenter.shared.current }
 
+    @Environment(\.openWindow) private var openWindow
+
+    /// Shows the help window on `topicID`, or wherever it was left.
+    private func showHelp(topic topicID: String? = nil) {
+        if let topicID { HelpNavigation.shared.selectedTopicID = topicID }
+        openWindow(id: HelpView.windowID)
+    }
+
     var body: some Commands {
         CommandGroup(replacing: .appInfo) {
             Button("About \(Product.name)") {
@@ -80,6 +95,16 @@ struct TinkerCommands: Commands {
             }
             Button(updater.menuTitle) { updater.checkForUpdates() }
                 .disabled(!updater.isConfigured)
+        }
+
+        CommandGroup(replacing: .help) {
+            Button("\(Product.name) Help") { showHelp() }
+                .keyboardShortcut("?", modifiers: .command)
+            Button("Keyboard Shortcuts") { showHelp(topic: HelpContent.shortcutsTopicID) }
+            Divider()
+            Button("Release Notes") { open(HelpLinks.releaseNotes) }
+            Button("Report an Issue…") { open(HelpLinks.issues) }
+            Button("\(Product.name) on GitHub") { open(HelpLinks.repository) }
         }
 
         CommandGroup(replacing: .newItem) {
@@ -225,6 +250,14 @@ struct TinkerCommands: Commands {
                     .keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: .command)
             }
         }
+    }
+}
+
+extension TinkerCommands {
+    /// Opens a help link in the browser; a nil URL (a bad literal) is simply ignored.
+    fileprivate func open(_ url: URL?) {
+        guard let url else { return }
+        NSWorkspace.shared.open(url)
     }
 }
 

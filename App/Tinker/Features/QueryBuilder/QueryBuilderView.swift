@@ -66,7 +66,7 @@ public struct QueryBuilderView: View {
             HStack(spacing: DesignTokens.Spacing.xs + 2) {
                 Image(systemName: Icon.builder).foregroundStyle(Color.accentColor)
                 Text(controller.editingView == nil ? "Query Builder" : "Designing View")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: DesignTokens.Typography.body, weight: .semibold))
             }
             if let view = controller.editingView {
                 Badge(text: view.name, color: .purple)
@@ -780,7 +780,7 @@ struct TableCard: View {
                 Button {
                     controller.remove(table: table.id)
                 } label: {
-                    Image(systemName: Icon.close).font(.system(size: 9, weight: .bold))
+                    Image(systemName: Icon.close).font(.system(size: DesignTokens.Typography.badge, weight: .bold))
                 }
                 .buttonStyle(.borderless)
                 .help("Remove from the canvas")
@@ -835,7 +835,7 @@ struct TableCard: View {
             .buttonStyle(.plain)
             .help(ticked ? "Remove from SELECT" : "Add to SELECT")
             Text(name)
-                .font(.system(size: 12, weight: isStar ? .semibold : .regular))
+                .font(.system(size: DesignTokens.Typography.subtitle, weight: isStar ? .semibold : .regular))
                 .lineLimit(1)
             Spacer()
             if joined {

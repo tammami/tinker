@@ -85,6 +85,24 @@ public enum DesignTokens {
         }
     }
 
+    /// The type ramp, in points. Views take sizes from here, never as literals: a chip in
+    /// the tab bar and a chip in the result strip used to be 11 and 12 by accident, and
+    /// `Scripts/ci.sh` now refuses a `.system(size: <number>)` outside this file.
+    public enum Typography {
+        /// The count badge on a tab.
+        public static let badge: CGFloat = 9
+        /// An icon beside a chip's text.
+        public static let chipIcon: CGFloat = 10
+        /// A chip: a tab, a result label, a status-bar item.
+        public static let chip: CGFloat = 11
+        /// Secondary text under a title.
+        public static let subtitle: CGFloat = 12
+        /// Body text, and the editor's default.
+        public static let body: CGFloat = 13
+        /// A hero number or glyph on an empty state.
+        public static let hero: CGFloat = 28
+    }
+
     public enum Fonts {
         public static var grid: NSFont {
             NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)

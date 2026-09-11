@@ -108,7 +108,7 @@ public struct SourceView: View {
             PaneBar {
                 HStack(spacing: DesignTokens.Spacing.xs + 2) {
                     Image(systemName: controller.icon).foregroundStyle(.purple)
-                    Text(controller.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Text(controller.title).font(.system(size: DesignTokens.Typography.body, weight: .semibold)).lineLimit(1)
                 }
                 Badge(text: "READ-ONLY")
                 Spacer()

@@ -71,9 +71,12 @@ public struct KnownHostsFile: Sendable {
     }
 
     private func matchingEntries(host: String, port: Int) -> [Entry] {
-        // A non-default port is written as `[host]:port`.
-        let candidates = port == 22 ? [host] : ["[\(host)]:\(port)", host]
-        return entries().filter { entry in candidates.contains { entry.matches(host: $0) } }
+        // A non-default port is written as `[host]:port`, and only that form matches it:
+        // OpenSSH does not let a key recorded for `host:22` vouch for a daemon on another
+        // port of the same host, which may be a different machine behind a NAT or
+        // another user's process on a shared one (ADR-0046).
+        let candidate = port == 22 ? host : "[\(host)]:\(port)"
+        return entries().filter { $0.matches(host: candidate) }
     }
 
     private static func publicKey(_ entry: Entry) -> NIOSSHPublicKey? {
@@ -88,16 +91,24 @@ public struct KnownHostsFile: Sendable {
 
     /// Appends a newly accepted key, creating `~/.ssh` if it does not exist.
     public func append(host: String, port: Int, key: NIOSSHPublicKey) throws {
+        try append(line: try Self.line(host: host, port: port, key: key))
+    }
+
+    /// The `known_hosts` line for `key`, in the form OpenSSH writes.
+    public static func line(host: String, port: Int, key: NIOSSHPublicKey) throws -> String {
         let name = port == 22 ? host : "[\(host)]:\(port)"
         var writer = ByteBufferAllocator().buffer(capacity: 256)
         key.write(to: &writer)
         let blob = Data(writer.readBytes(length: writer.readableBytes) ?? [])
         // The key's own type name prefixes its blob as a length-prefixed SSH string.
-        guard let keyType = Self.readSSHString(from: blob, at: 0) else {
+        guard let keyType = readSSHString(from: blob, at: 0) else {
             throw DBError.tunnelFailed(stage: .ssh, underlying: "Cannot serialise the host key")
         }
-        let line = "\(name) \(keyType) \(blob.base64EncodedString())\n"
+        return "\(name) \(keyType) \(blob.base64EncodedString())\n"
+    }
 
+    /// Appends one prepared line, creating the directory if it does not exist.
+    public func append(line: String) throws {
         let directory = (path as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(
             atPath: directory, withIntermediateDirectories: true,

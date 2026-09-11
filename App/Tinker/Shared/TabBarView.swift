@@ -70,11 +70,11 @@ struct TabChip: View {
     var body: some View {
         HStack(spacing: DesignTokens.Spacing.xs + 2) {
             Image(systemName: tab.icon)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: DesignTokens.Typography.chip, weight: .medium))
                 .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                 .frame(width: 14)
             Text(tab.title)
-                .font(.system(size: 12, weight: isSelected ? .medium : .regular))
+                .font(.system(size: DesignTokens.Typography.subtitle, weight: isSelected ? .medium : .regular))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: 180)
@@ -84,7 +84,7 @@ struct TabChip: View {
             }
             Button(action: onClose) {
                 Image(systemName: Icon.close)
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: DesignTokens.Typography.badge, weight: .bold))
                     .frame(width: 16, height: 16)
                     .background(isHovering ? Color.primary.opacity(0.08) : .clear)
                     .clipShape(RoundedRectangle(cornerRadius: 3))

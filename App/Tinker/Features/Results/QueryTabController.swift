@@ -1404,6 +1404,21 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     public func gridDidRequestSetNull() { setSelectionNull() }
     public func gridDidRequestDeleteRows() { deleteSelectedRows() }
     public func gridDidRequestAddRow() { addRow() }
+
+    public func gridDidRequestUndo() {
+        guard let grid = selectedResult?.grid, !isWritingEdits else { return }
+        grid.undo()
+        bumpRevision()
+    }
+
+    public func gridDidRequestRedo() {
+        guard let grid = selectedResult?.grid, !isWritingEdits else { return }
+        grid.redo()
+        bumpRevision()
+    }
+
+    public func gridCanUndo() -> Bool { !isWritingEdits && (selectedResult?.grid?.canUndo ?? false) }
+    public func gridCanRedo() -> Bool { !isWritingEdits && (selectedResult?.grid?.canRedo ?? false) }
     public func gridDidChangeColumnWidths(_ widths: [String: Double]) {}
     public func gridDidRequestCopy(format: ClipboardFormat) { copySelection(format: format) }
 

@@ -193,7 +193,7 @@ public struct TableTabView: View {
         PaneBar {
             HStack(spacing: DesignTokens.Spacing.xs + 2) {
                 Image(systemName: Icon.table).foregroundStyle(Color.accentColor)
-                Text(controller.table.name).font(.system(size: 13, weight: .semibold))
+                Text(controller.table.name).font(.system(size: DesignTokens.Typography.body, weight: .semibold))
                 Text(controller.table.schema).font(.caption).foregroundStyle(.tertiary)
             }
             .help(controller.table.id)

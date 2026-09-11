@@ -18,21 +18,33 @@ public enum ConnectionState: Sendable, Hashable {
 public struct TransportSummary: Sendable, Hashable {
     public let transport: TransportInfo
     public let isTunnelled: Bool
+    /// Whether the TLS mode checks the server's certificate. Nil when there is no TLS to
+    /// speak of (a file, a tunnel without TLS inside it).
+    public let verifiesCertificate: Bool?
 
-    public init(transport: TransportInfo, isTunnelled: Bool) {
+    public init(transport: TransportInfo, isTunnelled: Bool, verifiesCertificate: Bool? = nil) {
         self.transport = transport
         self.isTunnelled = isTunnelled
+        self.verifiesCertificate = verifiesCertificate
     }
 
     /// True when every hop is protected: TLS on the wire, or an SSH tunnel around it.
     /// A database file read in-process has no hop to protect.
     public var isProtected: Bool { transport.isEncrypted || isTunnelled || transport.isLocalFile }
 
+    /// True when the wire is encrypted by TLS whose certificate was not checked: `prefer`
+    /// or `require`. An impostor server would not be noticed, and the status bar says so
+    /// rather than showing the same closed lock as `verify-full` (ADR-0046).
+    public var isEncryptedButUnverified: Bool {
+        transport.isEncrypted && verifiesCertificate == false && !isTunnelled
+    }
+
     /// One line for the status bar tooltip.
     public var summary: String {
         var parts: [String] = []
         if isTunnelled { parts.append("SSH tunnel") }
         parts.append(transport.summary)
+        if isEncryptedButUnverified { parts.append("certificate not verified — choose verify-full to detect an impostor") }
         return parts.joined(separator: " · ")
     }
 }
@@ -551,7 +563,10 @@ public actor ConnectionSession {
     /// first connection is up.
     public var transportSummary: TransportSummary? {
         guard let first = pool.first else { return nil }
-        return TransportSummary(transport: first.connection.transport, isTunnelled: tunnel != nil)
+        return TransportSummary(
+            transport: first.connection.transport, isTunnelled: tunnel != nil,
+            verifiesCertificate: config.dialect.isFileBased ? nil : config.tls.mode.verifiesCertificate
+        )
     }
 
     /// Closes connections that have sat unused past the idle timeout.

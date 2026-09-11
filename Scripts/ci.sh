@@ -85,6 +85,16 @@ done
 echo "  ok"
 
 # ---------------------------------------------------------------------------
+bold "Design token lint"
+# Type sizes come from DesignTokens.Typography, never as literals in a view (ADR-0046).
+literal_fonts="$(grep -rn --include='*.swift' -E '\.system\(size: [0-9]' App/Tinker | grep -v 'Shared/DesignTokens.swift' || true)"
+if [[ -n "$literal_fonts" ]]; then
+    echo "$literal_fonts"
+    fail "font sizes must come from DesignTokens.Typography"
+fi
+echo "  ok"
+
+# ---------------------------------------------------------------------------
 bold "Tests"
 PG_SET=0;    [[ -n "${TINKER_TEST_PG_URL:-}${TINKER_TEST_PG_URLS:-}" ]]       && PG_SET=1
 MYSQL_SET=0; [[ -n "${TINKER_TEST_MYSQL_URL:-}${TINKER_TEST_MYSQL_URLS:-}" ]] && MYSQL_SET=1

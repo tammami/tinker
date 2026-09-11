@@ -51,7 +51,7 @@ public enum CommitScope: Sendable, Hashable {
 ///
 /// Nothing reaches the server until the commit runs: the buffer is an overlay the grid
 /// reads through, and discarding it restores the loaded values exactly (SPEC §12.3).
-public struct EditBuffer: Sendable {
+public struct EditBuffer: Sendable, Equatable {
     private var edits: [Int: RowEdit] = [:]
     private var deletions: Set<Int> = []
     private var deletionIdentities: [Int: [String: DBValue]] = [:]

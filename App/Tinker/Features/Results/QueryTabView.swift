@@ -311,9 +311,9 @@ public struct QueryTabView: View {
         } label: {
             HStack(spacing: DesignTokens.Spacing.xs) {
                 Image(systemName: result.error != nil ? Icon.error : (result.grid == nil ? Icon.success : Icon.data))
-                    .font(.system(size: 10))
+                    .font(.system(size: DesignTokens.Typography.chipIcon))
                     .foregroundStyle(result.error != nil ? .red : (isSelected ? Color.accentColor : .secondary))
-                Text(result.label).lineLimit(1).font(.system(size: 11, weight: isSelected ? .medium : .regular))
+                Text(result.label).lineLimit(1).font(.system(size: DesignTokens.Typography.chip, weight: isSelected ? .medium : .regular))
                 if let grid = result.grid {
                     Badge(text: "\(grid.displayRowCount)")
                 }

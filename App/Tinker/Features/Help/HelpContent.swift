@@ -135,7 +135,7 @@ enum HelpContent {
                 HelpSection(
                     heading: "How writes work",
                     paragraphs: [
-                        "Edit a cell in place, add a row with ⌘+, delete rows with ⌘−, set NULL with ⌘⌫. With auto-commit off, nothing reaches the server until you commit (⌘⇧S) and Rollback (⌘⇧R) discards everything pending; with it on, a delete asks before it runs.",
+                        "Edit a cell in place, add a row with ⌘+, delete rows with ⌘−, set NULL with ⌘⌫. ⌘Z takes back one pending change at a time, and ⌘⇧Z puts it back. With auto-commit off, nothing reaches the server until you commit (⌘⇧S) and Rollback (⌘⇧R) discards everything pending; with it on, a delete asks before it runs.",
                         "Commit shows the exact statements first. Every UPDATE and DELETE targets the primary key with the row's original values and runs inside one transaction that verifies each statement touched exactly one row; otherwise the whole transaction rolls back and the server's message is shown verbatim.",
                     ]),
                 HelpSection(

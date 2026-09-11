@@ -68,7 +68,53 @@ public protocol GridDataLoader: Sendable {
 public final class GridModel {
     public private(set) var columns: [ColumnMeta] = []
     public private(set) var buffer: RowBuffer
-    public var edits = EditBuffer()
+    /// Every change to the buffer is recorded for ⌘Z, whoever makes it: the grid's own
+    /// methods and the controllers that reach in. Undo below "Discard all" was the one
+    /// thing a spreadsheet has that the grid did not (SPEC §12.3).
+    public var edits = EditBuffer() {
+        didSet {
+            guard !isRestoringEdits, oldValue != edits else { return }
+            undoStack.append(oldValue)
+            if undoStack.count > Self.undoDepth { undoStack.removeFirst(undoStack.count - Self.undoDepth) }
+            redoStack.removeAll()
+        }
+    }
+
+    // MARK: - Undo
+
+    static let undoDepth = 200
+    private var undoStack: [EditBuffer] = []
+    private var redoStack: [EditBuffer] = []
+    private var isRestoringEdits = false
+
+    public var canUndo: Bool { !undoStack.isEmpty }
+    public var canRedo: Bool { !redoStack.isEmpty }
+
+    /// Puts the edits back the way they were before the last change.
+    public func undo() {
+        guard let previous = undoStack.popLast() else { return }
+        redoStack.append(edits)
+        restore(previous)
+    }
+
+    public func redo() {
+        guard let next = redoStack.popLast() else { return }
+        undoStack.append(edits)
+        restore(next)
+    }
+
+    private func restore(_ buffer: EditBuffer) {
+        isRestoringEdits = true
+        edits = buffer
+        isRestoringEdits = false
+    }
+
+    /// Forgets the history: after a commit the written edits are not there to undo, and
+    /// after a reload the row indices they name mean nothing.
+    private func clearUndoHistory() {
+        undoStack.removeAll()
+        redoStack.removeAll()
+    }
 
     /// Rows known to exist. Grows as pages arrive and is exact once ``isExhausted``.
     public private(set) var rowCount = 0
@@ -398,6 +444,7 @@ public final class GridModel {
         loadGeneration += 1
         buffer.removeAll()
         edits.discard(keepingNewRows ? .loadedRowsOnly : .everything)
+        clearUndoHistory()
         rowCount = 0
         totalCount = nil
         isExhausted = false
@@ -496,6 +543,9 @@ public final class GridModel {
         let statements = try edits.statements(using: generator, snapshot: snapshot)
         let result = try await GridCommitter().commit(statements, using: runner)
         edits.remove(committed: snapshot)
+        // What was written is on the server; undoing it here would show the grid a state
+        // the server no longer has.
+        clearUndoHistory()
         return result
     }
 }

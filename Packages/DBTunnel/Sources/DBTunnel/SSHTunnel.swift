@@ -18,7 +18,12 @@ public struct SSHTunnelProvider: TunnelProvider {
     /// The event loop group tunnels run on. Shared, and never shut down.
     static let eventLoopGroup: MultiThreadedEventLoopGroup = .init(numberOfThreads: 2)
 
-    public init() {}
+    /// Where host keys are read and recorded, and who confirms a new one (ADR-0046).
+    public let trust: HostKeyTrust
+
+    public init(trust: HostKeyTrust = .openSSHDefault) {
+        self.trust = trust
+    }
 
     public func openTunnel(
         _ config: SSHConfig,
@@ -27,7 +32,7 @@ public struct SSHTunnelProvider: TunnelProvider {
         secrets: any SecretStore,
         logger: Logger
     ) async throws -> any Tunnel {
-        let client = try await Self.connectClient(config, secrets: secrets, logger: logger)
+        let client = try await Self.connectClient(config, secrets: secrets, trust: trust, logger: logger)
         do {
             return try await SSHPortForward(
                 client: client, remoteHost: remoteHost, remotePort: remotePort, logger: logger
@@ -47,14 +52,15 @@ public struct SSHTunnelProvider: TunnelProvider {
     static func connectClient(
         _ config: SSHConfig,
         secrets: any SecretStore,
+        trust: HostKeyTrust = .openSSHDefault,
         logger: Logger
     ) async throws -> SSHClient {
         let attempts = try await authenticationAttempts(for: config, secrets: secrets)
-        let validator = try hostKeyValidator(for: config)
+        let validator = try hostKeyValidator(for: config, trust: trust)
 
         var jumpClient: SSHClient?
         if let jump = config.jumpHost?.value {
-            jumpClient = try await connectClient(jump, secrets: secrets, logger: logger)
+            jumpClient = try await connectClient(jump, secrets: secrets, trust: trust, logger: logger)
         }
 
         var refused: [String] = []
@@ -171,31 +177,33 @@ public struct SSHTunnelProvider: TunnelProvider {
     /// `strict` trusts only keys already in `known_hosts`. `accept-new` additionally
     /// accepts a host that has never been seen, and records it. `ignore` accepts anything
     /// and is only reachable from an explicit checkbox with a warning.
-    static func hostKeyValidator(for config: SSHConfig) throws -> SSHHostKeyValidator {
-        let file = KnownHostsFile()
-        let revoked = Set(file.revokedKeys(forHost: config.host, port: config.port))
+    static func hostKeyValidator(for config: SSHConfig, trust: HostKeyTrust = .openSSHDefault) throws -> SSHHostKeyValidator {
+        let revoked = trust.revokedKeys(host: config.host, port: config.port)
+        let keys = trust.trustedKeys(host: config.host, port: config.port)
         switch config.knownHostsPolicy {
         case .ignore:
-            return .acceptAnything()
+            // A revoked key is refused even here: `ignore` means "do not check who this
+            // is", not "trust a key the user has explicitly marked as compromised".
+            return .custom(RevocationAwareHostKeyValidator(trusted: [], revoked: revoked, recordingTo: nil, acceptAnything: true))
         case .strict:
-            let keys = file.keys(forHost: config.host, port: config.port)
             guard !keys.isEmpty else {
                 throw DBError.tunnelFailed(
                     stage: .ssh,
-                    underlying: "\(config.host) is not in \(file.path). "
+                    underlying: "\(config.host) is not in \(trust.readPaths.joined(separator: " or ")). "
                         + "Connect once with ssh, or set the host-key policy to accept new hosts."
                 )
             }
-            return .custom(RevocationAwareHostKeyValidator(trusted: Set(keys), revoked: revoked, recordingTo: nil))
+            return .custom(RevocationAwareHostKeyValidator(trusted: keys, revoked: revoked, recordingTo: nil))
         case .acceptNew:
-            let keys = file.keys(forHost: config.host, port: config.port)
             if !keys.isEmpty {
-                return .custom(RevocationAwareHostKeyValidator(trusted: Set(keys), revoked: revoked, recordingTo: nil))
+                return .custom(RevocationAwareHostKeyValidator(trusted: keys, revoked: revoked, recordingTo: nil))
             }
             return .custom(
                 RevocationAwareHostKeyValidator(
                     trusted: [], revoked: revoked,
-                    recordingTo: RecordingHostKeyValidator(file: file, host: config.host, port: config.port)))
+                    recordingTo: RecordingHostKeyValidator(
+                        file: KnownHostsFile(path: trust.recordPath), host: config.host, port: config.port,
+                        confirmation: trust.confirmation)))
         }
     }
 
@@ -204,6 +212,14 @@ public struct SSHTunnelProvider: TunnelProvider {
     ) -> DBError {
         if let dbError = error as? DBError { return dbError }
         let text = String(reflecting: error)
+        if let refused = error as? HostKeyRefusedByUser {
+            return .tunnelFailed(
+                stage: .ssh,
+                underlying:
+                    "You declined the host key of \(refused.presentation.host) "
+                    + "(\(refused.presentation.keyType) \(refused.presentation.fingerprint))"
+            )
+        }
         if error is RevokedHostKey || text.contains("RevokedHostKey") {
             return .tunnelFailed(
                 stage: .ssh,
@@ -249,12 +265,17 @@ final class RevocationAwareHostKeyValidator: NIOSSHClientServerAuthenticationDel
     private let trusted: Set<NIOSSHPublicKey>
     private let revoked: Set<NIOSSHPublicKey>
     private let recorder: RecordingHostKeyValidator?
+    /// The `ignore` policy: any key but a revoked one.
+    private let acceptAnything: Bool
 
-    init(trusted: Set<NIOSSHPublicKey>, revoked: Set<NIOSSHPublicKey>, recordingTo recorder: RecordingHostKeyValidator?)
-    {
+    init(
+        trusted: Set<NIOSSHPublicKey>, revoked: Set<NIOSSHPublicKey>, recordingTo recorder: RecordingHostKeyValidator?,
+        acceptAnything: Bool = false
+    ) {
         self.trusted = trusted
         self.revoked = revoked
         self.recorder = recorder
+        self.acceptAnything = acceptAnything
     }
 
     func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
@@ -262,7 +283,7 @@ final class RevocationAwareHostKeyValidator: NIOSSHClientServerAuthenticationDel
             validationCompletePromise.fail(RevokedHostKey())
             return
         }
-        if trusted.contains(hostKey) {
+        if acceptAnything || trusted.contains(hostKey) {
             validationCompletePromise.succeed(())
             return
         }
@@ -286,19 +307,55 @@ final class RecordingHostKeyValidator: NIOSSHClientServerAuthenticationDelegate,
     private let file: KnownHostsFile
     private let host: String
     private let port: Int
+    private let confirmation: HostKeyConfirmation?
 
-    init(file: KnownHostsFile, host: String, port: Int) {
+    init(file: KnownHostsFile, host: String, port: Int, confirmation: HostKeyConfirmation? = nil) {
         self.file = file
         self.host = host
         self.port = port
+        self.confirmation = confirmation
     }
 
     func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
-        // A failure to record must not refuse a connection the policy already accepted;
-        // it only means the key is offered again next time.
-        try? file.append(host: host, port: port, key: hostKey)
-        validationCompletePromise.succeed(())
+        guard let confirmation else {
+            record(hostKey)
+            validationCompletePromise.succeed(())
+            return
+        }
+        // The user sees the fingerprint and decides, the way `ssh` asks on first contact;
+        // the handshake waits on the event loop's promise meanwhile. The promise travels
+        // in a box: it is resolved from one task, once, which is what a promise is for.
+        let presentation = HostKeyPresentation(host: host, port: port, key: hostKey)
+        let pending = PendingValidation(promise: validationCompletePromise)
+        let file = file
+        // The line is prepared here, on the event loop: the key itself does not cross
+        // into the task, only its text.
+        let line = try? KnownHostsFile.line(host: host, port: port, key: hostKey)
+        Task {
+            if await confirmation(presentation) {
+                if let line { try? file.append(line: line) }
+                pending.promise.succeed(())
+            } else {
+                pending.promise.fail(HostKeyRefusedByUser(presentation: presentation))
+            }
+        }
     }
+
+    private final class PendingValidation: @unchecked Sendable {
+        let promise: EventLoopPromise<Void>
+        init(promise: EventLoopPromise<Void>) { self.promise = promise }
+    }
+
+    /// A failure to record must not refuse a connection the policy already accepted; it
+    /// only means the key is offered again next time.
+    private func record(_ hostKey: NIOSSHPublicKey) {
+        try? file.append(host: host, port: port, key: hostKey)
+    }
+}
+
+/// The user looked at the fingerprint and said no.
+struct HostKeyRefusedByUser: Error {
+    let presentation: HostKeyPresentation
 }
 
 /// A local listener whose every accepted connection is forwarded over SSH.

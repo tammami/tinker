@@ -576,11 +576,20 @@ public struct WorkspaceView: View {
                         // A closed lock for TLS or a tunnel, an open one for a wire in the
                         // clear, so a `prefer` connection that fell back to plaintext is
                         // never a secret.
+                        // Three states, not two: `require` encrypts without checking who is
+                        // at the other end, and a closed lock alone would read as more than it
+                        // is (ADR-0046).
                         Label(
-                            transport.isProtected ? "Encrypted" : "Not encrypted",
-                            systemImage: transport.isProtected ? Icon.lock : Icon.unlock
+                            transport.isEncryptedButUnverified
+                                ? "Encrypted, unverified"
+                                : (transport.isProtected ? "Encrypted" : "Not encrypted"),
+                            systemImage: transport.isProtected
+                                ? (transport.isEncryptedButUnverified ? "lock.trianglebadge.exclamationmark" : Icon.lock)
+                                : Icon.unlock
                         )
-                        .foregroundStyle(transport.isProtected ? Color.secondary : Color.orange)
+                        .foregroundStyle(
+                            transport.isProtected && !transport.isEncryptedButUnverified ? Color.secondary : Color.orange
+                        )
                         .help(transport.summary)
                     }
                 }

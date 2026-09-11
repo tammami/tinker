@@ -771,6 +771,25 @@ public final class TableTabController: DataGridDelegate {
     public func gridDidRequestDeleteRows() { deleteSelectedRows() }
     public func gridDidRequestAddRow() { addRow() }
 
+    /// One pending change back or forward. Refused while a write is on the server: what
+    /// is on the wire lands whatever the grid shows.
+    public func gridDidRequestUndo() {
+        guard let model, !isWriting else { return }
+        model.undo()
+        bumpRevision()
+        updateStatus()
+    }
+
+    public func gridDidRequestRedo() {
+        guard let model, !isWriting else { return }
+        model.redo()
+        bumpRevision()
+        updateStatus()
+    }
+
+    public func gridCanUndo() -> Bool { !isWriting && (model?.canUndo ?? false) }
+    public func gridCanRedo() -> Bool { !isWriting && (model?.canRedo ?? false) }
+
     /// The values of one row as the form view edits them, in column order.
     public func rowValues(_ row: Int) -> [DBValue]? {
         guard let model, row >= 0, row < model.displayRowCount else { return nil }

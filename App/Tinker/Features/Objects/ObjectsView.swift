@@ -142,7 +142,7 @@ public struct ObjectsView: View {
             PaneBar {
                 HStack(spacing: DesignTokens.Spacing.xs + 2) {
                     Image(systemName: Icon.schema).foregroundStyle(.teal)
-                    Text(controller.schema.schema).font(.system(size: 13, weight: .semibold))
+                    Text(controller.schema.schema).font(.system(size: DesignTokens.Typography.body, weight: .semibold))
                     Text(controller.schema.database).font(.caption).foregroundStyle(.tertiary)
                 }
                 BarDivider()

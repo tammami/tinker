@@ -228,7 +228,7 @@ public struct ServerActivityView: View {
             PaneBar {
                 HStack(spacing: DesignTokens.Spacing.xs + 2) {
                     Image(systemName: Icon.connection).foregroundStyle(Color.accentColor)
-                    Text("Server").font(.system(size: 13, weight: .semibold))
+                    Text("Server").font(.system(size: DesignTokens.Typography.body, weight: .semibold))
                 }
                 BarDivider()
                 Picker("Pane", selection: $pane) {

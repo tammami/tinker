@@ -30,7 +30,9 @@ public final class AppEnvironment {
         .sqlite: SQLiteDriver.self,
     ])
     public let secrets: any SecretStore
-    public let tunnelProvider: any TunnelProvider = SSHTunnelProvider()
+    // Reads the user's known hosts and Tinker's own; asks before trusting a new host;
+    // records to Tinker's file only (ADR-0046).
+    public let tunnelProvider: any TunnelProvider = SSHTunnelProvider(trust: HostKeyPrompt.trust)
 
     private var store: DBStore?
     private var sessions: [UUID: ConnectionSession] = [:]

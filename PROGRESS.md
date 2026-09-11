@@ -797,3 +797,31 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
   (correct since ADR-0040; long bodies). `ci.sh` keeps its `touch` (ADR-0005, ADR-0045).
 - A unit-test target for the app's own types (logging handler, diagnostics text) would be
   the right home for tests of this phase; listed under Phase 5's app-hosted test work.
+
+## 2026-09-11 — Review, Phase 5: product and UX (ADR-0046)
+
+### Done
+- Undo and redo of pending grid edits, one change at a time, on table tabs and result
+  grids (⌘Z / ⌘⇧Z through Edit › Undo); a commit or reload clears the history.
+- SSH first contact asks with the `SHA256:` fingerprint; an accepted key goes to
+  `Application Support/Tinker/known_hosts`, never to `~/.ssh/known_hosts` (still read);
+  a `known_hosts` entry matches only its own port; `ignore` still refuses `@revoked`.
+- The status bar says "Encrypted, unverified" for `prefer`/`require`, with the fix in
+  the tooltip.
+- Grid cells speak their column, value (NULL, not loaded and binary spelled out), state
+  and selection to VoiceOver.
+- `DesignTokens.Typography` replaces every literal font size; `Scripts/ci.sh` lints it.
+- Help and the changelog describe the new keys and behaviour.
+
+### Tests
+- `GridModelTests.testUndoAndRedoWalkTheEditsOneChangeAtATime`;
+  `TunnelIntegrationTests.testAcceptNewAsksBeforeTrustingAndRecordsToTheProvidersOwnFile`.
+- `Scripts/ci.sh` green: 697 tests, 0 failures, 2 skips (the Debug-only mysql-nio
+  assertion; the local server trusts the user); app built with zero warnings; smoke test
+  passed.
+
+### Not done / deferred (see ADR-0046)
+- Review sheet before a cross-server paste (hostile source catalog → target).
+- One pane per result set (SPEC §13.2a); the memory-cap banner's Load more.
+- An app-hosted performance target (`NSTableView` hitching) and a unit-test target for the
+  app's own types.

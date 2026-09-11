@@ -50,7 +50,8 @@ final class GridCellView: NSView {
         isSelected: Bool,
         isFocused: Bool,
         alignment: NSTextAlignment,
-        label: String? = nil
+        label: String? = nil,
+        columnName: String? = nil
     ) {
         isFocusedCell = isFocused
         // A value with a label beside it reads as text, whatever the column's type.
@@ -109,8 +110,28 @@ final class GridCellView: NSView {
                 ]
             )
         }
-        setAccessibilityValue(textField.stringValue)
-        setAccessibilityLabel(textField.stringValue)
+        // What VoiceOver reads: the column, then the value — with NULL and "not loaded"
+        // told apart from a text that happens to say "NULL" — then the cell's state.
+        // Selection is painted by the cell, so the table view cannot report it; the cell
+        // says so itself.
+        let spokenValue: String
+        switch value {
+        case .none: spokenValue = "not loaded"
+        case .null: spokenValue = "NULL, no value"
+        case let .bytes(data): spokenValue = "\(data.count) bytes of binary data"
+        case .some: spokenValue = textField.stringValue
+        }
+        let state: String
+        switch changeState {
+        case .edited: state = ", edited"
+        case .inserted: state = ", new row"
+        case .deleted: state = ", marked for deletion"
+        case .unchanged: state = ""
+        }
+        setAccessibilityLabel(columnName ?? "")
+        setAccessibilityValue(spokenValue + state)
+        setAccessibilitySelected(isSelected)
+        setAccessibilityFocused(isFocused)
         needsDisplay = true
     }
 

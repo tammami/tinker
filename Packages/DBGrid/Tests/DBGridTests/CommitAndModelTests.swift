@@ -400,6 +400,43 @@ final class GridModelTests: XCTestCase {
         XCTAssertNil(model.lastError)
     }
 
+    /// ⌘Z takes back one change at a time — a cell, a delete, a new row — whoever made
+    /// it; a commit and a reload forget the history, since what they leave is not undoable.
+    func testUndoAndRedoWalkTheEditsOneChangeAtATime() async throws {
+        let (model, _) = makeModel(rows: 10, pageSize: 10)
+        await model.load(page: 0)
+        XCTAssertFalse(model.canUndo)
+
+        model.setValue(.string("one"), row: 0, column: 1)
+        model.setValue(.string("two"), row: 1, column: 1)
+        model.markDeleted(rows: [2])
+        let insert = try XCTUnwrap(model.addRow())
+        model.edits.setInsertValue(.string("new"), id: insert.id, column: "name")
+        XCTAssertEqual(model.edits.pendingStatementCount, 4)
+
+        model.undo()
+        XCTAssertEqual(model.edits.pendingInserts.first?.values.count, 0, "the typed value went, the row stayed")
+        model.undo()
+        XCTAssertTrue(model.edits.pendingInserts.isEmpty)
+        model.undo()
+        XCTAssertEqual(model.changeState(row: 2, column: 1), .unchanged)
+        XCTAssertEqual(model.value(row: 1, column: 1), .string("two"))
+        model.undo()
+        model.undo()
+        XCTAssertEqual(model.value(row: 0, column: 1), .string("row 0"))
+        XCTAssertFalse(model.canUndo)
+        XCTAssertTrue(model.canRedo)
+
+        model.redo()
+        XCTAssertEqual(model.value(row: 0, column: 1), .string("one"))
+        // A new change after an undo drops what could have been redone.
+        model.setValue(.string("three"), row: 3, column: 1)
+        XCTAssertFalse(model.canRedo)
+
+        await model.reload()
+        XCTAssertFalse(model.canUndo, "a reload forgets the history: the indices mean nothing now")
+    }
+
     func testCycleSortGoesAscendingDescendingNone() async {
         let (model, _) = makeModel()
         await model.cycleSort(column: "name", additive: false)

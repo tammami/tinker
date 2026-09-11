@@ -59,6 +59,61 @@ final class TunnelIntegrationTests: XCTestCase {
         return (.password(reference), secrets)
     }
 
+    // MARK: - First contact (ADR-0046)
+
+    /// Under `accept-new`, an unknown host is shown to the user first; a yes records the
+    /// key in the provider's own file, never in the user's, and a no refuses the tunnel.
+    func testAcceptNewAsksBeforeTrustingAndRecordsToTheProvidersOwnFile() async throws {
+        let echo = try await EchoServer.start()
+        defer { Task { await echo.stop() } }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("tinker-trust-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let userFile = directory.appendingPathComponent("user_known_hosts").path
+        let ownFile = directory.appendingPathComponent("tinker_known_hosts").path
+        let (auth, secrets) = try await passwordAuth()
+        var config = makeConfig(auth: auth)
+        config.knownHostsPolicy = .acceptNew
+
+        // The user says no: no tunnel, nothing recorded, the fingerprint in the message.
+        let refusing = SSHTunnelProvider(
+            trust: HostKeyTrust(readPaths: [userFile, ownFile], recordPath: ownFile) { presentation in
+                XCTAssertTrue(presentation.fingerprint.hasPrefix("SHA256:"), presentation.fingerprint)
+                return false
+            })
+        do {
+            _ = try await refusing.openTunnel(config, to: "127.0.0.1", port: echo.port, secrets: secrets, logger: logger)
+            XCTFail("a declined host key must not open a tunnel")
+        } catch let error as DBError {
+            guard case let .tunnelFailed(stage, text) = error else { return XCTFail("got \(error)") }
+            XCTAssertEqual(stage, .ssh)
+            XCTAssertTrue(text.contains("declined"), text)
+            XCTAssertTrue(text.contains("SHA256:"), text)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ownFile))
+
+        // The user says yes: the tunnel opens and the key is in the provider's file only.
+        let accepting = SSHTunnelProvider(
+            trust: HostKeyTrust(readPaths: [userFile, ownFile], recordPath: ownFile) { _ in true })
+        let tunnel = try await accepting.openTunnel(config, to: "127.0.0.1", port: echo.port, secrets: secrets, logger: logger)
+        let isOpen = await tunnel.isOpen
+        XCTAssertTrue(isOpen)
+        await tunnel.close()
+        XCTAssertTrue(KnownHostsFile(path: ownFile).knows(host: "127.0.0.1", port: serverPort))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: userFile), "the user's own file is read, never written")
+
+        // Known now: no question the second time.
+        let asking = AskCounter()
+        let silent = SSHTunnelProvider(
+            trust: HostKeyTrust(readPaths: [userFile, ownFile], recordPath: ownFile) { _ in
+                asking.increment()
+                return false
+            })
+        let again = try await silent.openTunnel(config, to: "127.0.0.1", port: echo.port, secrets: secrets, logger: logger)
+        await again.close()
+        XCTAssertEqual(asking.value, 0, "a recorded host is trusted without asking")
+    }
+
     // MARK: - Forwarding
 
     func testForwardsBytesToALocalEchoServer() async throws {
@@ -484,5 +539,21 @@ final class CollectingHandler: ChannelInboundHandler {
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         var buffer = unwrapInboundIn(data)
         collector.append(buffer.readBytes(length: buffer.readableBytes) ?? [])
+    }
+}
+
+/// Counts how often a host-key question was asked, from whichever task asked it.
+private final class AskCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+    func increment() {
+        lock.lock()
+        count += 1
+        lock.unlock()
     }
 }

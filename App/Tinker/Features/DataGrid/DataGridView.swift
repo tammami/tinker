@@ -36,6 +36,11 @@ public protocol DataGridDelegate: AnyObject {
     func gridDidRequestSetNull()
     func gridDidRequestDeleteRows()
     func gridDidRequestAddRow()
+    /// Edit › Undo and Redo, when the grid is first responder: one pending change at a time.
+    func gridDidRequestUndo()
+    func gridDidRequestRedo()
+    func gridCanUndo() -> Bool
+    func gridCanRedo() -> Bool
     func gridDidRequestAutosize(column: Int)
     /// The context menu's "Show on Map": this one row's geometry, from this column.
     func gridDidRequestShowOnMap(row: Int, column: Int)
@@ -471,7 +476,8 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
             isSelected: selection.contains(row: row, column: columnIndex, columnCount: model.columns.count),
             isFocused: isFocused,
             alignment: model.columns[columnIndex].kind.cellAlignment,
-            label: delegate?.gridReferenceLabel(row: row, column: columnIndex)
+            label: delegate?.gridReferenceLabel(row: row, column: columnIndex),
+            columnName: model.columns[columnIndex].name
         )
         return view
     }
@@ -962,6 +968,25 @@ public final class GridTableView: NSTableView {
     public override func keyDown(with event: NSEvent) {
         if let controller, MainActor.assumeIsolated({ controller.handleKeyDown(event) }) { return }
         super.keyDown(with: event)
+    }
+
+    // Edit › Undo and Redo reach the first responder as `undo:`/`redo:`. The grid answers
+    // them itself, from the model's own history, rather than through an `NSUndoManager`
+    // whose registrations would have to mirror every edit path (SPEC §12.3).
+    @objc public func undo(_ sender: Any?) {
+        MainActor.assumeIsolated { controller?.delegate?.gridDidRequestUndo() }
+    }
+
+    @objc public func redo(_ sender: Any?) {
+        MainActor.assumeIsolated { controller?.delegate?.gridDidRequestRedo() }
+    }
+
+    public override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        switch item.action {
+        case #selector(undo(_:)): return MainActor.assumeIsolated { controller?.delegate?.gridCanUndo() ?? false }
+        case #selector(redo(_:)): return MainActor.assumeIsolated { controller?.delegate?.gridCanRedo() ?? false }
+        default: return super.validateUserInterfaceItem(item)
+        }
     }
 
     /// A right-click selects the cell under the pointer, then offers what can be done with it.

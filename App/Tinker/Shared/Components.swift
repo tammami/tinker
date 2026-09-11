@@ -257,7 +257,7 @@ struct EmptyStateView<Actions: View>: View {
     var body: some View {
         VStack(spacing: DesignTokens.Spacing.md) {
             Image(systemName: icon)
-                .font(.system(size: 28, weight: .regular))
+                .font(.system(size: DesignTokens.Typography.hero, weight: .regular))
                 .foregroundStyle(.secondary)
                 .frame(width: 64, height: 64)
                 .background(Color.primary.opacity(0.05))

@@ -1,4 +1,5 @@
 import DBCore
+import DBSQL
 import Foundation
 
 /// Where a file import stands: how much of the file is behind, and what the server
@@ -125,6 +126,18 @@ public struct TransferOutcome: Sendable, Hashable {
 /// structure across). Rows go through the bounded channel a batch at a time, so a table of
 /// any size crosses with the memory of one batch.
 public enum TransferRunner {
+    /// Shown the structure statements a transfer is about to run on the target — every
+    /// `CREATE`, `ALTER`, `DROP` and view, rebuilt from the *source's* catalog — before
+    /// any of them runs. Returns false to stop the transfer with nothing written.
+    ///
+    /// A default expression or a check constraint on the source is text the target will
+    /// execute; a source with hostile DDL rights could put a statement there. The person
+    /// running the transfer reads the statements first (ADR-0047).
+    public typealias StructureReview = @Sendable ([String]) async -> Bool
+
+    /// The transfer was declined at the structure review.
+    public struct DeclinedAtReview: Error, Sendable {}
+
     public static func run(
         _ selection: DumpSelection,
         from source: any SQLConnection,
@@ -134,17 +147,21 @@ public enum TransferRunner {
         options: DumpOptions,
         renaming: DumpRenaming,
         execution: ScriptExecutionOptions = ScriptExecutionOptions(),
+        review: StructureReview? = nil,
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> TransferOutcome {
-        let channel = ScriptChannel()
+        let dumped = ScriptChannel()
         let dumper = DatabaseDumper(dialect: dialect, targetDialect: targetDialect, options: options, renaming: renaming)
         let executor = ScriptExecutor(dialect: targetDialect ?? dialect, options: execution)
         let shared = TransferState()
+        // With a review, the executor reads from a second channel that only starts once
+        // the structure statements have been seen and accepted.
+        let channel = review == nil ? dumped : ScriptChannel()
 
         return try await withThrowingTaskGroup(of: Either.self) { group in
             group.addTask {
                 do {
-                    let outcome = try await dumper.run(selection, on: source, into: channel) { dump in
+                    let outcome = try await dumper.run(selection, on: source, into: dumped) { dump in
                         Task {
                             await shared.note(dump: dump)
                             progress(await shared.snapshot)
@@ -152,8 +169,14 @@ public enum TransferRunner {
                     }
                     return .dump(outcome)
                 } catch is CancellationError {
-                    await channel.finish()
+                    await dumped.finish()
                     return .dump(DumpOutcome())
+                }
+            }
+            if let review {
+                group.addTask {
+                    try await Self.forwardAfterReview(from: dumped, to: channel, review: review)
+                    return .review
                 }
             }
             group.addTask {
@@ -171,9 +194,11 @@ public enum TransferRunner {
                     switch next {
                     case let .dump(outcome): result.dump = outcome
                     case let .execution(outcome): result.execution = outcome
+                    case .review: break
                     }
                 }
             } catch {
+                await dumped.close()
                 await channel.close()
                 group.cancelAll()
                 throw error
@@ -182,9 +207,60 @@ public enum TransferRunner {
         }
     }
 
+    /// Buffers the structure phase, asks, then forwards it and everything after it.
+    ///
+    /// The dumper emits structure before data (SPEC §14), so "until the first row" is
+    /// "until the first data chunk": a `COPY` block or an `INSERT`. Structure is a
+    /// handful of statements; buffering it costs nothing, and nothing runs on the target
+    /// before the answer.
+    static func forwardAfterReview(
+        from dumped: ScriptChannel, to executor: ScriptChannel, review: StructureReview
+    ) async throws {
+        var buffered: [ScriptChunk] = []
+        var reviewed = false
+        func flushAfterReview() async throws {
+            let statements = buffered.compactMap { chunk -> String? in
+                if case let .statement(sql, _) = chunk { return sql }
+                return nil
+            }
+            guard await review(statements) else { throw DeclinedAtReview() }
+            reviewed = true
+            for chunk in buffered { try await executor.send(chunk) }
+            buffered.removeAll()
+        }
+        do {
+            while let chunk = try await dumped.next() {
+                if reviewed {
+                    try await executor.send(chunk)
+                    continue
+                }
+                let isData: Bool
+                switch chunk {
+                case .copyBegin, .copyLines, .copyEnd: isData = true
+                case let .statement(sql, _):
+                    let keyword = SQLStatement(text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil).leadingKeyword
+                    isData = keyword == "INSERT" || keyword == "REPLACE"
+                }
+                if isData {
+                    try await flushAfterReview()
+                    try await executor.send(chunk)
+                } else {
+                    buffered.append(chunk)
+                }
+            }
+            // Structure only, or nothing at all: still reviewed before it runs.
+            if !reviewed { try await flushAfterReview() }
+            await executor.finish()
+        } catch {
+            await executor.finish(error)
+            throw error
+        }
+    }
+
     private enum Either: Sendable {
         case dump(DumpOutcome)
         case execution(ScriptExecutionOutcome)
+        case review
     }
 
     private actor TransferState {

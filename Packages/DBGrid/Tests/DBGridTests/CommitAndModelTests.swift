@@ -434,7 +434,38 @@ final class GridModelTests: XCTestCase {
         XCTAssertFalse(model.canRedo)
 
         await model.reload()
-        XCTAssertFalse(model.canUndo, "a reload forgets the history: the indices mean nothing now")
+        XCTAssertTrue(model.canUndo, "the history survives a reload: edits are keyed by identity (ADR-0047)")
+        XCTAssertEqual(model.value(row: 3, column: 1), .string("three"))
+    }
+
+    /// Edits are keyed by row identity, so a sort, a filter, another page or a refresh
+    /// moves the rows and the edits move with them (ADR-0047). The fixture keeps row
+    /// order across reloads, so a reload after an edit shows the edit on the same row;
+    /// after a filter that drops every row the edit is still pending, and is written by
+    /// the next commit with its identity in the WHERE clause.
+    func testEditsFollowTheirRowAcrossAReload() async throws {
+        let (model, loader) = makeModel(rows: 100, pageSize: 100)
+        await model.load(page: 0)
+        model.setValue(.string("kept"), row: 3, column: 1)
+        model.markDeleted(rows: [7])
+        XCTAssertEqual(model.edits.pendingStatementCount, 2)
+
+        await model.reload()
+        XCTAssertEqual(model.value(row: 3, column: 1), .string("kept"), "the edit is on the row with id 3 again")
+        XCTAssertEqual(model.changeState(row: 3, column: 1), .edited)
+        XCTAssertEqual(model.rowChangeState(7), .deleted)
+        XCTAssertEqual(model.edits.pendingStatementCount, 2)
+        XCTAssertTrue(model.canUndo, "the history survives too")
+
+        // A sort that reorders nothing in the fixture, but is a reload all the same.
+        await model.setSort([PagePlanner.SortTerm(column: "name", ascending: true)])
+        XCTAssertEqual(model.changeState(row: 3, column: 1), .edited)
+        _ = await loader.requestLog()
+
+        let statements = try model.pendingStatements()
+        XCTAssertEqual(statements.map(\.kind), [.update, .delete])
+        XCTAssertTrue(statements[0].parameters.contains(.int(3)), "the WHERE names the row by its identity")
+        XCTAssertTrue(statements[1].parameters.contains(.int(7)))
     }
 
     func testCycleSortGoesAscendingDescendingNone() async {
@@ -568,8 +599,8 @@ final class CommitScopeTests: XCTestCase {
 
     func makeBuffer() -> EditBuffer {
         var buffer = EditBuffer()
-        buffer.setValue(.int(2), row: 0, column: "a", loaded: .int(1), identity: ["id": .int(1)])
-        buffer.markDeleted(row: 1, identity: ["id": .int(2)])
+        buffer.setValue(.int(2), identity: RowIdentity(["id": .int(1)]), column: "a", loaded: .int(1))
+        buffer.markDeleted(identity: RowIdentity(["id": .int(2)]))
         let insert = buffer.addInsert()
         buffer.setInsertValue(.string("new"), id: insert.id, column: "name")
         return buffer
@@ -592,8 +623,8 @@ final class CommitScopeTests: XCTestCase {
         buffer.discard(.loadedRowsOnly)
         XCTAssertEqual(buffer.pendingInserts.count, 1)
         XCTAssertEqual(buffer.pendingInserts.first?.values["name"], .string("new"))
-        XCTAssertTrue(buffer.editedRowIndices.isEmpty)
-        XCTAssertTrue(buffer.deletedRowIndices.isEmpty)
+        XCTAssertTrue(buffer.editedIdentities.isEmpty)
+        XCTAssertTrue(buffer.deletedIdentities.isEmpty)
         buffer.discard(.everything)
         XCTAssertTrue(buffer.isEmpty)
     }
@@ -605,17 +636,19 @@ final class CommitScopeTests: XCTestCase {
         let snapshot = buffer.snapshot(.loadedRowsOnly)
         // While the write is on the wire: row 0's cell changes again, a new cell on row 5
         // is edited, and a second new row is added.
-        buffer.setValue(.int(3), row: 0, column: "a", loaded: .int(1), identity: ["id": .int(1)])
-        buffer.setValue(.string("x"), row: 5, column: "name", loaded: .string("y"), identity: ["id": .int(6)])
+        buffer.setValue(.int(3), identity: RowIdentity(["id": .int(1)]), column: "a", loaded: .int(1))
+        buffer.setValue(.string("x"), identity: RowIdentity(["id": .int(6)]), column: "name", loaded: .string("y"))
         let second = buffer.addInsert()
         buffer.setInsertValue(.string("second"), id: second.id, column: "name")
 
         buffer.remove(committed: snapshot)
 
-        XCTAssertEqual(buffer.editedRowIndices, [0, 5], "row 0 was changed again; row 5 was never written")
-        XCTAssertTrue(buffer.deletedRowIndices.isEmpty, "the delete was written")
+        XCTAssertEqual(
+            buffer.editedIdentities, [RowIdentity(["id": .int(1)]), RowIdentity(["id": .int(6)])],
+            "id 1 was changed again; id 6 was never written")
+        XCTAssertTrue(buffer.deletedIdentities.isEmpty, "the delete was written")
         XCTAssertEqual(buffer.pendingInserts.count, 2, "loadedRowsOnly wrote no insert")
-        XCTAssertEqual(buffer.value(row: 0, column: "a", loaded: .int(1)), .int(3))
+        XCTAssertEqual(buffer.value(identity: RowIdentity(["id": .int(1)]), column: "a", loaded: .int(1)), .int(3))
 
         // A full commit of what is left clears exactly that; nothing added later is touched.
         let everything = buffer.snapshot(.everything)
@@ -624,7 +657,7 @@ final class CommitScopeTests: XCTestCase {
         let third = buffer.addInsert()
         buffer.setInsertValue(.string("third"), id: third.id, column: "name")
         buffer.remove(committed: everything)
-        XCTAssertTrue(buffer.editedRowIndices.isEmpty)
+        XCTAssertTrue(buffer.editedIdentities.isEmpty)
         XCTAssertEqual(buffer.pendingInserts.map(\.id), [third.id])
     }
 

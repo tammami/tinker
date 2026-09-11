@@ -109,31 +109,31 @@ final class EditBufferTests: XCTestCase {
     func testEditsShowThroughTheOverlay() {
         var buffer = EditBuffer()
         XCTAssertTrue(buffer.isEmpty)
-        buffer.setValue(.string("new"), row: 0, column: "name", loaded: .string("old"), identity: identity)
-        XCTAssertEqual(buffer.value(row: 0, column: "name", loaded: .string("old")), .string("new"))
-        XCTAssertEqual(buffer.state(row: 0, column: "name"), .edited)
-        XCTAssertEqual(buffer.state(row: 0, column: "other"), .unchanged)
+        buffer.setValue(.string("new"), identity: RowIdentity(identity), column: "name", loaded: .string("old"))
+        XCTAssertEqual(buffer.value(identity: RowIdentity(identity), column: "name", loaded: .string("old")), .string("new"))
+        XCTAssertEqual(buffer.state(identity: RowIdentity(identity), column: "name"), .edited)
+        XCTAssertEqual(buffer.state(identity: RowIdentity(identity), column: "other"), .unchanged)
         XCTAssertEqual(buffer.pendingStatementCount, 1)
     }
 
     func testSettingACellBackToItsLoadedValueClearsTheEdit() {
         var buffer = EditBuffer()
-        buffer.setValue(.string("new"), row: 0, column: "name", loaded: .string("old"), identity: identity)
-        buffer.setValue(.string("old"), row: 0, column: "name", loaded: .string("old"), identity: identity)
+        buffer.setValue(.string("new"), identity: RowIdentity(identity), column: "name", loaded: .string("old"))
+        buffer.setValue(.string("old"), identity: RowIdentity(identity), column: "name", loaded: .string("old"))
         XCTAssertTrue(buffer.isEmpty)
-        XCTAssertEqual(buffer.state(row: 0, column: "name"), .unchanged)
+        XCTAssertEqual(buffer.state(identity: RowIdentity(identity), column: "name"), .unchanged)
     }
 
     func testDeletionSupersedesEdits() {
         var buffer = EditBuffer()
-        buffer.setValue(.string("new"), row: 3, column: "name", loaded: .string("old"), identity: identity)
-        buffer.markDeleted(row: 3, identity: identity)
-        XCTAssertEqual(buffer.rowState(3), .deleted)
-        XCTAssertEqual(buffer.state(row: 3, column: "name"), .deleted)
+        buffer.setValue(.string("new"), identity: RowIdentity(identity), column: "name", loaded: .string("old"))
+        buffer.markDeleted(identity: RowIdentity(identity))
+        XCTAssertEqual(buffer.rowState(identity: RowIdentity(identity)), .deleted)
+        XCTAssertEqual(buffer.state(identity: RowIdentity(identity), column: "name"), .deleted)
         XCTAssertEqual(buffer.pendingStatementCount, 1)
 
-        buffer.unmarkDeleted(row: 3)
-        XCTAssertEqual(buffer.rowState(3), .unchanged)
+        buffer.unmarkDeleted(identity: RowIdentity(identity))
+        XCTAssertEqual(buffer.rowState(identity: RowIdentity(identity)), .unchanged)
         XCTAssertTrue(buffer.isEmpty)
     }
 
@@ -149,13 +149,13 @@ final class EditBufferTests: XCTestCase {
 
     func testDiscardRestoresEverything() {
         var buffer = EditBuffer()
-        buffer.setValue(.int(1), row: 0, column: "a", loaded: .int(0), identity: identity)
-        buffer.markDeleted(row: 1, identity: identity)
+        buffer.setValue(.int(1), identity: RowIdentity(identity), column: "a", loaded: .int(0))
+        buffer.markDeleted(identity: RowIdentity(["id": .int(8)]))
         buffer.addInsert()
         XCTAssertEqual(buffer.pendingStatementCount, 3)
         buffer.discardAll()
         XCTAssertTrue(buffer.isEmpty)
-        XCTAssertEqual(buffer.value(row: 0, column: "a", loaded: .int(0)), .int(0))
+        XCTAssertEqual(buffer.value(identity: RowIdentity(identity), column: "a", loaded: .int(0)), .int(0))
     }
 
     /// SPEC §12.6: three cells across two rows commit as exactly two UPDATE statements.
@@ -163,9 +163,9 @@ final class EditBufferTests: XCTestCase {
         var buffer = EditBuffer()
         let first: [String: DBValue] = ["id": .int(1)]
         let second: [String: DBValue] = ["id": .int(2)]
-        buffer.setValue(.string("a"), row: 0, column: "name", loaded: .string("x"), identity: first)
-        buffer.setValue(.int(30), row: 0, column: "age", loaded: .int(29), identity: first)
-        buffer.setValue(.string("b"), row: 1, column: "name", loaded: .string("y"), identity: second)
+        buffer.setValue(.string("a"), identity: RowIdentity(first), column: "name", loaded: .string("x"))
+        buffer.setValue(.int(30), identity: RowIdentity(first), column: "age", loaded: .int(29))
+        buffer.setValue(.string("b"), identity: RowIdentity(second), column: "name", loaded: .string("y"))
 
         let generator = DMLGenerator(
             dialect: .postgresql,
@@ -182,8 +182,8 @@ final class EditBufferTests: XCTestCase {
     func testStatementOrderIsUpdatesThenDeletesThenInserts() throws {
         var buffer = EditBuffer()
         buffer.addInsert(PendingInsert(values: ["name": .string("new")]))
-        buffer.markDeleted(row: 5, identity: ["id": .int(5)])
-        buffer.setValue(.string("edited"), row: 1, column: "name", loaded: .string("x"), identity: ["id": .int(1)])
+        buffer.markDeleted(identity: RowIdentity(["id": .int(5)]))
+        buffer.setValue(.string("edited"), identity: RowIdentity(["id": .int(1)]), column: "name", loaded: .string("x"))
 
         let generator = DMLGenerator(
             dialect: .postgresql,

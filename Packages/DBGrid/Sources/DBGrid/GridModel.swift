@@ -281,7 +281,8 @@ public final class GridModel {
             return insert.values[columns[column].name] ?? .null
         }
         guard let loaded = buffer.row(at: row), column < loaded.count else { return nil }
-        return edits.value(row: row, column: columns[column].name, loaded: loaded[column])
+        guard edits.isEmpty == false, let identity = rowIdentity(row) else { return loaded[column] }
+        return edits.value(identity: identity, column: columns[column].name, loaded: loaded[column])
     }
 
     /// The row as loaded, ignoring pending edits.
@@ -290,12 +291,19 @@ public final class GridModel {
     public func changeState(row: Int, column: Int) -> CellChangeState {
         guard column < columns.count else { return .unchanged }
         if isPendingInsertRow(row) { return .inserted }
-        return edits.state(row: row, column: columns[column].name)
+        guard !edits.isEmpty, let identity = rowIdentity(row) else { return .unchanged }
+        return edits.state(identity: identity, column: columns[column].name)
     }
 
     public func rowChangeState(_ row: Int) -> CellChangeState {
         if isPendingInsertRow(row) { return .inserted }
-        return edits.rowState(row)
+        guard !edits.isEmpty, let identity = rowIdentity(row) else { return .unchanged }
+        return edits.rowState(identity: identity)
+    }
+
+    /// The identity of the loaded row at `row`, the key its edits live under.
+    public func rowIdentity(_ row: Int) -> RowIdentity? {
+        identity(ofRow: row).map(RowIdentity.init)
     }
 
     /// The identity values of a loaded row, as loaded.
@@ -427,6 +435,14 @@ public final class GridModel {
         rowCount >= buffer.rowCapacity
     }
 
+    /// How much "Load more" adds each time (SPEC §12.1: "Load more (200k)").
+    public static let memoryCapStep = 200_000
+
+    /// Lets the stream go on past the cap by another `rows`, at the user's request.
+    public func raiseMemoryCap(by rows: Int = GridModel.memoryCapStep) {
+        buffer.rowCapacity += max(0, rows)
+    }
+
     /// Counts rows for the current filter.
     public func loadExactCount() async {
         do {
@@ -436,15 +452,15 @@ public final class GridModel {
         }
     }
 
-    /// Throws away every loaded row and re-reads the page. Pending edits to loaded rows
-    /// are discarded too, because their row indices no longer mean anything; new rows
-    /// have no index and can stay when the caller asks (`keepingNewRows`), as an
-    /// auto-commit write does while the user is still filling one in.
-    public func reload(keepingNewRows: Bool = false) async {
+    /// Throws away every loaded row and re-reads the page. Pending edits stay: they are
+    /// keyed by row identity, not position (ADR-0047), so an edit to the row with id 42
+    /// is still that row's edit after a sort, a filter, another page or a refresh, and
+    /// is drawn again wherever the row turns up. `keepingNewRows` is kept for callers
+    /// and no longer changes anything: new rows have no position to lose either.
+    public func reload(keepingNewRows: Bool = true) async {
+        _ = keepingNewRows
         loadGeneration += 1
         buffer.removeAll()
-        edits.discard(keepingNewRows ? .loadedRowsOnly : .everything)
-        clearUndoHistory()
         rowCount = 0
         totalCount = nil
         isExhausted = false
@@ -492,12 +508,9 @@ public final class GridModel {
         }
         guard
             let loaded = buffer.row(at: row), column < loaded.count,
-            let identity = identity(ofRow: row)
+            let identity = rowIdentity(row)
         else { return false }
-        edits.setValue(
-            value, row: row, column: columns[column].name,
-            loaded: loaded[column], identity: identity
-        )
+        edits.setValue(value, identity: identity, column: columns[column].name, loaded: loaded[column])
         return true
     }
 
@@ -509,8 +522,8 @@ public final class GridModel {
                 edits.removeInsert(id: insert.id)
                 continue
             }
-            guard let identity = identity(ofRow: row) else { continue }
-            edits.markDeleted(row: row, identity: identity)
+            guard let identity = rowIdentity(row) else { continue }
+            edits.markDeleted(identity: identity)
         }
         return true
     }

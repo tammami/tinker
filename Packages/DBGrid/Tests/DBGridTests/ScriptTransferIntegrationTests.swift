@@ -304,6 +304,55 @@ final class ScriptTransferIntegrationTests: XCTestCase {
         }
     }
 
+    /// A transfer with a review shows every structure statement before any runs on the
+    /// target. Declined: nothing is written, not even the CREATE. Accepted: the list was
+    /// the structure, and the rows follow (ADR-0047).
+    func testATransferShowsItsStructureBeforeRunningAnyOfIt() async throws {
+        try await withSession { session, server, dialect in
+            _ = try await session.connect()
+            try await session.withLease { source in
+                try await session.withLease { target in
+                    try await createFixture(dialect: dialect, on: source)
+                    let selection = try await selection(
+                        prefix: "xfer_", schema: schema(server), introspector: source.introspector)
+                    let renaming = DumpRenaming(
+                        schema: schema(server),
+                        tableNames: ["xfer_parent": "xfer_parent_copy", "xfer_child": "xfer_child_copy", "xfer_view": "xfer_view_copy"])
+                    let seen = ReviewRecorder()
+
+                    do {
+                        _ = try await TransferRunner.run(
+                            selection, from: source, to: target, dialect: dialect,
+                            options: .preferred(for: dialect), renaming: renaming,
+                            review: { statements in
+                                seen.record(statements)
+                                return false
+                            }
+                        ) { _ in }
+                        XCTFail("a declined review must stop the transfer")
+                    } catch is TransferRunner.DeclinedAtReview {}
+                    XCTAssertTrue(seen.statements.contains { $0.contains("xfer_parent_copy") }, "the CREATEs were shown")
+                    XCTAssertFalse(
+                        seen.statements.contains { $0.hasPrefix("INSERT") }, "rows are not part of the structure review")
+                    let copied = try await target.introspector.tables(in: schema(server)).map(\.name)
+                    XCTAssertFalse(copied.contains("xfer_parent_copy"), "nothing ran on the target after a refusal")
+
+                    let outcome = try await TransferRunner.run(
+                        selection, from: source, to: target, dialect: dialect,
+                        options: .preferred(for: dialect), renaming: renaming,
+                        review: { _ in true }
+                    ) { _ in }
+                    XCTAssertTrue(outcome.execution.failures.isEmpty, outcome.execution.failures.map(\.description).joined())
+                    let parents = try await count("xfer_parent_copy", on: target)
+                    let children = try await count("xfer_child_copy", on: target)
+                    XCTAssertEqual(parents, 3)
+                    XCTAssertEqual(children, 4)
+                    try await dropFixture(dialect: dialect, on: source)
+                }
+            }
+        }
+    }
+
     func testCopyPasteBetweenConnectionsRenamesTables() async throws {
         try await withSession { session, server, dialect in
             _ = try await session.connect()
@@ -579,6 +628,22 @@ private final class ReportCounter: @unchecked Sendable {
     func increment() {
         lock.lock()
         value += 1
+        lock.unlock()
+    }
+}
+
+/// Remembers the statements a structure review was shown, from whichever task showed them.
+private final class ReviewRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seen: [String] = []
+    var statements: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return seen
+    }
+    func record(_ statements: [String]) {
+        lock.lock()
+        seen = statements
         lock.unlock()
     }
 }

@@ -142,6 +142,65 @@ extension SyncIntegrationTests {
         return sessions
     }
 
+    /// The type fixture crosses engines whole: every column `SchemaTranslator` can carry
+    /// arrives, every row arrives, and the columns the three engines share — booleans,
+    /// text, varchar, dates, JSON — read back as the same values.
+    func testAllTypesTransfersAcrossEngines() async throws {
+        let sessions = try await openSessions()
+        defer { Task { for entry in sessions { await entry.session.disconnect() } } }
+        let pairs = sessions.flatMap { source in
+            sessions.filter { $0.server.engine != source.server.engine }.map { (source: source, target: $0) }
+        }
+        if pairs.isEmpty { throw XCTSkip("one engine only; a cross-engine transfer needs two") }
+
+        for pair in pairs {
+            let sourceDialect = pair.source.server.engine.dialect
+            let targetDialect = pair.target.server.engine.dialect
+            let label = "\(sourceDialect.rawValue) → \(targetDialect.rawValue)"
+            try await pair.source.session.withLease { source in
+                try await pair.target.session.withLease { target in
+                    let copy = pair.target.server.table("all_types_xfer")
+                    _ = try? await target.executeCollecting(
+                        "DROP TABLE IF EXISTS \(Identifier.qualified(copy, dialect: targetDialect))")
+                    let tables = try await source.introspector.tables(in: pair.source.server.fixtureSchema)
+                    guard let allTypes = tables.first(where: { $0.name == "all_types" }) else {
+                        return XCTFail("the fixture has no all_types on \(sourceDialect.rawValue)")
+                    }
+                    let selection = DumpSelection(schema: pair.source.server.fixtureSchema, tables: [allTypes])
+                    let renaming = DumpRenaming(
+                        schema: pair.target.server.fixtureSchema, tableNames: ["all_types": "all_types_xfer"])
+                    let outcome = try await TransferRunner.run(
+                        selection, from: source, to: target, dialect: sourceDialect, targetDialect: targetDialect,
+                        options: .preferred(for: targetDialect), renaming: renaming
+                    ) { _ in }
+                    XCTAssertTrue(
+                        outcome.execution.failures.isEmpty,
+                        "\(label): " + outcome.execution.failures.map(\.description).joined(separator: "\n"))
+
+                    let sourceRows = try await source.executeCollecting(
+                        "SELECT c_bool, c_text, c_varchar, c_date, c_json FROM all_types ORDER BY id")
+                    let targetRows = try await target.executeCollecting(
+                        "SELECT c_bool, c_text, c_varchar, c_date, c_json FROM \(Identifier.qualified(copy, dialect: targetDialect)) ORDER BY id"
+                    )
+                    XCTAssertEqual(targetRows.rows.count, sourceRows.rows.count, "\(label): every row crosses")
+                    for (before, after) in zip(sourceRows.rows, targetRows.rows) {
+                        // Text is text everywhere; the rest is compared as "value or NULL"
+                        // plus its text where the engines agree on a canonical form.
+                        XCTAssertEqual(after[1], before[1], "\(label): c_text")
+                        XCTAssertEqual(after[2], before[2], "\(label): c_varchar")
+                        XCTAssertEqual(after[3].isNull, before[3].isNull, "\(label): c_date nullness")
+                        XCTAssertEqual(after[3].text, before[3].text, "\(label): c_date")
+                        XCTAssertEqual(after[4].isNull, before[4].isNull, "\(label): c_json nullness")
+                        // Booleans: SQLite stores 0/1 and reads them back as ints unless declared.
+                        XCTAssertEqual(after[0].isNull, before[0].isNull, "\(label): c_bool nullness")
+                    }
+                    _ = try? await target.executeCollecting(
+                        "DROP TABLE IF EXISTS \(Identifier.qualified(copy, dialect: targetDialect))")
+                }
+            }
+        }
+    }
+
     /// Structure synchronisation writes the target's CREATE for a source table on another
     /// engine, and data synchronisation then fills and reconciles it.
     func testStructureAndDataSynchronizationCrossEngines() async throws {

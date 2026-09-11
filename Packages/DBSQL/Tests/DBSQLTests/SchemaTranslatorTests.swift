@@ -28,7 +28,7 @@ final class SchemaTranslatorTests: XCTestCase {
             ("numeric(80,40)", "decimal(65,30)"), ("character varying(100)", "varchar(100)"),
             ("character varying(20000)", "text"), ("character varying", "text"), ("character(3)", "char(3)"),
             ("text", "longtext"), ("bytea", "longblob"), ("timestamp without time zone", "datetime"),
-            ("timestamp(3) with time zone", "datetime(3)"), ("time with time zone", "time"), ("uuid", "char(36)"),
+            ("timestamp(3) with time zone", "datetime(3)"), ("time with time zone", "varchar(32)"), ("time(3) without time zone", "time(3)"), ("uuid", "char(36)"),
             ("jsonb", "json"), ("integer[]", "json"), ("interval", "varchar(64)"), ("inet", "varchar(45)"),
             ("money", "decimal(19,2)"), ("xml", "longtext"), ("citext", "longtext"),
         ]

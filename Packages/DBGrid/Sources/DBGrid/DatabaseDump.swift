@@ -304,32 +304,42 @@ public struct DatabaseDumper: Sendable {
             // One snapshot for every table, the way `pg_dump` and `mysqldump
             // --single-transaction` read: a row written while the dump runs is either in
             // every table it touches or in none, never in the child but not the parent.
-            // A failed dump leaves the transaction open; the pool's release rolls it back.
+            // The snapshot is this dump's: a dump that stops — cancelled, refused at the
+            // transfer's review, failed — ends it, so the connection is usable for the
+            // next dump without a trip through the pool (SQLite refuses a BEGIN inside
+            // an open transaction).
             _ = try await connection.executeCollecting(Self.snapshotBegin(dialect))
-            for table in ordered where table.kind != .foreignTable {
-                try Task.checkCancellation()
-                state.currentTable = table.name
-                report(force: true)
-                let columns = (columnsByTable[table.ref] ?? []).filter { !$0.isGenerated }
-                guard !columns.isEmpty else { continue }
-                let rows = try await copyRows(
-                    of: table, columns: columns, selection: selection, on: connection, into: channel
-                ) { batchRows in
-                    outcome.rows += batchRows
-                    report()
-                }
-                outcome.statements += rows.statements
-                if targetDialect == .postgresql {
-                    for column in columns where column.isAutoIncrement {
-                        let target = targetName(table.ref, selection)
-                        let name = Identifier.quote(column.name, dialect: .postgresql)
-                        try await emit(
-                            "SELECT setval(pg_get_serial_sequence(\(SQLLiteral.quoteString(target, dialect: .postgresql)), \(SQLLiteral.quoteString(column.name, dialect: .postgresql))), COALESCE(max(\(name)), 1), max(\(name)) IS NOT NULL) FROM \(target)"
-                        )
+            do {
+                for table in ordered where table.kind != .foreignTable {
+                    try Task.checkCancellation()
+                    state.currentTable = table.name
+                    report(force: true)
+                    let columns = (columnsByTable[table.ref] ?? []).filter { !$0.isGenerated }
+                    guard !columns.isEmpty else { continue }
+                    let rows = try await copyRows(
+                        of: table, columns: columns, selection: selection, on: connection, into: channel
+                    ) { batchRows in
+                        outcome.rows += batchRows
+                        report()
                     }
+                    outcome.statements += rows.statements
+                    if targetDialect == .postgresql {
+                        for column in columns where column.isAutoIncrement {
+                            let target = targetName(table.ref, selection)
+                            let name = Identifier.quote(column.name, dialect: .postgresql)
+                            try await emit(
+                                "SELECT setval(pg_get_serial_sequence(\(SQLLiteral.quoteString(target, dialect: .postgresql)), \(SQLLiteral.quoteString(column.name, dialect: .postgresql))), COALESCE(max(\(name)), 1), max(\(name)) IS NOT NULL) FROM \(target)"
+                            )
+                        }
+                    }
+                    state.tablesDone += 1
+                    outcome.tables += 1
                 }
-                state.tablesDone += 1
-                outcome.tables += 1
+            } catch {
+                // Through the driver's own `rollback`, not the event stream: a cancelled
+                // task cannot read a stream, and this must still run.
+                try? await connection.rollback()
+                throw error
             }
             _ = try await connection.executeCollecting("COMMIT")
         } else {

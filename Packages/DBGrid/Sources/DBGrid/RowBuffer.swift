@@ -10,7 +10,8 @@ public struct RowBuffer: Sendable {
     /// Rows per page. Matches the page size the planner queries with.
     public let pageSize: Int
     /// Hard ceiling on rows held in memory.
-    public let rowCapacity: Int
+    /// Raised by the memory-cap banner's "Load more" (SPEC §12.1).
+    public internal(set) var rowCapacity: Int
     /// Pages this far from the most recently touched page are kept; others may be evicted.
     public let residentPageRadius: Int
 

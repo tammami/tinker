@@ -290,7 +290,11 @@ public enum SchemaTranslator {
         case let .binary(length): return "varbinary(\(min(length ?? 255, 65_535)))"
         case .blob: return "longblob"
         case .date: return "date"
-        case let .time(precision, _): return precision.map { "time(\(min($0, 6)))" } ?? "time"
+        case let .time(precision, zoned):
+            // MySQL's TIME has no offset: `02:30:00+07` is refused, not truncated. The
+            // server's text is kept whole in a string column instead.
+            if zoned { return "varchar(32)" }
+            return precision.map { "time(\(min($0, 6)))" } ?? "time"
         case let .timestamp(precision, _):
             // DATETIME rather than TIMESTAMP: no 2038 ceiling and no session-zone rewriting.
             return precision.map { "datetime(\(min($0, 6)))" } ?? "datetime"
@@ -328,7 +332,8 @@ public enum SchemaTranslator {
         case .text, .xml, .interval, .inet, .geometry, .enumeration, .set, .other: return "TEXT"
         case .binary, .blob: return "BLOB"
         case .date: return "DATE"
-        case .time: return "TIME"
+        // A zoned time keeps its offset as text; SQLite's TIME affinity would not.
+        case let .time(_, zoned): return zoned ? "TEXT" : "TIME"
         case .timestamp: return "DATETIME"
         case .uuid: return "UUID"
         case .json, .array: return "JSON"

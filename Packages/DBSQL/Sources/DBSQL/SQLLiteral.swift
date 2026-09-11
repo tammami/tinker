@@ -47,7 +47,9 @@ extension DBValue {
             let text = SQLLiteral.quoteString(value.description, dialect: dialect)
             switch dialect {
             case .postgresql: return value.tzOffsetSeconds == nil ? "\(text)::time" : "\(text)::timetz"
-            case .mysql: return "TIME \(text)"
+            // MySQL's TIME takes no offset; a zoned time lands in a string column, as
+            // `SchemaTranslator` writes it, so it goes across as its text.
+            case .mysql: return value.tzOffsetSeconds == nil ? "TIME \(text)" : text
             case .sqlite: return text
             }
         case let .timestamp(value):

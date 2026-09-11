@@ -2,17 +2,33 @@ import DBCore
 import DBSQL
 import Foundation
 
+/// What names a loaded row: the values of its identity columns as the row was loaded.
+///
+/// Edits are keyed by this, not by the row's position in the grid, so a sort, a filter,
+/// another page or a refresh moves the rows and the edits move with them; an edit to
+/// the row with id 42 is an edit to that row wherever it is drawn, or not drawn, next.
+public struct RowIdentity: Sendable, Hashable {
+    public let values: [String: DBValue]
+
+    public init(_ values: [String: DBValue]) {
+        self.values = values
+    }
+
+    /// A stable order for statement generation, so a commit lists rows the same way
+    /// each time: by identity column name, then by value text.
+    var sortKey: String {
+        values.keys.sorted().map { "\($0)=\(values[$0]?.text ?? "NULL")" }.joined(separator: "|")
+    }
+}
+
 /// A pending change to one loaded row.
 public struct RowEdit: Sendable, Hashable {
-    /// Absolute row index in the result set.
-    public let rowIndex: Int
     /// New values by column name. Only columns the user actually changed.
     public var changes: [String: DBValue]
     /// Identity-column values as the row was loaded, which is what the WHERE clause uses.
     public let originalIdentity: [String: DBValue]
 
-    public init(rowIndex: Int, changes: [String: DBValue] = [:], originalIdentity: [String: DBValue]) {
-        self.rowIndex = rowIndex
+    public init(changes: [String: DBValue] = [:], originalIdentity: [String: DBValue]) {
         self.changes = changes
         self.originalIdentity = originalIdentity
     }
@@ -51,10 +67,10 @@ public enum CommitScope: Sendable, Hashable {
 ///
 /// Nothing reaches the server until the commit runs: the buffer is an overlay the grid
 /// reads through, and discarding it restores the loaded values exactly (SPEC §12.3).
+/// Rows are named by ``RowIdentity``, never by position (ADR-0047).
 public struct EditBuffer: Sendable, Equatable {
-    private var edits: [Int: RowEdit] = [:]
-    private var deletions: Set<Int> = []
-    private var deletionIdentities: [Int: [String: DBValue]] = [:]
+    private var edits: [RowIdentity: RowEdit] = [:]
+    private var deletions: Set<RowIdentity> = []
     private var insertions: [PendingInsert] = []
 
     public init() {}
@@ -66,26 +82,26 @@ public struct EditBuffer: Sendable, Equatable {
         edits.count { !$0.value.changes.isEmpty } + deletions.count + insertions.count
     }
 
-    public var editedRowIndices: Set<Int> { Set(edits.keys.filter { !(edits[$0]?.changes.isEmpty ?? true) }) }
-    public var deletedRowIndices: Set<Int> { deletions }
+    public var editedIdentities: Set<RowIdentity> { Set(edits.keys.filter { !(edits[$0]?.changes.isEmpty ?? true) }) }
+    public var deletedIdentities: Set<RowIdentity> { deletions }
     public var pendingInserts: [PendingInsert] { insertions }
 
     // MARK: - Reading through the overlay
 
     /// The value the grid should show: the pending change if there is one, else `loaded`.
-    public func value(row: Int, column: String, loaded: DBValue) -> DBValue {
-        edits[row]?.changes[column] ?? loaded
+    public func value(identity: RowIdentity, column: String, loaded: DBValue) -> DBValue {
+        edits[identity]?.changes[column] ?? loaded
     }
 
-    public func state(row: Int, column: String) -> CellChangeState {
-        if deletions.contains(row) { return .deleted }
-        if edits[row]?.changes[column] != nil { return .edited }
+    public func state(identity: RowIdentity, column: String) -> CellChangeState {
+        if deletions.contains(identity) { return .deleted }
+        if edits[identity]?.changes[column] != nil { return .edited }
         return .unchanged
     }
 
-    public func rowState(_ row: Int) -> CellChangeState {
-        if deletions.contains(row) { return .deleted }
-        if !(edits[row]?.changes.isEmpty ?? true) { return .edited }
+    public func rowState(identity: RowIdentity) -> CellChangeState {
+        if deletions.contains(identity) { return .deleted }
+        if !(edits[identity]?.changes.isEmpty ?? true) { return .edited }
         return .unchanged
     }
 
@@ -95,35 +111,32 @@ public struct EditBuffer: Sendable, Equatable {
     /// user who changes their mind leaves nothing pending.
     public mutating func setValue(
         _ value: DBValue,
-        row: Int,
+        identity: RowIdentity,
         column: String,
-        loaded: DBValue,
-        identity: [String: DBValue]
+        loaded: DBValue
     ) {
-        var edit = edits[row] ?? RowEdit(rowIndex: row, originalIdentity: identity)
+        var edit = edits[identity] ?? RowEdit(originalIdentity: identity.values)
         if value == loaded {
             edit.changes.removeValue(forKey: column)
         } else {
             edit.changes[column] = value
         }
         if edit.changes.isEmpty {
-            edits.removeValue(forKey: row)
+            edits.removeValue(forKey: identity)
         } else {
-            edits[row] = edit
+            edits[identity] = edit
         }
     }
 
-    /// Marks a loaded row for deletion, remembering how to find it.
-    public mutating func markDeleted(row: Int, identity: [String: DBValue]) {
-        deletions.insert(row)
-        deletionIdentities[row] = identity
+    /// Marks a loaded row for deletion.
+    public mutating func markDeleted(identity: RowIdentity) {
+        deletions.insert(identity)
         // A row being deleted has no use for pending cell edits.
-        edits.removeValue(forKey: row)
+        edits.removeValue(forKey: identity)
     }
 
-    public mutating func unmarkDeleted(row: Int) {
-        deletions.remove(row)
-        deletionIdentities.removeValue(forKey: row)
+    public mutating func unmarkDeleted(identity: RowIdentity) {
+        deletions.remove(identity)
     }
 
     @discardableResult
@@ -149,7 +162,6 @@ public struct EditBuffer: Sendable, Equatable {
     public mutating func discardAll() {
         edits.removeAll()
         deletions.removeAll()
-        deletionIdentities.removeAll()
         insertions.removeAll()
     }
 
@@ -161,16 +173,14 @@ public struct EditBuffer: Sendable, Equatable {
         case .loadedRowsOnly:
             edits.removeAll()
             deletions.removeAll()
-            deletionIdentities.removeAll()
         }
     }
 
     /// What a commit is about to write, taken before it runs so that only these changes
     /// are cleared afterwards and an edit made while the write was on the wire survives.
     public struct Snapshot: Sendable {
-        let edits: [Int: RowEdit]
-        let deletions: Set<Int>
-        let deletionIdentities: [Int: [String: DBValue]]
+        let edits: [RowIdentity: RowEdit]
+        let deletions: Set<RowIdentity>
         let insertions: [PendingInsert]
 
         public var isEmpty: Bool { edits.isEmpty && deletions.isEmpty && insertions.isEmpty }
@@ -181,28 +191,24 @@ public struct EditBuffer: Sendable, Equatable {
         Snapshot(
             edits: edits.filter { !$0.value.changes.isEmpty },
             deletions: deletions,
-            deletionIdentities: deletionIdentities,
             insertions: scope == .everything ? insertions : [])
     }
 
     /// Clears exactly what `snapshot` wrote. A cell changed again since the snapshot was
     /// taken keeps its newer value pending; a new row filled in since stays pending.
     public mutating func remove(committed snapshot: Snapshot) {
-        for (row, written) in snapshot.edits {
-            guard var current = edits[row] else { continue }
+        for (identity, written) in snapshot.edits {
+            guard var current = edits[identity] else { continue }
             for (column, value) in written.changes where current.changes[column] == value {
                 current.changes.removeValue(forKey: column)
             }
             if current.changes.isEmpty {
-                edits.removeValue(forKey: row)
+                edits.removeValue(forKey: identity)
             } else {
-                edits[row] = current
+                edits[identity] = current
             }
         }
-        for row in snapshot.deletions {
-            deletions.remove(row)
-            deletionIdentities.removeValue(forKey: row)
-        }
+        for identity in snapshot.deletions { deletions.remove(identity) }
         let writtenIDs = Set(snapshot.insertions.map(\.id))
         insertions.removeAll { writtenIDs.contains($0.id) }
     }
@@ -232,18 +238,15 @@ public struct EditBuffer: Sendable, Equatable {
     /// The statements that write exactly `snapshot`.
     public func statements(using generator: DMLGenerator, snapshot: Snapshot) throws -> [GeneratedStatement] {
         var statements: [GeneratedStatement] = []
-        for row in snapshot.edits.keys.sorted() {
-            guard let edit = snapshot.edits[row], !edit.changes.isEmpty else { continue }
+        for identity in snapshot.edits.keys.sorted(by: { $0.sortKey < $1.sortKey }) {
+            guard let edit = snapshot.edits[identity], !edit.changes.isEmpty else { continue }
             statements.append(
                 try generator.update(
                     changes: edit.changes, originalIdentity: edit.originalIdentity
                 ))
         }
-        for row in snapshot.deletions.sorted() {
-            guard let identity = snapshot.deletionIdentities[row] else {
-                throw DMLGeneratorError.noRowIdentity(generator.table)
-            }
-            statements.append(try generator.delete(originalIdentity: identity))
+        for identity in snapshot.deletions.sorted(by: { $0.sortKey < $1.sortKey }) {
+            statements.append(try generator.delete(originalIdentity: identity.values))
         }
         for insert in snapshot.insertions {
             statements.append(try generator.insert(values: insert.values))

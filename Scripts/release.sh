@@ -332,11 +332,15 @@ else
         # sign_update prints: sparkle:edSignature="…" length="…"
         SIGNATURE="$("$SPARKLE_BIN/sign_update" "$DMG")"
         [[ "$SIGNATURE" == *edSignature* ]] || fail "sign_update produced no signature (is the Sparkle private key in the keychain?)"
-        # What changed: the first section of the changelog, shown in Sparkle's update window.
+        # What changed: this version's changelog section. The GitHub release gets the Markdown;
+        # Sparkle's update window gets HTML (Scripts/release-notes.sh says why).
         NOTES_MD="$BUILD_DIR/release-notes.md"
-        awk 'BEGIN {n=0} /^## / {n++} n==1 {print}' CHANGELOG.md | sed '1d' > "$NOTES_MD"
-        [[ -s "$NOTES_MD" ]] || echo "Bug fixes and improvements." > "$NOTES_MD"
-        NOTES_HTML="$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$NOTES_MD")"
+        Scripts/release-notes.sh "$VERSION" --markdown > "$NOTES_MD"
+        NOTES_HTML="$(Scripts/release-notes.sh "$VERSION" --html)"
+        if [[ -z "$(tr -d '[:space:]' < "$NOTES_MD")" ]]; then
+            echo "Bug fixes and improvements." > "$NOTES_MD"
+            NOTES_HTML="<p>Bug fixes and improvements.</p>"
+        fi
         cat > "$APPCAST" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -350,7 +354,7 @@ else
             <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <pubDate>$(date -R)</pubDate>
-            <description><![CDATA[<pre style="font: 13px -apple-system, sans-serif; white-space: pre-wrap;">$NOTES_HTML</pre>]]></description>
+            <description><![CDATA[$NOTES_HTML]]></description>
             <enclosure url="$DOWNLOAD_URL" type="application/octet-stream" $SIGNATURE />
         </item>
     </channel>

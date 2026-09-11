@@ -95,6 +95,11 @@ fi
 echo "  ok"
 
 # ---------------------------------------------------------------------------
+bold "Release notes"
+# The CHANGELOG section a release shows in Sparkle's update window converts to clean HTML.
+Scripts/test-release-notes.sh || fail "release notes conversion"
+
+# ---------------------------------------------------------------------------
 bold "Tests"
 PG_SET=0;    [[ -n "${TINKER_TEST_PG_URL:-}${TINKER_TEST_PG_URLS:-}" ]]       && PG_SET=1
 MYSQL_SET=0; [[ -n "${TINKER_TEST_MYSQL_URL:-}${TINKER_TEST_MYSQL_URLS:-}" ]] && MYSQL_SET=1

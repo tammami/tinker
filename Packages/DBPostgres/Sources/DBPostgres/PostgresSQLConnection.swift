@@ -231,13 +231,21 @@ public actor PostgresSQLConnection: SQLConnection {
         // through `pg_cancel_backend`, not tear down the NIO channel, so that the
         // connection stays usable afterwards (SPEC §13.3).
         let task = Task { await self.run(sql: sql, parameters: parameters, into: channel) }
-        return channel.stream {
+        return channel.stream { [pendingCancels] in
+            // Counted before the hop onto the actor, so a statement started in between
+            // still waits for this cancel to land (see `waitForCancelsToLand`).
+            pendingCancels.increment()
             Task {
                 await self.cancelCurrent()
+                await self.notePendingCancelDone()
                 task.cancel()
             }
         }
     }
+
+    /// Cancels asked for by a dropped stream that have not yet reached the actor. Read
+    /// by `waitForCancelsToLand`; counted off the actor, where the asking happens.
+    private nonisolated let pendingCancels = AtomicCounter()
 
     private func run(
         sql: String,
@@ -248,11 +256,12 @@ public actor PostgresSQLConnection: SQLConnection {
         let query = PostgresQuery(
             unsafeSQL: sql, binds: PostgresParameterEncoder.bindings(for: parameters)
         )
-        // A new generation only when the server is done with the previous statement. A
-        // statement whose consumer went away is still running there, and this one is
-        // queued behind it on the wire, not running; a cancel meant for the abandoned
-        // one must still be sent, or this one waits until the server has streamed every
-        // row nobody wanted.
+        // A cancel that is still on its way lands before this statement begins, so it
+        // cannot land on it. Then a new generation, unless the previous statement's
+        // consumer went away while the server was still running it: this one is queued
+        // behind it on the wire, and a cancel meant for the abandoned one must still be
+        // sent, or this one waits until the server has streamed every row nobody wanted.
+        await waitForCancelsToLand()
         if !statementInFlight { statementGeneration += 1 }
         statementInFlight = true
         do {
@@ -264,7 +273,7 @@ public actor PostgresSQLConnection: SQLConnection {
             noteTransactionKeyword(in: sql)
             cancelRequested = false
             statementInFlight = false
-            await channel.finish()
+            channel.finish()
         } catch {
             // A consumer that went away ends this task, not the statement: the server is
             // still running it until the cancel lands, so it stays "in flight" and the
@@ -277,7 +286,7 @@ public actor PostgresSQLConnection: SQLConnection {
             {
                 closed = true
             }
-            await channel.finish(throwing: mapped)
+            channel.finish(throwing: mapped)
         }
     }
 
@@ -338,6 +347,10 @@ public actor PostgresSQLConnection: SQLConnection {
                 try await send(full, startingAt: delivered - full.count)
             }
         }
+        // Every row has been read: the server is done with this statement, whatever the
+        // consumer does with the rest of the events. A cancel asked for now would have
+        // nothing to stop, and the next statement may take a new generation.
+        statementInFlight = false
         let rest = batch
         batch.removeAll()
         try await send(rest, startingAt: delivered - rest.count)
@@ -367,6 +380,8 @@ public actor PostgresSQLConnection: SQLConnection {
             }
         }.get()
 
+        // The server has answered; only the hand-off to the consumer is left.
+        statementInFlight = false
         let state = collected.withLockedValue { $0 }
         try await channel.send(.columns(state.columns))
         if !state.rows.isEmpty {
@@ -400,10 +415,49 @@ public actor PostgresSQLConnection: SQLConnection {
     ///
     /// Best effort by design: a connection that has already finished, or a server that
     /// refuses the cancel, must not turn into an error the user sees.
+    /// Added to the time the cancel's helper connection takes, so a test can widen the
+    /// window in which the statement it was for ends and another starts.
+    var cancelDelayForTesting: Duration = .zero
+    func setCancelDelayForTesting(_ delay: Duration) { cancelDelayForTesting = delay }
+
+    /// Cancels in flight, and the statements waiting for them to land. A cancel opens a
+    /// helper connection first; a statement that started meanwhile could be the one the
+    /// `SIGINT` reaches. So no statement starts on this connection while a cancel is on
+    /// its way: it waits, the cancel lands on the statement it was for (or on an idle
+    /// backend, which ignores it), and only then does the next one begin.
+    private var cancelsInFlight = 0
+    private var runsWaitingForCancels: [CheckedContinuation<Void, Never>] = []
+
+    private func waitForCancelsToLand() async {
+        while cancelsInFlight > 0 || pendingCancels.value > 0 {
+            await withCheckedContinuation { runsWaitingForCancels.append($0) }
+        }
+    }
+
+    private func noteCancelLanded() {
+        cancelsInFlight -= 1
+        resumeRunsIfNoCancelIsPending()
+    }
+
+    private func notePendingCancelDone() {
+        pendingCancels.decrement()
+        resumeRunsIfNoCancelIsPending()
+    }
+
+    private func resumeRunsIfNoCancelIsPending() {
+        guard cancelsInFlight == 0, pendingCancels.value == 0 else { return }
+        let waiting = runsWaitingForCancels
+        runsWaitingForCancels.removeAll()
+        for continuation in waiting { continuation.resume() }
+    }
+
     public func cancelCurrent() async {
         guard !closed, statementInFlight, let pid = Int32(backendID) else { return }
         let generation = statementGeneration
         cancelRequested = true
+        cancelsInFlight += 1
+        defer { noteCancelLanded() }
+        if cancelDelayForTesting > .zero { try? await Task.sleep(for: cancelDelayForTesting) }
         var cancelConfig = config
         cancelConfig.connectTimeout = .seconds(5)
         cancelConfig.statementTimeout = .seconds(5)
@@ -468,6 +522,8 @@ public actor PostgresSQLConnection: SQLConnection {
     }
 
     private func runSimple(_ sql: String) async throws {
+        // `BEGIN`, `COMMIT` and `ROLLBACK` wait for a cancel on its way like any statement.
+        await waitForCancelsToLand()
         do {
             _ = try await Self.rawQuery(sql, on: underlying, logger: logger, decoder: decoder)
         } catch {

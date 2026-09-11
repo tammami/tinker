@@ -179,6 +179,14 @@ enum MySQLErrorMapper {
     static func map(_ error: any Error, user: String) -> DBError {
         if let dbError = error as? DBError { return dbError }
         if error is CancellationError { return .cancelled }
+        // A connection killed under a statement, or a cable pulled, reaches mysql-nio as
+        // the transport's own error rather than a MySQL one: over TLS the peer vanishes
+        // without a close-notify (`uncleanShutdown`); over plain TCP the channel is
+        // simply closed. Both mean the connection is gone, which is what the session
+        // needs to know to replace it (SPEC §9.6).
+        if let ssl = error as? NIOSSLError, case .uncleanShutdown = ssl { return .notConnected }
+        if let channel = error as? ChannelError, case .ioOnClosedChannel = channel { return .notConnected }
+        if error is IOError { return .connectionFailed(underlying: String(reflecting: error), hint: nil) }
         guard let mysql = error as? MySQLError else {
             return .protocolError(String(reflecting: error))
         }

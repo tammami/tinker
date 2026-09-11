@@ -245,31 +245,51 @@ public actor MySQLSQLConnection: SQLConnection {
         _ sql: String,
         parameters: [DBValue]
     ) -> AsyncThrowingStream<QueryEvent, any Error> {
-        AsyncThrowingStream { continuation in
-            // Unstructured on purpose: cancelling the consumer reaches the server through
-            // `KILL QUERY`, which leaves this connection usable (SPEC §13.3).
-            let task = Task { await self.run(sql: sql, parameters: parameters, into: continuation) }
-            continuation.onTermination = { termination in
-                guard case .cancelled = termination else { return }
-                Task {
-                    await self.cancelCurrent()
-                    task.cancel()
-                }
+        // A bounded channel (SPEC §4). mysql-nio hands rows to a callback on its event
+        // loop, which cannot wait; so the batcher offers batches without waiting and,
+        // when the channel is full, stops the socket from being read (`autoRead` off).
+        // The channel asks for more when the consumer has taken a batch, and the socket
+        // is read again. TCP does the rest: a slow consumer is a slow server.
+        let channel = QueryEventChannel()
+        let socket = underlying.channel
+        channel.onDemand = {
+            socket.setOption(ChannelOptions.autoRead, value: true).whenSuccess { socket.read() }
+        }
+        // Unstructured on purpose: cancelling the consumer reaches the server through
+        // `KILL QUERY`, which leaves this connection usable (SPEC §13.3).
+        let task = Task { await self.run(sql: sql, parameters: parameters, into: channel) }
+        return channel.stream { [pendingCancels] in
+            // Counted before the hop onto the actor, so a statement started in between
+            // still waits for this kill to land (see `waitForCancelsToLand`).
+            pendingCancels.increment()
+            Task {
+                await self.cancelCurrent()
+                await self.notePendingCancelDone()
+                task.cancel()
             }
         }
     }
 
+    /// Kills asked for by a dropped stream that have not yet reached the actor. Read
+    /// by `waitForCancelsToLand`; counted off the actor, where the asking happens.
+    private nonisolated let pendingCancels = AtomicCounter()
+
     private func run(
         sql: String,
         parameters: [DBValue],
-        into continuation: AsyncThrowingStream<QueryEvent, any Error>.Continuation
+        into channel: QueryEventChannel
     ) async {
         let started = ContinuousClock.now
         let decoder = decoder
+        // A kill still on its way lands before this statement begins.
+        await waitForCancelsToLand()
         statementGeneration += 1
         statementInFlight = true
         defer { statementInFlight = false }
-        let batcher = RowBatcher(continuation: continuation, decoder: decoder)
+        let socket = underlying.channel
+        let batcher = RowBatcher(channel: channel, socket: socket, decoder: decoder)
+        // Whatever the statement did to `autoRead`, the connection reads again afterwards.
+        defer { _ = socket.setOption(ChannelOptions.autoRead, value: true) }
         do {
             let metadataBox = NIOLockedValueBox<MySQLQueryMetadata?>(nil)
             do {
@@ -285,7 +305,7 @@ public actor MySQLSQLConnection: SQLConnection {
 
             let rowCount = batcher.finish()
             let metadata = metadataBox.withLockedValue { $0 }
-            continuation.yield(
+            channel.offer(
                 .complete(
                     QueryCompletion(
                         affectedRows: rowCount > 0
@@ -296,9 +316,9 @@ public actor MySQLSQLConnection: SQLConnection {
                         durationTotal: started.duration(to: .now)
                     )))
             noteTransactionKeyword(in: sql)
-            continuation.finish()
+            channel.finish()
         } catch {
-            continuation.finish(throwing: MySQLErrorMapper.map(error, user: config.user))
+            channel.finish(throwing: MySQLErrorMapper.map(error, user: config.user))
         }
     }
 
@@ -317,9 +337,46 @@ public actor MySQLSQLConnection: SQLConnection {
     }
 
     /// Stops the running statement with `KILL QUERY` from a second connection (SPEC §7.3).
+    /// Added to the time the kill connection takes, so a test can widen the window in
+    /// which the statement the cancel was for ends and another starts.
+    var cancelDelayForTesting: Duration = .zero
+    func setCancelDelayForTesting(_ delay: Duration) { cancelDelayForTesting = delay }
+
+    /// Cancels in flight, and the statements waiting for them to land: no statement
+    /// starts on this connection while a `KILL QUERY` is on its way, so the kill can only
+    /// reach the statement it was for (or nothing, once that one has ended).
+    private var cancelsInFlight = 0
+    private var runsWaitingForCancels: [CheckedContinuation<Void, Never>] = []
+
+    private func waitForCancelsToLand() async {
+        while cancelsInFlight > 0 || pendingCancels.value > 0 {
+            await withCheckedContinuation { runsWaitingForCancels.append($0) }
+        }
+    }
+
+    private func noteCancelLanded() {
+        cancelsInFlight -= 1
+        resumeRunsIfNoCancelIsPending()
+    }
+
+    private func notePendingCancelDone() {
+        pendingCancels.decrement()
+        resumeRunsIfNoCancelIsPending()
+    }
+
+    private func resumeRunsIfNoCancelIsPending() {
+        guard cancelsInFlight == 0, pendingCancels.value == 0 else { return }
+        let waiting = runsWaitingForCancels
+        runsWaitingForCancels.removeAll()
+        for continuation in waiting { continuation.resume() }
+    }
+
     public func cancelCurrent() async {
         guard !closed, statementInFlight, let threadID = Int(backendID) else { return }
         let generation = statementGeneration
+        cancelsInFlight += 1
+        defer { noteCancelLanded() }
+        if cancelDelayForTesting > .zero { try? await Task.sleep(for: cancelDelayForTesting) }
         do {
             let connection = try await killChannel()
             // Opening the spare connection took time; the statement this cancel was for
@@ -345,6 +402,13 @@ public actor MySQLSQLConnection: SQLConnection {
         spare.connectTimeout = .seconds(5)
         spare.statementTimeout = nil
         let connection = try await MySQLDriver.openConnection(spare, logger: logger)
+        // Two cancels can arrive while the first spare is opening; the actor is
+        // re-entered at the await above. The second opener keeps the first one's
+        // connection and closes its own, or the first would be dropped unclosed.
+        if let opened = killConnection, !opened.isClosed {
+            try? await connection.close().get()
+            return opened
+        }
         killConnection = connection
         return connection
     }
@@ -379,6 +443,8 @@ public actor MySQLSQLConnection: SQLConnection {
     }
 
     private func runSimple(_ sql: String) async throws {
+        // Transaction control waits for a kill on its way like any statement.
+        await waitForCancelsToLand()
         do {
             _ = try await Self.rawQuery(sql, on: underlying, logger: logger, decoder: decoder)
         } catch {
@@ -387,12 +453,15 @@ public actor MySQLSQLConnection: SQLConnection {
     }
 }
 
-/// Collects rows arriving on the event loop and yields them in batches.
+/// Collects rows arriving on the event loop and offers them to the channel in batches.
 ///
 /// `onRow` is called from NIO, so the buffer is lock-protected; batches leave at the
-/// thresholds SPEC §4 sets.
+/// thresholds SPEC §4 sets. A batch that fills the channel turns the socket's
+/// `autoRead` off: mysql-nio's callback cannot wait, but the socket can stop being read,
+/// and the channel's demand callback turns reading back on (ADR-0047).
 final class RowBatcher: @unchecked Sendable {
-    private let continuation: AsyncThrowingStream<QueryEvent, any Error>.Continuation
+    private let channel: QueryEventChannel
+    private let socket: any Channel
     private let decoder: MySQLValueDecoder
     private let lock = NIOLock()
     private var rows: [[DBValue]] = []
@@ -400,11 +469,9 @@ final class RowBatcher: @unchecked Sendable {
     private var bytes = 0
     private var emittedColumns = false
 
-    init(
-        continuation: AsyncThrowingStream<QueryEvent, any Error>.Continuation,
-        decoder: MySQLValueDecoder
-    ) {
-        self.continuation = continuation
+    init(channel: QueryEventChannel, socket: any Channel, decoder: MySQLValueDecoder) {
+        self.channel = channel
+        self.socket = socket
         self.decoder = decoder
     }
 
@@ -414,7 +481,7 @@ final class RowBatcher: @unchecked Sendable {
             emittedColumns = true
             let columns = MySQLSQLConnection.columns(of: row, decoder: decoder)
             lock.unlock()
-            continuation.yield(.columns(columns))
+            offer(.columns(columns))
             lock.lock()
         }
         rows.append(MySQLSQLConnection.values(of: row, decoder: decoder))
@@ -432,7 +499,14 @@ final class RowBatcher: @unchecked Sendable {
         rows.removeAll(keepingCapacity: true)
         bytes = 0
         lock.unlock()
-        continuation.yield(.rows(batch))
+        offer(.rows(batch))
+    }
+
+    /// Hands an event to the channel; a full channel stops the socket being read.
+    private func offer(_ event: QueryEvent) {
+        if channel.offer(event) {
+            _ = socket.setOption(ChannelOptions.autoRead, value: false)
+        }
     }
 
     /// Emits the last partial batch and returns how many rows were delivered.
@@ -442,7 +516,7 @@ final class RowBatcher: @unchecked Sendable {
         let total = delivered
         let sawColumns = emittedColumns
         lock.unlock()
-        if !sawColumns { continuation.yield(.columns([])) }
+        if !sawColumns { offer(.columns([])) }
         return total
     }
 }

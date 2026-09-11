@@ -249,7 +249,7 @@ public actor SQLiteConnection: SQLConnection {
     ) async {
         let started = ContinuousClock.now
         guard !closed else {
-            await channel.finish(throwing: DBError.notConnected)
+            channel.finish(throwing: DBError.notConnected)
             return
         }
         handle.beginStatement(timeout: config.statementTimeout)
@@ -267,12 +267,12 @@ public actor SQLiteConnection: SQLConnection {
                         serverTag: Self.tag(keyword: keyword, rowCount: outcome.rowCount, changes: outcome.changes),
                         durationTotal: started.duration(to: .now)
                     )))
-            await channel.finish()
+            channel.finish()
         } catch is CancellationError {
             // The consumer went away; the interrupt already stopped the statement.
-            await channel.finish(throwing: DBError.cancelled)
+            channel.finish(throwing: DBError.cancelled)
         } catch {
-            await channel.finish(throwing: error)
+            channel.finish(throwing: error)
         }
     }
 
@@ -317,8 +317,10 @@ public actor SQLiteConnection: SQLConnection {
             isFirst = false
 
             let columnCount = sqlite3_column_count(statement)
-            if columnCount > 0, !outcome.emittedColumns {
-                outcome.rowCount = try await stream(statement, columnCount: columnCount, channel: channel, sql: text)
+            if columnCount > 0 {
+                // Every statement that returns rows is its own result set, columns and
+                // all; the consumer opens a pane per set (SPEC §13.2a).
+                outcome.rowCount += try await stream(statement, columnCount: columnCount, channel: channel, sql: text)
                 outcome.emittedColumns = true
             } else {
                 try stepToEnd(statement, sql: text)

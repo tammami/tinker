@@ -280,6 +280,24 @@ final class SQLiteIntegrationTests: XCTestCase {
         }
     }
 
+    /// A batch with two row-returning statements is two result sets, each with its own
+    /// columns (SPEC §13.2a). It used to deliver the first and count the second's rows.
+    func testEveryRowReturningStatementInABatchIsItsOwnResultSet() async throws {
+        try await withConnection { connection in
+            var columnSets: [[String]] = []
+            var rows: [[DBValue]] = []
+            for try await event in connection.execute("SELECT 1 AS one; SELECT 'a' AS x, 'b' AS y; SELECT 2 AS two", parameters: []) {
+                switch event {
+                case let .columns(columns): columnSets.append(columns.map(\.name))
+                case let .rows(batch): rows.append(contentsOf: batch.rows)
+                case .complete: break
+                }
+            }
+            XCTAssertEqual(columnSets, [["one"], ["x", "y"], ["two"]])
+            XCTAssertEqual(rows, [[.int(1)], [.string("a"), .string("b")], [.int(2)]])
+        }
+    }
+
     func testParametersAreBoundNotInterpolated() async throws {
         try await withConnection { connection in
             let hostile = "x'; DROP TABLE smoke; --"

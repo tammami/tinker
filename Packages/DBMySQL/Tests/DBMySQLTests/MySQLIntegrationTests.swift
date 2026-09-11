@@ -48,6 +48,35 @@ final class MySQLIntegrationTests: XCTestCase {
         }
     }
 
+    // MARK: - Back-pressure (SPEC §4, ADR-0047)
+
+    /// mysql-nio hands rows to a callback that cannot wait, so the driver stops reading
+    /// the socket when its channel is full and reads again when the consumer has taken
+    /// a batch. A slow read of the million-row fixture must leave the process about
+    /// where it started, and must not stall: every row still arrives.
+    func testASlowConsumerDoesNotAccumulateTheResultInMemory() async throws {
+        try await withEachServer { connection, _ in
+            let before = residentMemoryBytes()
+            var rows = 0
+            var batches = 0
+            for try await event in connection.execute("SELECT id, name FROM big_table", parameters: []) {
+                guard case let .rows(batch) = event else { continue }
+                rows += batch.count
+                batches += 1
+                if batches % 50 == 0 { try await Task.sleep(for: .milliseconds(1)) }
+            }
+            let after = residentMemoryBytes()
+            XCTAssertEqual(rows, 1_000_000)
+            let growth = Int64(after) - Int64(before)
+            XCTAssertLessThan(
+                growth, 96 * 1_024 * 1_024,
+                "resident memory grew by \(growth / 1_048_576) MB while streaming; the result was being buffered")
+            // The socket reads again afterwards: the next statement answers at once.
+            let next = try await connection.executeCollecting("SELECT 1")
+            XCTAssertEqual(next.firstText, "1")
+        }
+    }
+
     // MARK: - BIT and FLOAT fidelity
 
     /// A BIT value read from a column binds back as the same bits: as text, "1010" was
@@ -531,6 +560,28 @@ final class MySQLIntegrationTests: XCTestCase {
             XCTAssertLessThan(started.duration(to: .now), .seconds(20))
             let reuse = try await connection.executeCollecting("SELECT 1")
             XCTAssertEqual(reuse.firstText, "1")
+        }
+    }
+
+    /// A cancel opens its kill connection first. When the statement it was for ends and
+    /// another starts before that connection is ready, the cancel is dropped: the second
+    /// statement is nobody's business to kill. The test widens that window to a second.
+    func testACancelThatArrivesAfterItsStatementEndedDoesNotHitTheNextOne() async throws {
+        try await withEachServer { connection, _ in
+            let driver = try XCTUnwrap(connection as? MySQLSQLConnection)
+            await driver.setCancelDelayForTesting(.seconds(1))
+            async let cancellation: Void = {
+                try? await Task.sleep(for: .milliseconds(100))
+                await connection.cancelCurrent()
+            }()
+            _ = try await connection.executeCollecting("SELECT SLEEP(0.2)")
+            let started = ContinuousClock.now
+            let second = try await connection.executeCollecting("SELECT SLEEP(1.5), 'done'")
+            await cancellation
+            XCTAssertEqual(second.rows.first?.last, .string("done"), "the second statement must run to its end")
+            XCTAssertEqual(second.rows.first?.first?.text, "0", "SLEEP returns 0 when it was not interrupted")
+            XCTAssertGreaterThan(started.duration(to: .now), .seconds(1), "it was not cut short")
+            await driver.setCancelDelayForTesting(.zero)
         }
     }
 

@@ -630,6 +630,29 @@ final class PostgresIntegrationTests: XCTestCase {
         }
     }
 
+    /// A cancel opens a helper connection first. When the statement it was for ends and
+    /// another starts before the helper is ready, the cancel is dropped: the second
+    /// statement is nobody's business to stop. The test widens that window to a second.
+    func testACancelThatArrivesAfterItsStatementEndedDoesNotHitTheNextOne() async throws {
+        try await withEachServer { connection, _ in
+            let driver = try XCTUnwrap(connection as? PostgresSQLConnection)
+            await driver.setCancelDelayForTesting(.seconds(1))
+            // The first statement ends at 0.2 s; the cancel asked at 0.1 s sends at ~1.1 s,
+            // by which time the second statement (1.5 s) has been running for a while.
+            async let cancellation: Void = {
+                try? await Task.sleep(for: .milliseconds(100))
+                await connection.cancelCurrent()
+            }()
+            _ = try await connection.executeCollecting("SELECT pg_sleep(0.2)")
+            let started = ContinuousClock.now
+            let second = try await connection.executeCollecting("SELECT pg_sleep(1.5), 'done'")
+            await cancellation
+            XCTAssertEqual(second.rows.first?.last, .string("done"), "the second statement must run to its end")
+            XCTAssertGreaterThan(started.duration(to: .now), .seconds(1), "it was not cut short")
+            await driver.setCancelDelayForTesting(.zero)
+        }
+    }
+
     // MARK: - Transactions
 
     func testTransactionsCommitAndRollBack() async throws {

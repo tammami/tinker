@@ -10,7 +10,7 @@ final class QueryEventChannelTests: XCTestCase {
         let channel = QueryEventChannel(capacity: 2)
         let producer = Task {
             for index in 0 ..< 5 { try await channel.send(makeBatch(index)) }
-            await channel.finish()
+            channel.finish()
         }
         var seen: [Int] = []
         for try await event in channel.stream() {
@@ -28,7 +28,7 @@ final class QueryEventChannelTests: XCTestCase {
                 try await channel.send(makeBatch(index))
                 sent.increment()
             }
-            await channel.finish()
+            channel.finish()
         }
         // Nobody reads: the producer gets as far as the capacity and no further.
         try await Task.sleep(for: .milliseconds(100))
@@ -46,7 +46,7 @@ final class QueryEventChannelTests: XCTestCase {
         let channel = QueryEventChannel(capacity: 8)
         try await channel.send(makeBatch(0))
         try await channel.send(makeBatch(1))
-        await channel.finish(throwing: ServerSaidNo())
+        channel.finish(throwing: ServerSaidNo())
 
         var seen = 0
         do {
@@ -111,7 +111,7 @@ final class QueryEventChannelTests: XCTestCase {
         let channel = QueryEventChannel(capacity: 8)
         try await channel.send(makeBatch(0))
         try await channel.send(makeBatch(1))
-        await channel.finish()
+        channel.finish()
         let cancelSeen = Counter()
         for try await _ in channel.stream(onCancel: { cancelSeen.increment() }) { break }
         XCTAssertEqual(cancelSeen.value, 0)
@@ -119,7 +119,7 @@ final class QueryEventChannelTests: XCTestCase {
 
     func testSendAfterFinishIsIgnoredAndNextAfterEndStaysAtTheEnd() async throws {
         let channel = QueryEventChannel()
-        await channel.finish()
+        channel.finish()
         try await channel.send(makeBatch(0))
         let first = try await channel.next()
         let second = try await channel.next()

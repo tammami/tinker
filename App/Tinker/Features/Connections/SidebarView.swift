@@ -857,11 +857,11 @@ struct SidebarRow: View {
             return
         }
         do {
-            let (lease, connection) = try await session.lease()
-            defer { Task { await session.release(lease) } }
             let dialect = session.config.dialect
             let name = Identifier.qualified(info.ref, dialect: dialect)
-            _ = try await connection.executeCollecting("\(verb) \(name)")
+            try await session.withLease { connection in
+                _ = try await connection.executeCollecting("\(verb) \(name)")
+            }
             await session.invalidateIntrospection()
             await sidebar.refresh(connectionID: connectionID)
         } catch {

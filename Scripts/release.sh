@@ -95,7 +95,14 @@ VERSION="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
     /dev/stdin <<< "$(xcodebuild -project App/Tinker.xcodeproj -target Tinker -showBuildSettings 2>/dev/null |
         awk '/MARKETING_VERSION/ {print "<plist><dict><key>CFBundleShortVersionString</key><string>" $3 "</string></dict></plist>"}' |
         head -1)" 2>/dev/null || echo "0.1.0")"
-BUILD_NUMBER="$(date +%Y%m%d%H%M)"
+# The build number is the project's CURRENT_PROJECT_VERSION, so what ships is what the
+# "bump" commit says and what the About panel shows. It used to be a timestamp, which
+# never matched the project and made two archives of one commit two different builds.
+BUILD_NUMBER="$(xcodebuild -project App/Tinker.xcodeproj -target Tinker -showBuildSettings 2>/dev/null |
+    awk '/CURRENT_PROJECT_VERSION/ {print $3; exit}')"
+[[ -n "$BUILD_NUMBER" ]] || fail "The project has no CURRENT_PROJECT_VERSION; set one before releasing."
+# A release needs its notes: the CHANGELOG must carry a section for this version.
+grep -q "^## \[$VERSION\]" CHANGELOG.md || fail "CHANGELOG.md has no \"## [$VERSION]\" section; write the release notes first."
 echo "  version $VERSION build $BUILD_NUMBER"
 
 # ---------------------------------------------------------------------------

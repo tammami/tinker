@@ -41,11 +41,12 @@ private enum OperationRunner {
             throw DBError.protocolError("This connection is read-only. Unlock it with ⌘⇧L first.")
         }
         _ = try await session.connect()
-        let (lease, connection) = try await session.lease()
-        defer { Task { await session.release(lease) } }
-        var last: QueryResult?
-        for statement in statements {
-            last = try await connection.executeCollecting(statement)
+        let last = try await session.withLease { connection in
+            var last: QueryResult?
+            for statement in statements {
+                last = try await connection.executeCollecting(statement)
+            }
+            return last
         }
         await session.invalidateIntrospection()
         return last
@@ -547,18 +548,17 @@ private struct ImportCSVSheet: View {
                 throw DBError.protocolError("This connection is read-only. Unlock it with ⌘⇧L first.")
             }
             _ = try await session.connect()
-            let (lease, connection) = try await session.lease()
-            defer { Task { await session.release(lease) } }
-            let count: Int64
-            if isJSON {
-                var reader = JSONRecordReader(data: data)
-                count = try await importer.run(reader: &reader, on: connection) { done in
-                    Task { @MainActor in progressCount = done }
-                }
-            } else {
-                var reader = CSVReader(data: data, delimiter: delimiter.first ?? ",")
-                count = try await importer.run(reader: &reader, on: connection) { done in
-                    Task { @MainActor in progressCount = done }
+            let count = try await session.withLease { connection in
+                if isJSON {
+                    var reader = JSONRecordReader(data: data)
+                    return try await importer.run(reader: &reader, on: connection) { done in
+                        Task { @MainActor in progressCount = done }
+                    }
+                } else {
+                    var reader = CSVReader(data: data, delimiter: delimiter.first ?? ",")
+                    return try await importer.run(reader: &reader, on: connection) { done in
+                        Task { @MainActor in progressCount = done }
+                    }
                 }
             }
             await session.invalidateIntrospection(.rowCount(request.table))

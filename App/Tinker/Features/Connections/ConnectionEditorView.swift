@@ -608,9 +608,12 @@ struct SSHFields: View {
                 .frame(width: 90)
         }
         TextField("User", text: binding(\.user, default: NSUserName()))
+        // Agent authentication is not available (ADR-0013); it was offered anyway and
+        // failed at connect time. It stays in the list only for a stored connection that
+        // already chose it, so that connection can be edited to something that works.
         Picker("Authentication", selection: $authKind) {
-            ForEach(ConnectionEditorView.SSHAuthKind.allCases) { kind in
-                Text(kind.title).tag(kind)
+            ForEach(ConnectionEditorView.SSHAuthKind.allCases.filter { $0 != .agent || authKind == .agent }) { kind in
+                Text(kind == .agent ? "Agent (not available)" : kind.title).tag(kind)
             }
         }
         switch authKind {

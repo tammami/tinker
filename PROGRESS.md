@@ -766,3 +766,34 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 - The cancel-race guard has no deterministic test; the window is the helper connect time.
 - Cross-engine transfer of `all_types` and the wider fixture (BC dates, `bit varying`,
   `DECIMAL UNSIGNED`) remain open; the grid fidelity test covers text escapes and scale.
+
+## 2026-09-11 — Review, Phase 4: developer experience (ADR-0045)
+
+### Done
+- The app logs to the unified log (`com.thinkfree.Tinker`, category = swift-log label)
+  through `AppLogging`/`OSLogHandler`, bootstrapped first thing in `TinkerApp.init`;
+  Settings › Diagnostics › Copy Diagnostics assembles versions, engine counts and the
+  last 400 records at `.info` and above for a bug report. No SQL, values or credentials
+  above `.debug`.
+- `dbcli` reads passwords from `PGPASSWORD` / `MYSQL_PWD` / `TINKER_DB_PASSWORD` and
+  `TINKER_SSH_PASSWORD`; the usage explains the argv risk and what `--verbose` logs.
+- Connection failures name the endpoint; Test Connection no longer renders foreign errors
+  with `String(reflecting:)`.
+- `README.md` (Xcode 26, CLI clients, a scripts table, `TINKER_TEST_SQLITE_DISABLED`,
+  where the log is), `testenv/README.md` and SPEC §17.1 (the two SSH servers the tests
+  start; the unread `TINKER_TEST_SSH_*` variables removed). `release.sh` takes the build
+  number from the project and refuses to archive without a CHANGELOG section for the
+  version; `CHANGELOG.md` gains `[0.1.1]` and an `[Unreleased]` review entry.
+- The SSH editor no longer offers Agent for a new connection (ADR-0013). Ten more call
+  sites lease through `withLease`.
+
+### Tests
+- No new tests: the handler lives in the app target, which has no unit-test target; the
+  smoke test and every app run exercise it. `Scripts/ci.sh` green: 695 tests, 0 failures,
+  2 skips, app built with zero warnings, smoke test passed.
+
+### Not done / deferred
+- `StructureController.load` and `TransferModel`'s dump keep the detached release form
+  (correct since ADR-0040; long bodies). `ci.sh` keeps its `touch` (ADR-0005, ADR-0045).
+- A unit-test target for the app's own types (logging handler, diagnostics text) would be
+  the right home for tests of this phase; listed under Phase 5's app-hosted test work.

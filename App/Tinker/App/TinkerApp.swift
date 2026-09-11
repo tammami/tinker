@@ -23,6 +23,9 @@ struct TinkerApp: App {
     @State private var crashReporter: CrashReporter
 
     init() {
+        // Before anything logs: swift-log's default handler prints to stdout, which a
+        // Finder-launched app throws away.
+        AppLogging.bootstrap()
         let environment = AppEnvironment()
         _environment = State(initialValue: environment)
         _settings = State(initialValue: AppSettings(environment: environment))

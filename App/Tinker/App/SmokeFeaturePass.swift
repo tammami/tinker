@@ -32,11 +32,11 @@ extension SmokeTest {
         /// Runs statements on a fresh lease and returns the last result.
         @discardableResult
         func sql(_ statements: String...) async throws -> QueryResult? {
-            let (lease, connection) = try await session.lease()
-            defer { Task { await session.release(lease) } }
-            var last: QueryResult?
-            for statement in statements { last = try await connection.executeCollecting(statement) }
-            return last
+            try await session.withLease { connection in
+                var last: QueryResult?
+                for statement in statements { last = try await connection.executeCollecting(statement) }
+                return last
+            }
         }
         func count(_ table: String = "") async -> Int {
             let name = table.isEmpty ? scratchName : table
@@ -610,10 +610,10 @@ extension SmokeTest {
             if let lockedSession = environment.session(for: config.id) {
                 let refused: Bool
                 do {
-                    let (lease, connection) = try await lockedSession.lease()
-                    defer { Task { await lockedSession.release(lease) } }
-                    // Straight to the driver, past every client-side check.
-                    _ = try await connection.executeCollecting("INSERT INTO smoke_features (name) VALUES ('locked')")
+                    try await lockedSession.withLease { connection in
+                        // Straight to the driver, past every client-side check.
+                        _ = try await connection.executeCollecting("INSERT INTO smoke_features (name) VALUES ('locked')")
+                    }
                     refused = false
                 } catch {
                     refused = true
@@ -642,11 +642,11 @@ extension SmokeTest {
                 await lockedSession.setReadOnlyOverride(true)
                 let unlocked: Bool
                 do {
-                    let (lease, connection) = try await lockedSession.lease()
-                    defer { Task { await lockedSession.release(lease) } }
-                    _ = try await connection.executeCollecting("BEGIN")
-                    _ = try await connection.executeCollecting("INSERT INTO smoke_features (name) VALUES ('unlocked')")
-                    _ = try await connection.executeCollecting("ROLLBACK")
+                    try await lockedSession.withLease { connection in
+                        _ = try await connection.executeCollecting("BEGIN")
+                        _ = try await connection.executeCollecting("INSERT INTO smoke_features (name) VALUES ('unlocked')")
+                        _ = try await connection.executeCollecting("ROLLBACK")
+                    }
                     unlocked = true
                 } catch {
                     unlocked = false

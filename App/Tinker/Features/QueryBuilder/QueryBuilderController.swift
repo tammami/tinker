@@ -257,9 +257,9 @@ public final class QueryBuilderController {
             if await session.isReadOnly {
                 throw DBError.protocolError("This connection is read-only. Unlock it with ⌘⇧L first.")
             }
-            let (lease, connection) = try await session.lease()
-            defer { Task { await session.release(lease) } }
-            _ = try await connection.executeCollecting(statement)
+            try await session.withLease { connection in
+                _ = try await connection.executeCollecting(statement)
+            }
             await session.invalidateIntrospection()
             errorText = nil
             await saveSidecar(for: ref)
@@ -284,9 +284,9 @@ public final class QueryBuilderController {
             if await session.isReadOnly {
                 throw DBError.protocolError("This connection is read-only. Unlock it with ⌘⇧L first.")
             }
-            let (lease, connection) = try await session.lease()
-            defer { Task { await session.release(lease) } }
-            _ = try await connection.executeCollecting(statement)
+            try await session.withLease { connection in
+                _ = try await connection.executeCollecting(statement)
+            }
             await session.invalidateIntrospection()
             errorText = nil
             await saveSidecar(for: view)

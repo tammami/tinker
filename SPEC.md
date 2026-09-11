@@ -797,7 +797,7 @@ Deferred to v0.2 (do not build now, do not stub): EXPLAIN visual, editing of mul
 - All servers are supplied purely through environment variables:
   - `TINKER_TEST_PG_URL` / `TINKER_TEST_PG_URLS`
   - `TINKER_TEST_MYSQL_URL` / `TINKER_TEST_MYSQL_URLS`
-  - `TINKER_TEST_SSH_PASSWORD_URL`, `TINKER_TEST_SSH_JUMP_URL`
+  - (SSH needs none: the tunnel suites start their own servers, in-process and the machine's `sshd`, ADR-0014 and ADR-0039. `TINKER_TEST_SSH_PASSWORD_URL` and `TINKER_TEST_SSH_JUMP_URL` were listed here but never read; removed by the Phase 4 review.)
 - Integration tests **must** run against a database named `tinker_test` and refuse to run (fail loudly) if the URL points anywhere else or if the user in the URL has privileges beyond that database (PG: not superuser; MySQL: no global grants). They drop and recreate fixture objects at start; they never touch other databases. This is the only protection for the developer's real local data.
 - Skipped tests are reported as skipped with the reason. CI output ends with a coverage summary: which engines/versions actually ran.
 - **Performance tests**: grid scroll and memory using `XCTMetric` and os_signpost; export memory flatness.

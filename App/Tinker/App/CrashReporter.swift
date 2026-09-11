@@ -12,7 +12,7 @@ import os
 public final class CrashReporter {
     public static let optInSettingKey = "diagnostics.collectCrashReports"
 
-    private let environment: AppEnvironment
+    let environment: AppEnvironment
     private var isEnabled = false
 
     public init(environment: AppEnvironment) {

@@ -65,6 +65,9 @@ struct DBCLI {
             fail("A connection URL is required")
         }
         options.sql = positional.count > 1 ? positional[1] : nil
+        if options.sshPassword == nil {
+            options.sshPassword = ProcessInfo.processInfo.environment["TINKER_SSH_PASSWORD"]
+        }
 
         var logger = Logger(label: "dbcli")
         logger.logLevel = options.verbose ? .debug : .warning
@@ -310,7 +313,10 @@ struct DBCLI {
             host: components.host ?? "localhost",
             port: components.port ?? (dialect == .postgresql ? 5_432 : 3_306),
             user: components.user ?? NSUserName(),
-            password: components.password,
+            // The password belongs in the environment, not in the URL: an argument is in
+            // `ps` output and the shell history for everyone on the machine. The URL form
+            // still works, for a one-off against a scratch server.
+            password: components.password ?? Self.passwordFromEnvironment(for: dialect),
             database: database.isEmpty ? nil : database,
             tls: tls,
             options: options
@@ -388,6 +394,19 @@ struct DBCLI {
         exit(2)
     }
 
+    /// The database password from the environment, the way `psql` and `mysql` read it:
+    /// `PGPASSWORD` or `MYSQL_PWD` for the engine, `TINKER_DB_PASSWORD` for either.
+    static func passwordFromEnvironment(for dialect: SQLDialect) -> String? {
+        let environment = ProcessInfo.processInfo.environment
+        let specific: String? =
+            switch dialect {
+            case .postgresql: environment["PGPASSWORD"]
+            case .mysql: environment["MYSQL_PWD"]
+            case .sqlite: nil
+            }
+        return specific ?? environment["TINKER_DB_PASSWORD"]
+    }
+
     static func printUsage() {
         print(
             """
@@ -402,15 +421,22 @@ struct DBCLI {
               --ssh <user@host[:port]>     tunnel the connection over SSH
               --ssh-key <path>             private key to use (default ~/.ssh/id_ed25519)
               --ssh-password <password>    use password authentication instead of a key
+                                           (prefer TINKER_SSH_PASSWORD in the environment)
               --cancel-after <duration>    cancel the running statement (e.g. 2s, 500ms)
               --no-header                  omit the column-name row
-              -v, --verbose                debug logging
+              -v, --verbose                debug logging — the drivers log statement text
+                                           and bound values at this level; keep it off a
+                                           shared terminal
               -h, --help                   this text
 
             URL
-              postgresql://user:password@host:5432/database?sslmode=require
-              mysql://user:password@host:3306/database
+              postgresql://user@host:5432/database?sslmode=require
+              mysql://user@host:3306/database
               sqlite:///path/to/file.db
+
+            PASSWORDS
+              Read from PGPASSWORD, MYSQL_PWD or TINKER_DB_PASSWORD when the URL has none.
+              A password in the URL works but is visible in `ps` and the shell history.
             """)
     }
 }

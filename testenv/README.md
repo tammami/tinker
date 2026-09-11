@@ -51,16 +51,16 @@ Run `prepare.sh` against each of them too (one admin URL at a time).
 
 ## SSH
 
-Tunnel tests need nothing set up: they start an SSH server inside the test process and
-forward through it to the local PostgreSQL (see DECISIONS.md ADR-0014). That covers the
-client's protocol path but not interoperability with OpenSSH's `sshd`.
+Tunnel tests need nothing set up. Two servers are used:
 
-To also test against a real server, enable
-*System Settings → General → Sharing → Remote Login* and set:
+- an SSH server inside the test process, which forwards to the local PostgreSQL and
+  covers the client's protocol path, password authentication and the port forward
+  (DECISIONS.md ADR-0014);
+- the machine's own `/usr/sbin/sshd`, started unprivileged on a free port in a temporary
+  directory by `OpenSSHInteropTests`, which covers interoperability with OpenSSH for every
+  key type and file format (ADR-0039). Nothing on the machine is changed and no
+  administrator rights are needed; the suite skips only when `sshd` is missing.
 
-```sh
-export TINKER_TEST_SSH_PASSWORD_URL='ssh://user:password@host:22'
-export TINKER_TEST_SSH_JUMP_URL='ssh://user@bastion:22'
-```
-
-Both are optional; when unset, those paths are reported as gaps rather than passing.
+Jump hosts have no test yet; `dbcli --ssh` reaches one by hand. (Earlier revisions of
+this file named `TINKER_TEST_SSH_PASSWORD_URL` and `TINKER_TEST_SSH_JUMP_URL`; nothing ever
+read them, and they are gone.)

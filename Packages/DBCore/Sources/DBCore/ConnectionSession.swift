@@ -280,7 +280,9 @@ public actor ConnectionSession {
         } catch let error as DBError {
             return .failure(error)
         } catch {
-            return .failure(.connectionFailed(underlying: String(reflecting: error), hint: nil))
+            // `describing`, not `reflecting`: the debug description of a NIO error can
+            // carry the request it was for, and this text goes into the sheet.
+            return .failure(.connectionFailed(underlying: String(describing: error), hint: nil))
         }
     }
 
@@ -368,9 +370,22 @@ public actor ConnectionSession {
                 return try await registry.connect(again, logger: logger)
             }
         } catch {
-            let message = (error as? DBError)?.errorDescription ?? String(reflecting: error)
-            setState(.degraded(reason: message))
-            throw error
+            // The endpoint goes into the message: "connection refused" on its own does not
+            // say which of five hosts refused, and the sheet shows only this text.
+            let endpoint = config.dialect.isFileBased ? (config.database ?? "") : "\(config.host):\(config.port)"
+            let described: DBError
+            switch error as? DBError {
+            case let .connectionFailed(underlying, hint)? where !underlying.contains(endpoint):
+                described = .connectionFailed(underlying: "\(endpoint): \(underlying)", hint: hint)
+            case let .tunnelFailed(stage, underlying)? where stage == .tcp || stage == .dns:
+                described = .tunnelFailed(stage: stage, underlying: "\(endpoint): \(underlying)")
+            case let known?:
+                described = known
+            case nil:
+                described = .connectionFailed(underlying: "\(endpoint): \(String(describing: error))", hint: nil)
+            }
+            setState(.degraded(reason: described.errorDescription ?? String(describing: error)))
+            throw described
         }
     }
 

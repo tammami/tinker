@@ -6,6 +6,33 @@ All notable changes to Tinker are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **The review's fixes (ADR-0040 to ADR-0045).** The connection pool no longer hands out a
+  connection that is still being reset, or waits for ever when every connection is busy; a
+  lost connection is reconnected on the next use, or, when a transaction was open, waits for
+  Reconnect in the sidebar. Results stream under back-pressure on PostgreSQL and SQLite, so
+  a slow read of a million rows is a few batches in memory. Idle connections are kept alive
+  and a dead one is replaced before a tab needs it.
+- **Keys back on the spec.** ⌘⌫ sets NULL (it deleted rows), ⌘− deletes rows, ⌘+ adds a
+  row, ⌘⇧R rolls back (it ran the selection; that is ⌘⌃R now), ⌘⇧W closes the window. A
+  delete under auto-commit asks first; sort, filter, paging, Refresh, closing a tab and
+  quitting ask before discarding uncommitted edits or an open transaction.
+- **Values the server reads back as the same value.** PostgreSQL `money` (`12.34`, not
+  `1234`), `float4` (`0.1`, not `0.10000000149011612`), MySQL `BIT` (bound as its bytes),
+  MySQL zero dates (their text, not NULL), SQLite `affectedRows` (the statement's own rows,
+  not its cascades). A `statement_timeout` shows the server's message instead of "Cancelled".
+- **Measured, not eyeballed.** The grid's first page and paging memory are measured with
+  `XCTMetric` and signposts; backends are terminated mid-query in tests; dumps read every
+  table under one snapshot. The editor stays responsive on a ten-megabyte script; export
+  writes off the main thread.
+- **Operable.** The app logs to the unified log under `com.thinkfree.Tinker`; Settings ›
+  Diagnostics › Copy Diagnostics assembles a bug report. `dbcli` reads passwords from the
+  environment. `Scripts/ci.sh --strict` refuses a green run that skipped anything; the
+  smoke test only ever uses a `tinker_test` connection. The release build number is the
+  project's, and a release needs its CHANGELOG section.
+
+## [0.1.1] - 2026-09-11
+
 ### Added
 - **Help that exists.** Help › Tinker Help (⌘?) opens a window of built-in pages — getting
   started, connections, browsing and editing data, the SQL editor, structure, tools, every

@@ -54,12 +54,12 @@ public final class ServerActivityController {
     private func read<T: Sendable>(_ body: @Sendable (any ServerIntrospector) async throws -> T) async throws -> T {
         guard let session else { throw DBError.notConnected }
         _ = try await session.connect()
-        let (lease, connection) = try await session.lease()
-        defer { Task { await session.release(lease) } }
-        guard let server = connection.introspector.server else {
-            throw DBError.protocolError("This driver does not expose server activity")
+        return try await session.withLease { connection in
+            guard let server = connection.introspector.server else {
+                throw DBError.protocolError("This driver does not expose server activity")
+            }
+            return try await body(server)
         }
-        return try await body(server)
     }
 
     public func loadSessions() async {
@@ -109,10 +109,10 @@ public final class ServerActivityController {
         do {
             if await session.isReadOnly { return "This connection is read-only. Unlock it with ⌘⇧L first." }
             _ = try await session.connect()
-            let (lease, connection) = try await session.lease()
-            defer { Task { await session.release(lease) } }
-            for statement in statements {
-                _ = try await connection.executeCollecting(statement)
+            try await session.withLease { connection in
+                for statement in statements {
+                    _ = try await connection.executeCollecting(statement)
+                }
             }
             users = []
             await loadUsers()

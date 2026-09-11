@@ -96,8 +96,8 @@ A few load-bearing decisions, each recorded as an ADR in [`DECISIONS.md`](DECISI
 ### Requirements
 
 - macOS 14 Sonoma or later, Apple Silicon
-- Xcode 16 or later
-- A local PostgreSQL and/or MySQL server you already run. Tinker's tests never install, start or reconfigure a database, and never use Docker. The SQLite suite needs nothing at all: it creates a temporary database file of its own and always runs.
+- Xcode 26 or later (the manifest is `swift-tools-version: 6.2`; Xcode 16 cannot open it)
+- A local PostgreSQL and/or MySQL server you already run, and their `psql` and `mysql` command-line clients on `PATH` for `testenv/prepare.sh`. Tinker's tests never install, start or reconfigure a database, and never use Docker. The SQLite suite needs nothing at all: it creates a temporary database file of its own and always runs.
 
 ### Build and run
 
@@ -113,6 +113,17 @@ Select the `Tinker` scheme and run. The packages can also be built and tested fr
 swift build
 swift test
 ```
+
+### Scripts
+
+| Script | What it does |
+|---|---|
+| `Scripts/ci.sh [--skip-app] [--strict]` | The definition-of-done gate: builds every package and test target with warnings as errors, lints the import direction, runs the tests, builds the app, runs the app's smoke test against the stored `tinker_test` connection. `--strict` (or `TINKER_CI_STRICT=1`) fails when an engine URL is unset, when any test is skipped, or when the smoke test cannot run. |
+| `Scripts/appbuild.sh` | Builds the app alone, for a quick check of the app target. |
+| `Scripts/release.sh [--share] [--publish]` | Archives a Release build, signs and notarizes the DMG, signs it for Sparkle and writes the appcast. `--share` makes an ad-hoc-signed, unnotarized build for a tester; `--publish` creates the GitHub release that carries the DMG and appcast. The header of the script lists the environment it needs. |
+| `testenv/prepare.sh` | Creates the isolated `tinker_test` database and user on your local servers, and prints the `TINKER_TEST_*` exports the tests read. |
+
+`TINKER_TEST_SQLITE_DISABLED=1` leaves the SQLite suites out of a run. The app's log goes to the unified log under the subsystem `com.thinkfree.Tinker`; Settings › Diagnostics › Copy Diagnostics puts the versions and the last log lines on the clipboard for a bug report.
 
 ### Run the full suite against real servers
 

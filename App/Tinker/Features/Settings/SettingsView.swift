@@ -119,11 +119,19 @@ public struct SettingsView: View {
                             .disabled(reportCount == 0)
                         }
                     }
+                    LabeledContent("Bug report") {
+                        Button("Copy Diagnostics") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(
+                                Diagnostics.summary(environment: crashReporter.environment), forType: .string)
+                        }
+                        .help("Copies the app and system versions, the engines in use and the last log lines — no hosts, SQL or credentials")
+                    }
                 } header: {
                     Label("Diagnostics", systemImage: "stethoscope")
                 } footer: {
                     Text(
-                        "Reports are written to Application Support and never sent anywhere. They record the app version, the system version and a stack trace; never SQL, values or credentials."
+                        "Reports are written to Application Support and never sent anywhere. They record the app version, the system version and a stack trace; never SQL, values or credentials. The app's log is in Console under the subsystem com.thinkfree.Tinker."
                     )
                 }
                 UpdatesSection(updater: updater)

@@ -19,17 +19,4 @@ enum GridEditPrompts {
             action: action
         )
     }
-
-    /// Asked before a reload — a sort, a filter, another page, Refresh — that would throw
-    /// pending edits away.
-    static func discardPendingEdits(
-        count: Int, before what: String, reason: String, action: @escaping @MainActor () async -> Void
-    ) -> DestructiveConfirmation {
-        DestructiveConfirmation(
-            title: "Discard \(count) pending change\(count == 1 ? "" : "s")?",
-            message: reason,
-            confirmTitle: "Discard and \(what)",
-            action: action
-        )
-    }
 }

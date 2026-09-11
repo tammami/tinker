@@ -93,7 +93,22 @@ public final class QueryResultTab: Identifiable {
     public let id = UUID()
     public let label: String
     public let statement: String
-    public var grid: GridModel?
+    /// One grid per result set the statement returned (SPEC §13.2a): a batch of two
+    /// SELECTs on SQLite, a procedure that returns several sets. Most statements have
+    /// one; `grid` is the one being shown.
+    public var grids: [GridModel] = []
+    public var shownGridIndex = 0
+    public var grid: GridModel? {
+        get { grids.indices.contains(shownGridIndex) ? grids[shownGridIndex] : grids.first }
+        set {
+            if let newValue {
+                if grids.isEmpty { grids = [newValue] } else { grids[min(shownGridIndex, grids.count - 1)] = newValue }
+            } else {
+                grids = []
+                shownGridIndex = 0
+            }
+        }
+    }
     /// For statements that return no rows, the message the status line shows.
     public var message: String?
     public var error: QueryErrorBanner?

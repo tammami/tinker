@@ -4,43 +4,83 @@ import DBGrid
 
 /// One grid cell.
 ///
-/// A plain `NSView` that draws its own background and hosts one `NSTextField`, rather than
-/// a stack of subviews: at 22 points a row and thousands of visible cells, every extra
-/// view costs frame time (SPEC §12.1).
+/// A plain `NSView` that draws its background, its focus ring and its text itself. It
+/// used to host an `NSTextField` under three Auto Layout constraints; measured in a
+/// window (`DataGridPerformanceTests`), creating and laying those out for the eight
+/// hundred cells of one screen cost ten frames on a reload and nearly two on every
+/// scroll stop. String drawing with cached attributes costs a fraction of one
+/// (SPEC §12.1, §12.6; ADR-0047).
 final class GridCellView: NSView {
     static let reuseIdentifier = NSUserInterfaceItemIdentifier("Tinker.GridCell")
+    /// The text's distance from the cell's edges; the header keeps the same one.
+    static let horizontalInset: CGFloat = 6
 
-    let textField = NSTextField(labelWithString: "")
+    /// What the cell shows, ready to draw; nil when there is nothing to draw.
+    private var text: NSAttributedString?
+    /// The plain text, for accessibility and for the inline editor's starting value.
+    private(set) var stringValue = ""
     private var backgroundColor: NSColor = .clear
     private var isFocusedCell = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        wantsLayer = true
-        textField.translatesAutoresizingMaskIntoConstraints = false
-        textField.lineBreakMode = .byTruncatingTail
-        textField.cell?.usesSingleLineMode = true
-        textField.font = DesignTokens.Fonts.grid
-        textField.drawsBackground = false
-        textField.isBordered = false
-        textField.isEditable = false
-        textField.isSelectable = false
+        // No layer of its own: the row view is layer-backed, and a layer per cell is one
+        // more object to make and composite for each of the hundreds on screen.
         // The cell is a plain view, so it has to say what it is; without this the grid is
         // invisible to the accessibility system and to UI tests.
         setAccessibilityRole(.staticText)
         setAccessibilityElement(true)
-        addSubview(textField)
-        NSLayoutConstraint.activate([
-            textField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            textField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            textField.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
     override var isFlipped: Bool { true }
+
+    // MARK: Cached text attributes
+
+    /// Built once: a paragraph style and a font per look, shared by every cell. Cells
+    /// live on the main actor, so the shared objects do too.
+    @MainActor
+    private enum Style {
+        static let font = DesignTokens.Fonts.grid
+        static let italic = NSFontManager.shared.convert(DesignTokens.Fonts.grid, toHaveTrait: .italicFontMask)
+        static let lineHeight: CGFloat = {
+            let layout = NSLayoutManager()
+            return ceil(layout.defaultLineHeight(for: font))
+        }()
+
+        static let leftParagraph = paragraph(.left)
+        static let rightParagraph = paragraph(.right)
+        static let naturalParagraph = paragraph(.natural)
+        static let centerParagraph = paragraph(.center)
+
+        static func paragraph(_ alignment: NSTextAlignment) -> NSParagraphStyle {
+            let style = NSMutableParagraphStyle()
+            style.alignment = alignment
+            style.lineBreakMode = .byTruncatingTail
+            return style
+        }
+
+        static func paragraph(for alignment: NSTextAlignment) -> NSParagraphStyle {
+            switch alignment {
+            case .left: leftParagraph
+            case .right: rightParagraph
+            case .center: centerParagraph
+            default: naturalParagraph
+            }
+        }
+
+        static func attributes(
+            font: NSFont, color: NSColor, alignment: NSTextAlignment, strikethrough: Bool = false
+        ) -> [NSAttributedString.Key: Any] {
+            var attributes: [NSAttributedString.Key: Any] = [
+                .font: font, .foregroundColor: color, .paragraphStyle: paragraph(for: alignment),
+            ]
+            if strikethrough { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+            return attributes
+        }
+    }
 
     /// Fills in one cell. Called for every visible cell on every reload, so it does no
     /// allocation beyond the string it must show.
@@ -55,36 +95,41 @@ final class GridCellView: NSView {
     ) {
         isFocusedCell = isFocused
         // A value with a label beside it reads as text, whatever the column's type.
-        textField.alignment = label == nil ? alignment : .left
+        let alignment = label == nil ? alignment : .left
 
         switch value {
         case .none:
             // The row is not loaded yet; a placeholder beats an empty cell that looks like NULL.
-            textField.stringValue = "…"
-            textField.textColor = DesignTokens.Colors.nullText
-            textField.font = DesignTokens.Fonts.grid
+            stringValue = "…"
+            text = NSAttributedString(
+                string: stringValue,
+                attributes: Style.attributes(font: Style.font, color: DesignTokens.Colors.nullText, alignment: alignment))
         case .null:
-            textField.stringValue = "NULL"
-            textField.textColor = DesignTokens.Colors.nullText
-            textField.font = NSFontManager.shared.convert(DesignTokens.Fonts.grid, toHaveTrait: .italicFontMask)
+            stringValue = "NULL"
+            text = NSAttributedString(
+                string: stringValue,
+                attributes: Style.attributes(font: Style.italic, color: DesignTokens.Colors.nullText, alignment: alignment))
         case let .bytes(data):
-            textField.stringValue = "<\(data.count) bytes>"
-            textField.textColor = DesignTokens.Colors.binaryText
-            textField.font = DesignTokens.Fonts.grid
+            stringValue = "<\(data.count) bytes>"
+            text = NSAttributedString(
+                string: stringValue,
+                attributes: Style.attributes(font: Style.font, color: DesignTokens.Colors.binaryText, alignment: alignment))
         case let .some(other):
-            textField.stringValue = Self.displayText(for: other)
-            textField.textColor = .labelColor
-            textField.font = DesignTokens.Fonts.grid
+            stringValue = Self.displayText(for: other)
             if let label, changeState != .deleted {
                 // "1 · Ada": the key the column holds, then what it points at, muted.
                 let shown = NSMutableAttributedString(
-                    string: textField.stringValue,
-                    attributes: [.font: DesignTokens.Fonts.grid, .foregroundColor: NSColor.labelColor])
+                    string: stringValue,
+                    attributes: Style.attributes(font: Style.font, color: .labelColor, alignment: alignment))
                 shown.append(
                     NSAttributedString(
                         string: "  ·  \(label)",
-                        attributes: [.font: DesignTokens.Fonts.grid, .foregroundColor: NSColor.secondaryLabelColor]))
-                textField.attributedStringValue = shown
+                        attributes: Style.attributes(font: Style.font, color: .secondaryLabelColor, alignment: alignment)))
+                text = shown
+            } else {
+                text = NSAttributedString(
+                    string: stringValue,
+                    attributes: Style.attributes(font: Style.font, color: .labelColor, alignment: alignment))
             }
         }
 
@@ -101,14 +146,10 @@ final class GridCellView: NSView {
                 ?? backgroundColor
         }
         if changeState == .deleted {
-            textField.attributedStringValue = NSAttributedString(
-                string: textField.stringValue,
-                attributes: [
-                    .strikethroughStyle: NSUnderlineStyle.single.rawValue,
-                    .font: DesignTokens.Fonts.grid,
-                    .foregroundColor: NSColor.secondaryLabelColor,
-                ]
-            )
+            text = NSAttributedString(
+                string: stringValue,
+                attributes: Style.attributes(
+                    font: Style.font, color: .secondaryLabelColor, alignment: alignment, strikethrough: true))
         }
         // What VoiceOver reads: the column, then the value — with NULL and "not loaded"
         // told apart from a text that happens to say "NULL" — then the cell's state.
@@ -119,7 +160,7 @@ final class GridCellView: NSView {
         case .none: spokenValue = "not loaded"
         case .null: spokenValue = "NULL, no value"
         case let .bytes(data): spokenValue = "\(data.count) bytes of binary data"
-        case .some: spokenValue = textField.stringValue
+        case .some: spokenValue = stringValue
         }
         let state: String
         switch changeState {
@@ -172,6 +213,13 @@ final class GridCellView: NSView {
             path.lineWidth = 2
             path.stroke()
         }
+        guard let text else { return }
+        // One line, vertically centred, cut with an ellipsis at the trailing edge.
+        let inset = Self.horizontalInset
+        let rect = NSRect(
+            x: inset, y: ((bounds.height - Style.lineHeight) / 2).rounded(),
+            width: max(0, bounds.width - inset * 2), height: Style.lineHeight)
+        text.draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
     }
 }
 
@@ -192,28 +240,24 @@ extension DBValueKind {
 final class GridRowNumberView: NSView {
     static let reuseIdentifier = NSUserInterfaceItemIdentifier("Tinker.GridRowNumber")
 
-    private let textField = NSTextField(labelWithString: "")
+    @MainActor private static let selectedAttributes: [NSAttributedString.Key: Any] = attributes(color: .labelColor)
+    @MainActor private static let plainAttributes: [NSAttributedString.Key: Any] = attributes(color: .secondaryLabelColor)
+    @MainActor private static let lineHeight: CGFloat = ceil(NSLayoutManager().defaultLineHeight(for: DesignTokens.Fonts.grid))
+
+    private static func attributes(color: NSColor) -> [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .right
+        paragraph.lineBreakMode = .byClipping
+        return [.font: DesignTokens.Fonts.grid, .foregroundColor: color, .paragraphStyle: paragraph]
+    }
+
+    private var text: NSAttributedString?
     private var isSelected = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        wantsLayer = true
-        textField.translatesAutoresizingMaskIntoConstraints = false
-        textField.alignment = .right
-        textField.font = DesignTokens.Fonts.grid
-        textField.textColor = .secondaryLabelColor
-        textField.drawsBackground = false
-        textField.isBordered = false
-        textField.isEditable = false
-        textField.isSelectable = false
         setAccessibilityRole(.staticText)
         setAccessibilityElement(true)
-        addSubview(textField)
-        NSLayoutConstraint.activate([
-            textField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            textField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            textField.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
     }
 
     @available(*, unavailable)
@@ -223,8 +267,8 @@ final class GridRowNumberView: NSView {
 
     func configure(row: Int, isSelected: Bool) {
         self.isSelected = isSelected
-        textField.stringValue = String(row + 1)
-        textField.textColor = isSelected ? .labelColor : .secondaryLabelColor
+        text = NSAttributedString(
+            string: String(row + 1), attributes: isSelected ? Self.selectedAttributes : Self.plainAttributes)
         setAccessibilityLabel("Row \(row + 1)")
         needsDisplay = true
     }
@@ -235,6 +279,11 @@ final class GridRowNumberView: NSView {
             : NSColor.controlBackgroundColor).setFill()
         bounds.fill()
         // No trailing hairline: the rows carry no column rules, only the header does.
+        guard let text else { return }
+        let rect = NSRect(
+            x: 4, y: ((bounds.height - Self.lineHeight) / 2).rounded(),
+            width: max(0, bounds.width - 10), height: Self.lineHeight)
+        text.draw(with: rect, options: [.usesLineFragmentOrigin])
     }
 }
 
@@ -244,7 +293,7 @@ final class GridRowNumberView: NSView {
 /// separators aligned to that same edge leaves the label touching the line.
 final class GridHeaderCell: NSTableHeaderCell {
     /// Matches `GridCellView`'s text insets, so a heading sits directly above its values.
-    static let horizontalInset: CGFloat = 6
+    static let horizontalInset = GridCellView.horizontalInset
 
     override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
         super.drawInterior(

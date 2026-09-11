@@ -644,10 +644,29 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
     var reloadWaitsForEditor = false
 
     func reloadAfterRevision() {
+        let columnsChanged = builtColumnNames != visibleColumnNames
         rebuildColumnsIfNeeded()
         updateGutterWidth()
         updateSortIndicators()
-        tableView?.reloadData()
+        guard let tableView else { return }
+        // A full `reloadData` throws every row and cell view away and makes them again,
+        // which for one screen of a wide result is most of a frame (measured in
+        // `DataGridPerformanceTests`). A revision bump with the same columns — a page
+        // arrived, a value was edited, a row was added — only needs the row count noted
+        // and the cells on screen asked for their values again; those keep their views.
+        if columnsChanged || tableView.numberOfRows == 0 {
+            tableView.reloadData()
+            return
+        }
+        tableView.noteNumberOfRowsChanged()
+        // The rows on screen and the ones prepared just off it for responsive scrolling;
+        // a row further away has no view and is asked for when it comes into view.
+        let prepared = tableView.rows(in: tableView.preparedContentRect.union(tableView.visibleRect))
+        guard prepared.length > 0 else { return }
+        tableView.reloadData(
+            forRowIndexes: IndexSet(integersIn: prepared.location ..< prepared.location + prepared.length),
+            columnIndexes: IndexSet(integersIn: 0 ..< tableView.numberOfColumns)
+        )
     }
 
     func beginEditingFocusedCell() {

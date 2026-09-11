@@ -26,11 +26,19 @@
 			remoteGlobalIDString = DB0000000000000000000007;
 			remoteInfo = Tinker;
 		};
+		DB0000000000000000000610 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DB0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DB0000000000000000000007;
+			remoteInfo = Tinker;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		DB0000000000000000000002 /* Tinker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tinker.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		DB0000000000000000000502 /* TinkerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; name = TinkerUITests.xctest; path = Tinker.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		DB0000000000000000000502 /* TinkerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TinkerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		DB0000000000000000000602 /* TinkerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TinkerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -42,6 +50,11 @@
 		DB0000000000000000000503 /* TinkerUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = TinkerUITests;
+			sourceTree = "<group>";
+		};
+		DB0000000000000000000603 /* TinkerTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = TinkerTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -70,6 +83,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DB0000000000000000000604 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -78,6 +98,7 @@
 			children = (
 				DB0000000000000000000003 /* Tinker */,
 				DB0000000000000000000503 /* TinkerUITests */,
+				DB0000000000000000000603 /* TinkerTests */,
 				DB0000000000000000000006 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -87,6 +108,7 @@
 			children = (
 				DB0000000000000000000002 /* Tinker.app */,
 				DB0000000000000000000502 /* TinkerUITests.xctest */,
+				DB0000000000000000000602 /* TinkerTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -146,6 +168,27 @@
 			productReference = DB0000000000000000000502 /* TinkerUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		DB0000000000000000000607 /* TinkerTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DB0000000000000000000608 /* Build configuration list for PBXNativeTarget "TinkerTests" */;
+			buildPhases = (
+				DB0000000000000000000605 /* Sources */,
+				DB0000000000000000000604 /* Frameworks */,
+				DB0000000000000000000606 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DB0000000000000000000609 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				DB0000000000000000000603 /* TinkerTests */,
+			);
+			name = TinkerTests;
+			productName = TinkerTests;
+			productReference = DB0000000000000000000602 /* TinkerTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -181,6 +224,7 @@
 			targets = (
 				DB0000000000000000000007 /* Tinker */,
 				DB0000000000000000000507 /* TinkerUITests */,
+				DB0000000000000000000607 /* TinkerTests */,
 			);
 		};
 /* End PBXProject section */
@@ -194,6 +238,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		DB0000000000000000000506 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DB0000000000000000000606 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -217,6 +268,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DB0000000000000000000605 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -224,6 +282,11 @@
 			isa = PBXTargetDependency;
 			target = DB0000000000000000000007 /* Tinker */;
 			targetProxy = DB0000000000000000000510 /* PBXContainerItemProxy */;
+		};
+		DB0000000000000000000609 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DB0000000000000000000007 /* Tinker */;
+			targetProxy = DB0000000000000000000610 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -430,7 +493,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.thinkfree.TinkerUITests;
-				PRODUCT_NAME = Tinker;
+				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				TEST_TARGET_NAME = Tinker;
 			};
@@ -444,9 +507,39 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.thinkfree.TinkerUITests;
-				PRODUCT_NAME = Tinker;
+				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				TEST_TARGET_NAME = Tinker;
+			};
+			name = Release;
+		};
+		DB0000000000000000000611 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.thinkfree.TinkerTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tinker.app/Contents/MacOS/Tinker";
+			};
+			name = Debug;
+		};
+		DB0000000000000000000612 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.thinkfree.TinkerTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Tinker.app/Contents/MacOS/Tinker";
 			};
 			name = Release;
 		};
@@ -476,6 +569,15 @@
 			buildConfigurations = (
 				DB0000000000000000000511 /* Debug */,
 				DB0000000000000000000512 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DB0000000000000000000608 /* Build configuration list for PBXNativeTarget "TinkerTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DB0000000000000000000611 /* Debug */,
+				DB0000000000000000000612 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

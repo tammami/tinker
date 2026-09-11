@@ -242,12 +242,11 @@ public final class TableTabController: DataGridDelegate {
 
     public func goToPage(_ page: Int) async {
         guard let model else { return }
-        await guardingPendingEdits("Change page") { [weak self] in
-            await model.goToPage(page)
-            self?.surfaceLoadError()
-            self?.bumpRevision()
-            self?.updateStatus()
-        }
+        // Pending edits survive: they are keyed by row identity (ADR-0047).
+        await model.goToPage(page)
+        surfaceLoadError()
+        bumpRevision()
+        updateStatus()
     }
 
     public func goToFirstPage() async { await goToPage(0) }
@@ -276,13 +275,10 @@ public final class TableTabController: DataGridDelegate {
 
     public func refresh() async {
         guard let model else { return }
-        await guardingPendingEdits("Refresh") { [weak self] in
-            guard let self else { return }
-            await session?.invalidateIntrospection(.rowCount(table))
-            await model.reload()
-            bumpRevision()
-            updateStatus()
-        }
+        await session?.invalidateIntrospection(.rowCount(table))
+        await model.reload()
+        bumpRevision()
+        updateStatus()
     }
 
     /// The conditions the server sees: the filter rows plus the quick search, if any.
@@ -318,15 +314,12 @@ public final class TableTabController: DataGridDelegate {
         let task = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled, let self else { return }
-            await guardingPendingEdits("Filter") { [weak self] in
-                guard let self else { return }
-                await model?.setFilter(effectiveFilter)
-                guard !Task.isCancelled else { return }
-                surfaceLoadError()
-                bumpRevision()
-                updateStatus()
-                if persist { await persistPreferences() }
-            }
+            await model?.setFilter(effectiveFilter)
+            guard !Task.isCancelled else { return }
+            surfaceLoadError()
+            bumpRevision()
+            updateStatus()
+            if persist { await persistPreferences() }
         }
         liveFilterTask = task
         await task.value
@@ -343,17 +336,13 @@ public final class TableTabController: DataGridDelegate {
 
     public func applyFilter(_ rules: [FilterRule]) async {
         filterRules = rules
-        await guardingPendingEdits("Filter") { [weak self] in
-            guard let self else { return }
-            await model?.setFilter(effectiveFilter)
-            // A filter that the server refuses used to fail silently: the rows never
-            // arrived, and the grid drew the unfiltered estimate as empty rows instead of
-            // saying why.
-            surfaceLoadError()
-            bumpRevision()
-            updateStatus()
-            await persistPreferences()
-        }
+        await model?.setFilter(effectiveFilter)
+        // A filter that the server refuses used to fail silently: the rows never arrived,
+        // and the grid drew the unfiltered estimate as empty rows instead of saying why.
+        surfaceLoadError()
+        bumpRevision()
+        updateStatus()
+        await persistPreferences()
     }
 
     /// Shows whatever the last page load failed with, verbatim (SPEC §6).
@@ -368,14 +357,11 @@ public final class TableTabController: DataGridDelegate {
 
     public func cycleSort(columnIndex: Int, additive: Bool) async {
         guard let model, model.columns.indices.contains(columnIndex) else { return }
-        await guardingPendingEdits("Sort") { [weak self] in
-            guard let self else { return }
-            await model.cycleSort(column: model.columns[columnIndex].name, additive: additive)
-            surfaceLoadError()
-            bumpRevision()
-            updateStatus()
-            await persistPreferences()
-        }
+        await model.cycleSort(column: model.columns[columnIndex].name, additive: additive)
+        surfaceLoadError()
+        bumpRevision()
+        updateStatus()
+        await persistPreferences()
     }
 
     public func addRow() {
@@ -406,25 +392,6 @@ public final class TableTabController: DataGridDelegate {
             return
         }
         confirm(GridEditPrompts.deleteRows(count: rows.count, from: table.name) { apply() })
-    }
-
-    /// Runs `action` unless edits are pending, in which case the user is asked first:
-    /// every reload reads the page afresh and throws the pending edits away. With
-    /// auto-commit on, edits are only pending while a write is failing, which is exactly
-    /// when losing them silently would hurt most.
-    private func guardingPendingEdits(_ what: String, _ action: @escaping @MainActor () async -> Void) async {
-        guard let model, model.edits.pendingStatementCount > 0, !isWriting, let confirm else {
-            await action()
-            return
-        }
-        confirm(
-            GridEditPrompts.discardPendingEdits(
-                count: model.edits.pendingStatementCount, before: what,
-                reason: "\(what) re-reads the page from the server, which throws away what has not been committed."
-            ) {
-                model.edits.discardAll()
-                await action()
-            })
     }
 
     public func setSelectionNull() {

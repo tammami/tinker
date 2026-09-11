@@ -825,3 +825,44 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 - One pane per result set (SPEC §13.2a); the memory-cap banner's Load more.
 - An app-hosted performance target (`NSTableView` hitching) and a unit-test target for the
   app's own types.
+
+## 2026-09-11 — Review follow-up: everything the phases deferred (ADR-0047)
+
+### Done
+- Pending edits are keyed by row identity and survive a reload, a sort and a page move;
+  undo history survives with them; the "discard edits before reload" prompt is gone.
+- MySQL results stream under back-pressure (`autoRead` off while the channel is full).
+- A cancel from a dropped stream is counted before it reaches the actor; no statement,
+  and no `BEGIN`/`COMMIT`/`ROLLBACK`, starts on that connection until it has landed.
+  Two racing MySQL cancels open one kill connection.
+- A dump rolls its snapshot back itself when it stops.
+- A cross-server paste shows the rebuilt structure statements and asks before any run.
+- A batch with several result sets shows a picker; SQLite reports each set.
+- The memory-cap banner offers Load more (200k), Export the rest… and Stop.
+- `timetz` crosses to MySQL/SQLite as text; `TIME` refused it.
+- Every remaining lease site goes through `withLease`.
+- `TinkerTests`, hosted by the app: the app's helpers, and the real grid measured in a
+  window. The measurement found the cell's `NSTextField` + Auto Layout cost; cells now
+  draw their text, and a revision reload keeps its views. `TinkerUITests`' product
+  name no longer collides with the app module.
+- `Scripts/ci.sh` runs the hosted tests, and the MySQL kill test in Release; that test
+  found a killed TLS connection reported as an SSL protocol error, now mapped as lost.
+
+### Tests
+- Package: `testEditsFollowTheirRowAcrossAReload`, `QueryEventChannelTests` (7),
+  `testASlowConsumerDoesNotAccumulateTheResultInMemory`,
+  `testACancelThatArrivesAfterItsStatementEndedDoesNotHitTheNextOne` (PG, MySQL),
+  `testEveryRowReturningStatementInABatchIsItsOwnResultSet`,
+  `testATransferShowsItsStructureBeforeRunningAnyOfIt`, `testAllTypesTransfersAcrossEngines`,
+  `SchemaTranslatorTests` (zoned time).
+- App-hosted: `AppHelperTests` (6) and `DataGridPerformanceTests` (4). Measured in a
+  Release build over 100,000 × 20 rows: revision reload 8 ms, scroll stop 6 ms average,
+  full `reloadData` 15 ms.
+- `Scripts/ci.sh`: see the run recorded in the commit message.
+
+### Not done / deferred
+- The memory-cap prompt is answered from the banner only; no preference remembers the
+  answer.
+- The hosted performance tests run in Debug in `ci.sh` (the Release build of the app is
+  not part of CI); the Release numbers above were taken by hand with
+  `xcodebuild -configuration Release ENABLE_TESTABILITY=YES … test`.

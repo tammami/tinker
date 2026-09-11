@@ -30,6 +30,18 @@ All notable changes to Tinker are recorded here. The format follows
   environment. `Scripts/ci.sh --strict` refuses a green run that skipped anything; the
   smoke test only ever uses a `tinker_test` connection. The release build number is the
   project's, and a release needs its CHANGELOG section.
+- **Nothing left deferred (ADR-0047).** Pending edits follow their row across a sort,
+  a page move or a refresh, and so does undo; the grid no longer asks to discard them
+  first. MySQL results stream under back-pressure like the other engines. A cancel can
+  no longer land on the statement that came next. Pasting objects to another server
+  shows the CREATE, ALTER and DROP statements it rebuilt and asks before running them.
+  A batch that returns several result sets shows each one, with a picker. At the memory
+  cap the banner offers Load more, Export the rest… and Stop. A PostgreSQL `time with
+  time zone` crosses to MySQL or SQLite as text instead of failing. The grid draws its
+  cells itself: a scroll stop on a wide result costs a third of what it did, and a
+  refresh a fifth; both are now measured in the real table view by app-hosted tests. A
+  MySQL connection killed under a statement over TLS is reported as lost, so the session
+  replaces it instead of showing an SSL error.
 
 ## [0.1.1] - 2026-09-11
 

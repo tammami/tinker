@@ -113,6 +113,22 @@ if ! swift test --skip-build 2>&1 | tee "$TEST_LOG"; then
 fi
 
 # ---------------------------------------------------------------------------
+# One test can only run in a Release build: mysql-nio `assert`s in a Debug build when a
+# connection is killed under a prepared statement (ADR-0044), which aborts the process,
+# and the app ships as Release. It is built and run here in Release so it runs at all.
+if [[ $MYSQL_SET == 1 ]]; then
+    bold "Release-only tests (mysql-nio asserts in Debug on a killed connection)"
+    RELEASE_LOG="$(mktemp -t tinker-ci-release)"
+    # `@testable import` in the suites needs testability, which a release build turns off.
+    if ! swift build -c release --build-tests -Xswiftc -enable-testing 2>&1 | tee "$RELEASE_LOG" | grep -E "error:|warning: .*Packages/" ; then :; fi
+    if ! swift test -c release --skip-build -Xswiftc -enable-testing --filter 'DBMySQLTests.MySQLIntegrationTests/testAKilledConnectionIsReportedAsLost' 2>&1 | tee -a "$RELEASE_LOG" | grep -E "Test Case|error:|Executed"; then
+        fail "release-only test failed (log: $RELEASE_LOG)"
+    fi
+    grep -qE "Executed 1 test, with 0 failures" "$RELEASE_LOG" || fail "release-only test did not run or failed (log: $RELEASE_LOG)"
+    echo "  ok"
+fi
+
+# ---------------------------------------------------------------------------
 if [[ $SKIP_APP == 0 ]]; then
     bold "App build (xcodebuild; warnings-as-errors is set on the app target in the project)"
     APP_LOG="$(mktemp -t tinker-ci-app)"
@@ -130,6 +146,29 @@ if [[ $SKIP_APP == 0 ]]; then
         grep -E '^[^ ]+: warning:' "$APP_LOG"
         fail "app build produced warnings"
     fi
+    echo "  ok"
+
+    bold "App-hosted tests (TinkerTests: the app's own helpers, and the real grid measured in a window)"
+    HOSTED_LOG="$(mktemp -t tinker-ci-hosted)"
+    # Not `-quiet`: it hides the test lines and the verdict. The grep keeps what matters.
+    set +e
+    xcodebuild \
+            -project App/Tinker.xcodeproj \
+            -scheme Tinker \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath .build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:TinkerTests \
+            test 2>&1 | tee "$HOSTED_LOG" | grep -E "Test Case .* (passed|failed)|: error:|Executed [0-9]+ tests|TEST (SUCCEEDED|FAILED)"
+    HOSTED_STATUS=${PIPESTATUS[0]}
+    set -e
+    if grep -E '^[^ ]+: warning:' "$HOSTED_LOG" >/dev/null; then
+        grep -E '^[^ ]+: warning:' "$HOSTED_LOG"
+        fail "app-hosted test build produced warnings"
+    fi
+    [[ $HOSTED_STATUS == 0 ]] || fail "app-hosted tests failed (log: $HOSTED_LOG)"
+    grep -qE "TEST SUCCEEDED" "$HOSTED_LOG" || fail "app-hosted tests did not report success (log: $HOSTED_LOG)"
     echo "  ok"
 
     bold "App smoke test"

@@ -200,12 +200,6 @@ public final class TransferController {
             do {
                 let session = try session(request.connectionID, database: request.schema.database)
                 _ = try await session.connect()
-                let (lease, connection) = try await session.lease()
-                defer { Task { await session.release(lease) } }
-                let routines =
-                    options.includeRoutines && request.tables == nil
-                    ? (try? await connection.introspector.routines(in: request.schema)) ?? [] : []
-                let selection = DumpSelection(schema: request.schema, tables: tables, routines: routines)
                 let writer = try ScriptFileWriter(url: url, dialect: dialect, compress: compress)
                 // From here on the file at `url` is ours to remove on failure; before this
                 // point it was whatever the user already had there.
@@ -216,21 +210,27 @@ public final class TransferController {
                     try writer.writeComment(line)
                 }
                 try writer.writeComment("")
-                let channel = ScriptChannel()
-                let dumper = DatabaseDumper(dialect: dialect, options: options)
-                async let dumped = dumper.run(selection, on: connection, into: channel) { progress in
-                    Task { @MainActor [weak self] in self?.show(progress, bytes: nil) }
-                }
-                do {
-                    while let chunk = try await channel.next() {
-                        try writer.write(chunk)
-                        if Task.isCancelled { throw CancellationError() }
+                let outcome = try await session.withLease { connection in
+                    let routines =
+                        options.includeRoutines && request.tables == nil
+                        ? (try? await connection.introspector.routines(in: request.schema)) ?? [] : []
+                    let selection = DumpSelection(schema: request.schema, tables: tables, routines: routines)
+                    let channel = ScriptChannel()
+                    let dumper = DatabaseDumper(dialect: dialect, options: options)
+                    async let dumped = dumper.run(selection, on: connection, into: channel) { progress in
+                        Task { @MainActor [weak self] in self?.show(progress, bytes: nil) }
                     }
-                } catch {
-                    await channel.close()
-                    throw error
+                    do {
+                        while let chunk = try await channel.next() {
+                            try writer.write(chunk)
+                            if Task.isCancelled { throw CancellationError() }
+                        }
+                    } catch {
+                        await channel.close()
+                        throw error
+                    }
+                    return try await dumped
                 }
-                let outcome = try await dumped
                 try writer.finish()
                 writtenURL = url
                 summary =
@@ -354,27 +354,31 @@ public final class TransferController {
                 let targetSession = try session(
                     request.targetConnectionID, database: dialect == .postgresql ? target.database : nil)
                 try await requireWritable(targetSession)
-                let (sourceLease, source) = try await sourceSession.lease()
-                let (targetLease, destination) = try await targetSession.lease()
                 defer {
                     Task {
-                        await sourceSession.release(sourceLease)
-                        await targetSession.release(targetLease)
                         await targetSession.invalidateIntrospection()
                         if let main = environment.session(for: request.targetConnectionID) {
                             await main.invalidateIntrospection()
                         }
                     }
                 }
-                let routines =
-                    request.source.isWholeSchema && options.includeRoutines
-                    ? (try? await source.introspector.routines(in: request.source.schema)) ?? [] : []
-                let selection = DumpSelection(schema: request.source.schema, tables: tables, routines: routines)
-                let outcome = try await TransferRunner.run(
-                    selection, from: source, to: destination, dialect: sourceDialect, targetDialect: dialect,
-                    options: options, renaming: renaming
-                ) { progress in
-                    Task { @MainActor [weak self] in self?.show(progress) }
+                let targetName = environment.connections.first { $0.id == request.targetConnectionID }?.name ?? "the target"
+                let outcome = try await sourceSession.withLease { source in
+                    try await targetSession.withLease { destination in
+                        let routines =
+                            request.source.isWholeSchema && options.includeRoutines
+                            ? (try? await source.introspector.routines(in: request.source.schema)) ?? [] : []
+                        let selection = DumpSelection(schema: request.source.schema, tables: tables, routines: routines)
+                        return try await TransferRunner.run(
+                            selection, from: source, to: destination, dialect: sourceDialect, targetDialect: dialect,
+                            options: options, renaming: renaming,
+                            review: { statements in
+                                await Self.reviewStructure(statements, target: targetName, source: request.source.connectionName)
+                            }
+                        ) { progress in
+                            Task { @MainActor [weak self] in self?.show(progress) }
+                        }
+                    }
                 }
                 failures = outcome.execution.failures
                 summary = Self.summary(of: outcome.execution, prefix: "Pasted")
@@ -383,12 +387,42 @@ public final class TransferController {
                 phase = outcome.execution.failures.isEmpty ? .finished : .failed
             } catch let error as ScriptExecutionError {
                 finish(with: error)
+            } catch is TransferRunner.DeclinedAtReview {
+                phase = .cancelled
+                status = "Declined at the structure review; nothing was written."
             } catch is CancellationError {
                 phase = .cancelled
                 status = "Cancelled; the last batch was rolled back."
             } catch {
                 fail(error)
             }
+        }
+    }
+
+    /// The structure a paste is about to run on the target, shown before it runs. The
+    /// statements were rebuilt from the source's catalog: a default expression or a check
+    /// constraint there is text the target will execute, so the person reads them
+    /// (ADR-0047). A headless run declines.
+    @MainActor
+    static func reviewStructure(_ statements: [String], target: String, source: String) async -> Bool {
+        guard !statements.isEmpty else { return true }
+        guard let workspace = CommandCenter.shared.current?.workspace else { return false }
+        let shown = statements.prefix(40).map { statement in
+            let flat = statement.split(whereSeparator: \.isNewline).joined(separator: " ")
+            return "• " + (flat.count > 300 ? String(flat.prefix(300)) + "…" : flat)
+        }
+        var message =
+            "\(statements.count) statement\(statements.count == 1 ? "" : "s") rebuilt from “\(source)” will run on “\(target)” before any rows are copied:\n\n"
+            + shown.joined(separator: "\n")
+        if statements.count > shown.count { message += "\n• … and \(statements.count - shown.count) more" }
+        return await withCheckedContinuation { continuation in
+            workspace.confirmation = DestructiveConfirmation(
+                title: "Run this structure on “\(target)”?",
+                message: message,
+                confirmTitle: "Run and Copy Rows",
+                action: { continuation.resume(returning: true) },
+                onCancel: { continuation.resume(returning: false) }
+            )
         }
     }
 

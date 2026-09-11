@@ -464,6 +464,29 @@ public struct QueryTabView: View {
     @ViewBuilder
     private func rowsPane(_ result: QueryResultTab) -> some View {
         VStack(spacing: 0) {
+            if result.grids.count > 1 {
+                // One pane per result set (SPEC §13.2a); this picks which one is shown.
+                PaneBar {
+                    Picker(
+                        "Result set",
+                        selection: Binding(
+                            get: { result.shownGridIndex },
+                            set: { index in
+                                result.shownGridIndex = index
+                                controller.bumpRevision()
+                            })
+                    ) {
+                        ForEach(result.grids.indices, id: \.self) { index in
+                            Text("Set \(index + 1) · \(result.grids[index].displayRowCount) rows").tag(index)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    Spacer()
+                }
+                Divider()
+            }
             if let grid = result.grid {
                 HStack(spacing: 0) {
                     DataGridView(
@@ -502,17 +525,35 @@ public struct QueryTabView: View {
                         .id(controller.revision)
                     }
                 }
-                if grid.hasReachedMemoryCap {
+                if let prompt = controller.memoryCapPrompt {
+                    // The stream is paused on the server side while this shows (SPEC §12.1).
                     InlineBanner(
                         kind: .warning,
-                        message: "Showing the first 200,000 rows. Export to a file to get the rest.",
-                        onDismiss: {}
+                        message: "\(prompt.rows) rows are in memory and more are waiting on the server.",
+                        onDismiss: { controller.resolveMemoryCap(.stop) }
                     )
                     .overlay(alignment: .trailing) {
-                        Button("Export…") { workspace.isExportPresented = true }
-                            .controlSize(.small)
-                            .padding(.trailing, 44)
+                        HStack(spacing: DesignTokens.Spacing.sm) {
+                            Button("Load 200,000 more") { controller.resolveMemoryCap(.loadMore) }
+                            Button("Export the rest…") {
+                                let panel = NSSavePanel()
+                                panel.nameFieldStringValue = "rest.csv"
+                                panel.canCreateDirectories = true
+                                if panel.runModal() == .OK, let url = panel.url {
+                                    controller.resolveMemoryCap(.exportRest(url))
+                                }
+                            }
+                            Button("Stop") { controller.resolveMemoryCap(.stop) }
+                        }
+                        .controlSize(.small)
+                        .padding(.trailing, 44)
                     }
+                } else if grid.hasReachedMemoryCap {
+                    InlineBanner(
+                        kind: .info,
+                        message: "Showing the first \(grid.rowCount) rows; the statement was stopped on the server.",
+                        onDismiss: {}
+                    )
                 }
             } else {
                 EmptyStateView(

@@ -32,8 +32,18 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "DB0000000000000000000607"
+               BuildableName = "TinkerTests.xctest"
+               BlueprintName = "TinkerTests"
+               ReferencedContainer = "container:Tinker.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "DB0000000000000000000507"
-               BuildableName = "Tinker.xctest"
+               BuildableName = "TinkerUITests.xctest"
                BlueprintName = "TinkerUITests"
                ReferencedContainer = "container:Tinker.xcodeproj">
             </BuildableReference>

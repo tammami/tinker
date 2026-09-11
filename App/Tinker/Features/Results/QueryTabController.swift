@@ -101,6 +101,45 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     /// not by a view, so it is there before the tab has appeared.
     @ObservationIgnored public var confirm: ((DestructiveConfirmation) -> Void)?
 
+    // MARK: - The memory cap (SPEC §12.1)
+
+    /// What the user chose at the cap.
+    public enum MemoryCapChoice: Sendable {
+        /// Another 200,000 rows into the grid.
+        case loadMore
+        /// The remaining rows to this file, not the grid.
+        case exportRest(URL)
+        /// Stop here; the statement is cancelled on the server.
+        case stop
+    }
+
+    /// Shown while the stream waits at the cap: the banner reads it and answers through
+    /// ``resolveMemoryCap(_:)``. The stream is paused meanwhile, not buffered — the
+    /// driver's bounded channel holds the socket.
+    public struct MemoryCapPrompt: Identifiable {
+        public let id = UUID()
+        public let rows: Int
+    }
+    public private(set) var memoryCapPrompt: MemoryCapPrompt?
+    @ObservationIgnored private var memoryCapContinuation: CheckedContinuation<MemoryCapChoice, Never>?
+
+    /// Pauses the run at the cap until the banner answers. A headless run stops.
+    private func askAtMemoryCap(rows: Int) async -> MemoryCapChoice {
+        guard confirm != nil else { return .stop }
+        return await withCheckedContinuation { continuation in
+            memoryCapContinuation = continuation
+            memoryCapPrompt = MemoryCapPrompt(rows: rows)
+        }
+    }
+
+    /// The banner's answer.
+    public func resolveMemoryCap(_ choice: MemoryCapChoice) {
+        guard let continuation = memoryCapContinuation else { return }
+        memoryCapContinuation = nil
+        memoryCapPrompt = nil
+        continuation.resume(returning: choice)
+    }
+
     /// Starts the statements, after asking on a production connection when any of them
     /// writes. Reads run without a question; nothing else does. With no way to ask (the
     /// tab's view has not attached one), a production write does not run at all.
@@ -397,6 +436,9 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             var rowTotal = 0
             var completion: QueryCompletion?
 
+            var overflow: ExportWriter?
+            var overflowRows: Int64 = 0
+            var overflowURL: URL?
             events: for try await event in connection.execute(statement.text, parameters: []) {
                 switch event {
                 case let .columns(value):
@@ -407,20 +449,48 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
                         )
                         grid.appendStreamed(columns: value, batch: RowBatch(rows: [], startIndex: 0))
                         model = grid
-                        result.grid = grid
+                        // A second set of columns is a second result set (SPEC §13.2a):
+                        // a batch of SELECTs on SQLite, a procedure returning several.
+                        if result.grids.isEmpty { result.grid = grid } else { result.grids.append(grid) }
                     }
                 case let .rows(batch):
-                    model?.appendStreamed(columns: columns, batch: batch)
                     rowTotal += batch.count
+                    if let overflow {
+                        // Past the cap, the user chose the file: rows go there, not the grid.
+                        overflowRows += Int64(batch.count)
+                        await overflow.write(rows: batch.rows)
+                        continue
+                    }
+                    model?.appendStreamed(columns: columns, batch: batch)
                     // Redraw as rows arrive so a long query shows progress.
                     if rowTotal % 5_000 < batch.count { bumpRevision() }
-                    // Leaving the loop ends the stream, which tells the driver to cancel
-                    // the statement on the server; a bare `break` only left the switch,
-                    // and every remaining row was still pulled through the main actor.
-                    if let model, model.hasReachedMemoryCap { break events }
+                    // At the cap the stream pauses — the driver's channel holds the socket —
+                    // and the banner asks: more rows into memory, the rest into a file, or
+                    // stop here (SPEC §12.1). Leaving the loop cancels on the server.
+                    if let model, model.hasReachedMemoryCap {
+                        bumpRevision()
+                        switch await askAtMemoryCap(rows: rowTotal) {
+                        case .loadMore:
+                            model.raiseMemoryCap()
+                        case let .exportRest(url):
+                            var options = ExportOptions()
+                            options.dialect = dialect
+                            let writer = try ExportWriter(url: url, options: options)
+                            try await writer.begin(columns: columns)
+                            overflow = writer
+                            overflowURL = url
+                        case .stop:
+                            break events
+                        }
+                    }
                 case let .complete(value):
                     completion = value
                 }
+            }
+            var overflowNote = ""
+            if let overflow, let overflowURL {
+                try await overflow.finish()
+                overflowNote = " — \(overflowRows) further rows written to \(overflowURL.lastPathComponent)"
             }
             // A stream ends quietly when its consumer is cancelled; the server's own
             // "canceling statement" may still be on its way. What the user asked for was
@@ -435,7 +505,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
                 result.message =
                     "\(completion?.serverTag ?? "OK") — \(affected) row\(affected == 1 ? "" : "s") in \(Self.format(duration))"
             } else {
-                result.message = "\(rowTotal) row\(rowTotal == 1 ? "" : "s") in \(Self.format(duration))"
+                result.message = "\(rowTotal) row\(rowTotal == 1 ? "" : "s") in \(Self.format(duration))" + overflowNote
             }
             // History is written to disk: a password inside `CREATE USER` must not go with it.
             await environment.recordHistory(
@@ -768,22 +838,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             }
             bumpRevision()
         }
-        // Another page re-runs the statement, which throws away edits pending on this one.
-        let pending = grid.edits.pendingStatementCount
-        guard pending > 0, !isWritingEdits, let confirm else {
-            await move()
-            return
-        }
-        confirm(
-            DestructiveConfirmation(
-                title: "Discard \(pending) pending change\(pending == 1 ? "" : "s")?",
-                message: "Changing page re-runs the statement, which throws away what has not been committed.",
-                confirmTitle: "Discard and Change Page",
-                action: {
-                    grid.edits.discardAll()
-                    await move()
-                }
-            ))
+        // Pending edits survive the page change: they are keyed by row identity (ADR-0047).
+        await move()
     }
 
     public func goToFirstPage() async { await goToPage(0) }
@@ -1041,6 +1097,9 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
 
     /// Cancels the running statement on the server.
     public func cancel() {
+        // A run paused at the memory cap is waiting on the banner, not on the server;
+        // Stop is its answer, and the loop then cancels on the server itself.
+        resolveMemoryCap(.stop)
         Task {
             await heldConnection?.cancelCurrent()
             runTask?.cancel()
@@ -1049,6 +1108,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     }
 
     public func releaseHeldConnection() async {
+        resolveMemoryCap(.stop)
         guard let session, let heldLease else { return }
         if isInTransaction { await rollbackTransaction() }
         await session.release(heldLease)

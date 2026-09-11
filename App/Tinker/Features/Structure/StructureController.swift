@@ -141,53 +141,52 @@ public final class StructureController {
         let started = ContinuousClock.now
         do {
             let table = table
-            let (lease, connection) = try await session.lease()
-            defer { Task { await session.release(lease) } }
-
-            let columns = try await session.introspection(.columns(table), on: connection) {
-                try await $0.columns(of: table)
-            }
-            let primaryKey =
-                try await session.introspection(.primaryKey(table), on: connection) {
-                    try await $0.primaryKey(of: table)
-                } ?? []
-            let indexes = try await session.introspection(.indexes(table), on: connection) {
-                try await $0.indexes(of: table)
-            }
-            let foreignKeys = try await session.introspection(.foreignKeys(table), on: connection) {
-                try await $0.foreignKeys(of: table)
-            }
-            let checks = try await session.introspection(.checkConstraints(table), on: connection) {
-                try await $0.checkConstraints(of: table)
-            }
-            let triggers = try await session.introspection(.triggers(table), on: connection) {
-                try await $0.triggers(of: table)
-            }
-            let partitioning = try await session.introspection(.partitioning(table), on: connection) {
-                try await $0.partitioning(of: table)
-            }
-            // The sidebar has usually listed the schema already; if not, one row is read,
-            // never the size of every table in it.
-            let listed: [TableInfo]? = await session.cachedIntrospection(.tables(table.schemaRef))
-            var info = listed?.first { $0.ref == table }
-            if info == nil {
-                info = try await session.introspection(.tableInfo(table), on: connection) {
-                    try await $0.tableInfo(of: table)
+            // One lease for the whole run of reads, returned before the state below is set.
+            let definition = try await session.withLease { connection in
+                let columns = try await session.introspection(.columns(table), on: connection) {
+                    try await $0.columns(of: table)
                 }
+                let primaryKey =
+                    try await session.introspection(.primaryKey(table), on: connection) {
+                        try await $0.primaryKey(of: table)
+                    } ?? []
+                let indexes = try await session.introspection(.indexes(table), on: connection) {
+                    try await $0.indexes(of: table)
+                }
+                let foreignKeys = try await session.introspection(.foreignKeys(table), on: connection) {
+                    try await $0.foreignKeys(of: table)
+                }
+                let checks = try await session.introspection(.checkConstraints(table), on: connection) {
+                    try await $0.checkConstraints(of: table)
+                }
+                let triggers = try await session.introspection(.triggers(table), on: connection) {
+                    try await $0.triggers(of: table)
+                }
+                let partitioning = try await session.introspection(.partitioning(table), on: connection) {
+                    try await $0.partitioning(of: table)
+                }
+                // The sidebar has usually listed the schema already; if not, one row is
+                // read, never the size of every table in it.
+                let listed: [TableInfo]? = await session.cachedIntrospection(.tables(table.schemaRef))
+                var info = listed?.first { $0.ref == table }
+                if info == nil {
+                    info = try await session.introspection(.tableInfo(table), on: connection) {
+                        try await $0.tableInfo(of: table)
+                    }
+                }
+                return TableDefinition(
+                    table: table,
+                    info: info,
+                    columns: columns,
+                    primaryKey: primaryKey,
+                    indexes: indexes,
+                    foreignKeys: foreignKeys,
+                    checks: checks,
+                    triggers: triggers,
+                    partitioning: partitioning,
+                    options: TableOptions(engine: info?.engine, collation: info?.collation)
+                )
             }
-
-            let definition = TableDefinition(
-                table: table,
-                info: info,
-                columns: columns,
-                primaryKey: primaryKey,
-                indexes: indexes,
-                foreignKeys: foreignKeys,
-                checks: checks,
-                triggers: triggers,
-                partitioning: partitioning,
-                options: TableOptions(engine: info?.engine, collation: info?.collation)
-            )
             // Column identities are fresh every read; the selection follows the name.
             let selectedName = edited?.columns.first { $0.id == selectedColumnID }?.name
             let keptEdits = keepingEdits && hasUnsavedEdits ? edited : nil

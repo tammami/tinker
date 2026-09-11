@@ -65,6 +65,7 @@ enum HelpContent {
                     paragraphs: [
                         "Expand a connection in the sidebar to see its databases, schemas and tables. Double-click a table to open it in a tab, or press ⌘⇧O and type part of its name.",
                         "The grid pages on the server, one page in memory at a time, so a table with millions of rows opens as fast as a small one.",
+                        "A query result streams into memory up to a cap; at the cap a banner offers Load more (another 200,000 rows), Export the rest… (the remaining rows straight to a file) or Stop. A batch that returns several result sets shows a picker above the grid, one entry per set.",
                     ]),
                 HelpSection(
                     heading: "Run a query",
@@ -231,7 +232,7 @@ enum HelpContent {
                 HelpSection(
                     heading: "Copy and paste objects",
                     paragraphs: [
-                        "Right-click a table, schema or database in the sidebar and choose Copy; Paste on another connection rebuilds it there, with keys and indexes."
+                        "Right-click a table, schema or database in the sidebar and choose Copy; Paste on another connection rebuilds it there, with keys and indexes. Before anything runs on the target, a sheet lists the CREATE, ALTER and DROP statements the paste rebuilt from the source, so a default or check expression written on the source is read before it is executed elsewhere."
                     ]),
                 HelpSection(
                     heading: "Export and CSV import",

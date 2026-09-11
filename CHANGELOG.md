@@ -4,7 +4,7 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.1.2] - 2026-09-11
 
 ### Changed
 - **The review's fixes (ADR-0040 to ADR-0045).** The connection pool no longer hands out a

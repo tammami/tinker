@@ -666,7 +666,7 @@ public struct WorkspaceView: View {
     func streamEverything(
         tab: WorkspaceTab,
         grid: GridModel,
-        write: @escaping @MainActor ([[DBValue]]) -> Void
+        write: @escaping @MainActor ([[DBValue]]) async -> Void
     ) async {
         let sql: String
         let owner: ConnectionSession?
@@ -678,11 +678,14 @@ public struct WorkspaceView: View {
             sql = statement
             owner = environment.session(for: tab.connectionID)
         }
-        guard let session = owner, let (lease, connection) = try? await session.lease() else { return }
-        defer { Task { await session.release(lease) } }
+        guard let session = owner else { return }
         do {
-            for try await event in connection.execute(sql, parameters: []) {
-                if case let .rows(batch) = event { write(batch.rows) }
+            // Awaiting the writer between batches is what keeps the driver's channel
+            // full rather than the process: the socket waits for the file.
+            try await session.withLease { connection in
+                for try await event in connection.execute(sql, parameters: []) {
+                    if case let .rows(batch) = event { await write(batch.rows) }
+                }
             }
         } catch {
             // The export sheet reports the failure; the lease is returned either way.

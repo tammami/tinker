@@ -105,6 +105,99 @@ final class GridIntegrationTests: XCTestCase {
         }
     }
 
+    // MARK: - Value fidelity through the grid (SPEC §5, §17.1)
+
+    /// Text with every awkward character, and a decimal with trailing zeros, typed into
+    /// the grid, committed through bound parameters, and read back exactly: quotes and
+    /// backslashes are not doubled or eaten, newlines survive, `1.1000` stays `1.1000`
+    /// where the engine has an exact decimal.
+    func testAwkwardTextAndDecimalScaleSurviveTheGridCommit() async throws {
+        try await withSession { session, server in
+            let awkward = "it's \"quoted\" \\ back\\slash\nline two\ttab -- not a comment; ünïcödé 日本語 🚀"
+            try await session.withLease { setup in
+                _ = try await setup.executeCollecting("DROP TABLE IF EXISTS grid_fidelity_probe")
+                _ = try await setup.executeCollecting(
+                    self.sql(
+                        server,
+                        pg: "CREATE TABLE grid_fidelity_probe (id integer PRIMARY KEY, t text, d numeric(12,4))",
+                        mysql: "CREATE TABLE grid_fidelity_probe (id INT PRIMARY KEY, t TEXT, d DECIMAL(12,4))",
+                        sqlite: "CREATE TABLE grid_fidelity_probe (id INTEGER PRIMARY KEY, t TEXT, d TEXT)"))
+            }
+            let table = self.table("grid_fidelity_probe", in: server)
+            let model = self.makeModel(session: session, table: table, identity: ["id"])
+            await model.load(page: 0)
+            let insert = try XCTUnwrap(model.addRow())
+            model.edits.setInsertValue(.int(1), id: insert.id, column: "id")
+            model.edits.setInsertValue(.string(awkward), id: insert.id, column: "t")
+            model.edits.setInsertValue(.decimal("1.1000"), id: insert.id, column: "d")
+            let result = try await model.commit(using: SessionStatementRunner(session: session))
+            XCTAssertEqual(result.statementCount, 1)
+
+            let read = try await session.withLease { connection in
+                try await connection.executeCollecting("SELECT t, d FROM grid_fidelity_probe WHERE id = 1")
+            }
+            XCTAssertEqual(read.rows.first?.first, .string(awkward), "the text came back changed on \(server.engine)")
+            switch server.engine {
+            case .postgresql, .mysql:
+                XCTAssertEqual(read.rows.first?.last, .decimal("1.1000"), "the scale is the column's, not the value's")
+            case .sqlite:
+                // SQLite has no exact decimal (ADR-0037); a TEXT column keeps the text.
+                XCTAssertEqual(read.rows.first?.last?.text, "1.1000")
+            }
+
+            // And an edit of the same cell through the UPDATE path, keyed by the original id.
+            await model.reload()
+            let row = (0 ..< model.rowCount).first { model.value(row: $0, column: 0) == .int(1) } ?? 0
+            model.setValue(.string(awkward + " again"), row: row, column: 1)
+            _ = try await model.commit(using: SessionStatementRunner(session: session))
+            let again = try await session.withLease { connection in
+                try await connection.executeCollecting("SELECT t FROM grid_fidelity_probe WHERE id = 1")
+            }
+            XCTAssertEqual(again.rows.first?.first, .string(awkward + " again"))
+            try await session.withLease { cleanup in
+                _ = try await cleanup.executeCollecting("DROP TABLE grid_fidelity_probe")
+            }
+        }
+    }
+
+    // MARK: - Recovery (SPEC §9.6)
+
+    /// A pooled connection killed from outside — a DBA, a failover, a VPN drop — is found
+    /// dead by the next lease and replaced; the session carries on with no help.
+    func testAKilledBackendIsReplacedOnTheNextLease() async throws {
+        try await withSession { session, server in
+            guard server.engine != .sqlite else { return }  // a file has no backend to kill
+            let (lease, connection) = try await session.lease()
+            let victim = connection.backendID
+            await session.release(lease)
+            let pooledBefore = await session.pooledConnectionCount
+            XCTAssertEqual(pooledBefore, 1)
+
+            let killer = try await Self.registry.connect(server.resolvedConfig(), logger: logger)
+            switch server.engine {
+            case .postgresql:
+                _ = try await killer.executeCollecting("SELECT pg_terminate_backend(\(Int32(victim) ?? -1))")
+            case .mysql:
+                _ = try await killer.executeCollecting("KILL CONNECTION \(Int(victim) ?? -1)")
+            case .sqlite:
+                break
+            }
+            await killer.close()
+            // The kill is asynchronous on the server; give the socket a moment to close.
+            try await Task.sleep(for: .milliseconds(300))
+
+            let (again, replacement) = try await session.lease()
+            XCTAssertNotEqual(replacement.backendID, victim, "the dead connection was handed out again")
+            let answer = try await replacement.executeCollecting("SELECT 1")
+            XCTAssertEqual(answer.firstText, "1")
+            await session.release(again)
+            let pooledAfter = await session.pooledConnectionCount
+            XCTAssertEqual(pooledAfter, 1, "the dead connection should have been dropped, not kept beside the new one")
+            let state = await session.state
+            XCTAssertEqual(state, .connected)
+        }
+    }
+
     // MARK: - Paging
 
     /// SPEC §12.6: the first page of a million-row table arrives quickly.

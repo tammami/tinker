@@ -266,6 +266,9 @@ public actor MySQLSQLConnection: SQLConnection {
     ) async {
         let started = ContinuousClock.now
         let decoder = decoder
+        statementGeneration += 1
+        statementInFlight = true
+        defer { statementInFlight = false }
         let batcher = RowBatcher(continuation: continuation, decoder: decoder)
         do {
             let metadataBox = NIOLockedValueBox<MySQLQueryMetadata?>(nil)
@@ -315,9 +318,13 @@ public actor MySQLSQLConnection: SQLConnection {
 
     /// Stops the running statement with `KILL QUERY` from a second connection (SPEC §7.3).
     public func cancelCurrent() async {
-        guard !closed, let threadID = Int(backendID) else { return }
+        guard !closed, statementInFlight, let threadID = Int(backendID) else { return }
+        let generation = statementGeneration
         do {
             let connection = try await killChannel()
+            // Opening the spare connection took time; the statement this cancel was for
+            // may have finished and another started. That one is left alone.
+            guard generation == statementGeneration, statementInFlight else { return }
             _ = try await Self.rawQuery(
                 "KILL QUERY \(threadID)", on: connection, logger: logger, decoder: decoder
             )
@@ -325,6 +332,11 @@ public actor MySQLSQLConnection: SQLConnection {
             logger.debug("cancel request failed", metadata: ["error": "\(error)"])
         }
     }
+
+    /// Counts statements started on this connection, so a cancel that arrives after the
+    /// statement it was meant for has ended is dropped rather than killing the next one.
+    private var statementGeneration = 0
+    private var statementInFlight = false
 
     /// The spare connection cancels run on, opened once and kept.
     private func killChannel() async throws -> MySQLConnection {

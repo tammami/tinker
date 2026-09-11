@@ -33,6 +33,12 @@ public actor PostgresSQLConnection: SQLConnection {
     /// Set when this client asked the server to cancel, so that the 57014 that follows is
     /// reported as `.cancelled` and a `statement_timeout`'s 57014 is not.
     private var cancelRequested = false
+    /// Counts statements started on this connection. A cancel opens a helper connection
+    /// first, which takes long enough for the statement it was meant for to finish and
+    /// the next one to start; the cancel is dropped when that has happened, so it never
+    /// lands on a statement nobody asked to stop.
+    private var statementGeneration = 0
+    private var statementInFlight = false
 
     init(underlying: PostgresConnection, config: ResolvedConnectionConfig, logger: Logger) async throws {
         self.underlying = underlying
@@ -217,17 +223,18 @@ public actor PostgresSQLConnection: SQLConnection {
         _ sql: String,
         parameters: [DBValue]
     ) -> AsyncThrowingStream<QueryEvent, any Error> {
-        AsyncThrowingStream { continuation in
-            // Unstructured on purpose: cancelling the consumer must reach the *server*
-            // through `pg_cancel_backend`, not tear down the NIO channel, so that the
-            // connection stays usable afterwards (SPEC §13.3).
-            let task = Task { await self.run(sql: sql, parameters: parameters, into: continuation) }
-            continuation.onTermination = { termination in
-                guard case .cancelled = termination else { return }
-                Task {
-                    await self.cancelCurrent()
-                    task.cancel()
-                }
+        // A bounded channel, not a continuation: `send` waits when the consumer is behind,
+        // and that wait reaches the socket through the row sequence, so a million-row
+        // result is never more than a few batches in memory (SPEC §4, §12.6).
+        let channel = QueryEventChannel()
+        // Unstructured on purpose: cancelling the consumer must reach the *server*
+        // through `pg_cancel_backend`, not tear down the NIO channel, so that the
+        // connection stays usable afterwards (SPEC §13.3).
+        let task = Task { await self.run(sql: sql, parameters: parameters, into: channel) }
+        return channel.stream {
+            Task {
+                await self.cancelCurrent()
+                task.cancel()
             }
         }
     }
@@ -235,22 +242,34 @@ public actor PostgresSQLConnection: SQLConnection {
     private func run(
         sql: String,
         parameters: [DBValue],
-        into continuation: AsyncThrowingStream<QueryEvent, any Error>.Continuation
+        into channel: QueryEventChannel
     ) async {
         let started = ContinuousClock.now
         let query = PostgresQuery(
             unsafeSQL: sql, binds: PostgresParameterEncoder.bindings(for: parameters)
         )
+        // A new generation only when the server is done with the previous statement. A
+        // statement whose consumer went away is still running there, and this one is
+        // queued behind it on the wire, not running; a cancel meant for the abandoned
+        // one must still be sent, or this one waits until the server has streamed every
+        // row nobody wanted.
+        if !statementInFlight { statementGeneration += 1 }
+        statementInFlight = true
         do {
             if Self.streamsManyRows(sql) {
-                try await runStreaming(query, sql: sql, into: continuation, started: started)
+                try await runStreaming(query, sql: sql, into: channel, started: started)
             } else {
-                try await runCollecting(query, into: continuation, started: started)
+                try await runCollecting(query, into: channel, started: started)
             }
             noteTransactionKeyword(in: sql)
             cancelRequested = false
-            continuation.finish()
+            statementInFlight = false
+            await channel.finish()
         } catch {
+            // A consumer that went away ends this task, not the statement: the server is
+            // still running it until the cancel lands, so it stays "in flight" and the
+            // cancel that the dropped stream triggered is not skipped as stale.
+            if !(error is CancellationError) { statementInFlight = false }
             let mapped = PostgresErrorMapper.map(error, user: config.user, cancelRequested: cancelRequested)
             cancelRequested = false
             if case .server(let serverError) = mapped,
@@ -258,7 +277,7 @@ public actor PostgresSQLConnection: SQLConnection {
             {
                 closed = true
             }
-            continuation.finish(throwing: mapped)
+            await channel.finish(throwing: mapped)
         }
     }
 
@@ -282,7 +301,7 @@ public actor PostgresSQLConnection: SQLConnection {
     private func runStreaming(
         _ query: PostgresQuery,
         sql: String,
-        into continuation: AsyncThrowingStream<QueryEvent, any Error>.Continuation,
+        into channel: QueryEventChannel,
         started: ContinuousClock.Instant
     ) async throws {
         let rows = try await underlying.query(query, logger: logger)
@@ -291,16 +310,17 @@ public actor PostgresSQLConnection: SQLConnection {
         var batchBytes = 0
         var delivered = 0
 
-        func flush() {
-            guard !batch.isEmpty else { return }
-            continuation.yield(.rows(RowBatch(rows: batch, startIndex: delivered - batch.count)))
-            batch.removeAll(keepingCapacity: true)
-            batchBytes = 0
+        // Waits while the consumer is behind; the row sequence then stops asking NIO for
+        // more, which is the back-pressure the spec asks for. The batch is handed over by
+        // value so nothing mutable is shared across the suspension.
+        func send(_ rows: [[DBValue]], startingAt start: Int) async throws {
+            guard !rows.isEmpty else { return }
+            try await channel.send(.rows(RowBatch(rows: rows, startIndex: start)))
         }
 
         for try await row in rows {
             if !emittedColumns {
-                continuation.yield(.columns(Self.columns(of: row, decoder: decoder)))
+                try await channel.send(.columns(Self.columns(of: row, decoder: decoder)))
                 emittedColumns = true
             }
             var rowBytes = 0
@@ -311,13 +331,20 @@ public actor PostgresSQLConnection: SQLConnection {
             batch.append(values)
             batchBytes += rowBytes
             delivered += 1
-            if batch.count >= RowBatching.maxRows || batchBytes >= RowBatching.maxBytes { flush() }
+            if batch.count >= RowBatching.maxRows || batchBytes >= RowBatching.maxBytes {
+                let full = batch
+                batch.removeAll(keepingCapacity: true)
+                batchBytes = 0
+                try await send(full, startingAt: delivered - full.count)
+            }
         }
-        flush()
-        if !emittedColumns { continuation.yield(.columns([])) }
+        let rest = batch
+        batch.removeAll()
+        try await send(rest, startingAt: delivered - rest.count)
+        if !emittedColumns { try await channel.send(.columns([])) }
 
         let keyword = SQLStatement(text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil).leadingKeyword
-        continuation.yield(
+        try await channel.send(
             .complete(
                 QueryCompletion(
                     affectedRows: Int64(delivered),
@@ -328,7 +355,7 @@ public actor PostgresSQLConnection: SQLConnection {
 
     private func runCollecting(
         _ query: PostgresQuery,
-        into continuation: AsyncThrowingStream<QueryEvent, any Error>.Continuation,
+        into channel: QueryEventChannel,
         started: ContinuousClock.Instant
     ) async throws {
         let decoder = decoder
@@ -341,11 +368,11 @@ public actor PostgresSQLConnection: SQLConnection {
         }.get()
 
         let state = collected.withLockedValue { $0 }
-        continuation.yield(.columns(state.columns))
+        try await channel.send(.columns(state.columns))
         if !state.rows.isEmpty {
-            continuation.yield(.rows(RowBatch(rows: state.rows, startIndex: 0)))
+            try await channel.send(.rows(RowBatch(rows: state.rows, startIndex: 0)))
         }
-        continuation.yield(
+        try await channel.send(
             .complete(
                 QueryCompletion(
                     affectedRows: metadata.rows.map(Int64.init) ?? Int64(state.rows.count),
@@ -374,7 +401,8 @@ public actor PostgresSQLConnection: SQLConnection {
     /// Best effort by design: a connection that has already finished, or a server that
     /// refuses the cancel, must not turn into an error the user sees.
     public func cancelCurrent() async {
-        guard !closed, let pid = Int32(backendID) else { return }
+        guard !closed, statementInFlight, let pid = Int32(backendID) else { return }
+        let generation = statementGeneration
         cancelRequested = true
         var cancelConfig = config
         cancelConfig.connectTimeout = .seconds(5)
@@ -393,12 +421,18 @@ public actor PostgresSQLConnection: SQLConnection {
                 id: -abs(Int(pid)),
                 logger: logger
             )
-            do {
-                _ = try await Self.rawQuery(
-                    "SELECT pg_cancel_backend(\(pid))", on: helper, logger: logger, decoder: decoder
-                )
-            } catch {
-                logger.debug("cancel query failed", metadata: ["error": "\(error)"])
+            // Opening the helper took time; the statement this cancel was for may have
+            // finished and another started. That one is left alone.
+            if generation == statementGeneration, statementInFlight {
+                do {
+                    _ = try await Self.rawQuery(
+                        "SELECT pg_cancel_backend(\(pid))", on: helper, logger: logger, decoder: decoder
+                    )
+                } catch {
+                    logger.debug("cancel query failed", metadata: ["error": "\(error)"])
+                }
+            } else {
+                cancelRequested = false
             }
             try? await helper.close()
         } catch {

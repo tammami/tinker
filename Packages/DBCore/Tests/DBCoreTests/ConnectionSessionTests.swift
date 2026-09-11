@@ -310,6 +310,53 @@ final class ConnectionSessionTests: XCTestCase {
         XCTAssertEqual(connects, 1, "both bodies should have used the one pooled connection")
     }
 
+    // MARK: - Keepalive and ping deadline (SPEC §4)
+
+    /// A ping that does not answer within the deadline means a half-open socket: the
+    /// connection is dropped and a fresh one opened, instead of every lease queueing
+    /// behind it.
+    func testAHungPingIsAbandonedAndTheConnectionReplaced() async throws {
+        let session = ConnectionSession(
+            config: makeConfig(), registry: registry, secrets: EphemeralSecretStore(),
+            logger: logger, pingTimeout: .milliseconds(100)
+        )
+        let (lease, _) = try await session.lease()
+        await session.release(lease)
+        await FakeDriver.control.setPingDelay(.seconds(30))
+
+        let started = ContinuousClock.now
+        await FakeDriver.control.setPingDelay(.seconds(30))
+        _ = try await session.lease()
+        XCTAssertLessThan(started.duration(to: .now), .seconds(5), "the lease waited on the hung ping")
+        let connects = await FakeDriver.control.connectCount
+        XCTAssertEqual(connects, 2, "the hung connection was replaced")
+        let closed = await FakeDriver.control.closedCount
+        XCTAssertEqual(closed, 1)
+    }
+
+    /// Idle connections are pinged on a timer; a dead one is dropped before any tab asks.
+    func testKeepaliveDropsADeadIdleConnection() async throws {
+        let session = ConnectionSession(
+            config: makeConfig(), registry: registry, secrets: EphemeralSecretStore(),
+            logger: logger, keepaliveInterval: .milliseconds(50), pingTimeout: .milliseconds(200)
+        )
+        let (lease, _) = try await session.lease()
+        await session.release(lease)
+        let pooledBefore = await session.pooledConnectionCount
+        XCTAssertEqual(pooledBefore, 1)
+
+        await FakeDriver.control.setPingFails(true)
+        try await Task.sleep(for: .milliseconds(250))
+        let pooledAfter = await session.pooledConnectionCount
+        XCTAssertEqual(pooledAfter, 0, "the keepalive should have found the connection dead")
+
+        await FakeDriver.control.setPingFails(false)
+        _ = try await session.lease()
+        let state = await session.state
+        XCTAssertEqual(state, .connected)
+        await session.disconnect()
+    }
+
     // MARK: - Reconnect policy (SPEC §9.6)
 
     /// A connection that dropped while a transaction was open is not replaced behind

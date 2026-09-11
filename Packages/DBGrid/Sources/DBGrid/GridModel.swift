@@ -1,6 +1,13 @@
 import DBCore
 import DBSQL
 import Foundation
+import os
+
+/// Signposts for the grid's data path, so Instruments and `XCTOSSignpostMetric` can
+/// measure a page load from request to rows in the buffer (SPEC §12.6).
+enum GridSignposts {
+    static let signposter = OSSignposter(subsystem: "com.thinkfree.Tinker", category: "grid")
+}
 
 /// What a grid is showing.
 public enum GridSource: Sendable, Hashable {
@@ -333,6 +340,8 @@ public final class GridModel {
             page: pageOffset + page, strategy: strategy, keysetAnchor: anchor,
             sort: effectiveSort, filter: filter
         )
+        let signpost = GridSignposts.signposter.beginInterval("page load", id: GridSignposts.signposter.makeSignpostID())
+        defer { GridSignposts.signposter.endInterval("page load", signpost) }
         do {
             let loaded = try await loader.loadPage(request)
             // Two header clicks in a row start two loads; whichever answers last used to

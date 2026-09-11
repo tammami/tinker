@@ -28,7 +28,7 @@ public struct ExportView: View {
     let hasSelection: Bool
     let loadedRowCount: Int
     /// Streams every row for the `.everything` scope, calling `write` per batch.
-    let streamAll: @MainActor (@escaping @MainActor ([[DBValue]]) -> Void) async throws -> Void
+    let streamAll: @MainActor (@escaping @MainActor ([[DBValue]]) async -> Void) async throws -> Void
     let selectionRows: () -> [[DBValue]]
     let loadedRows: () -> [[DBValue]]
     let onDismiss: () -> Void
@@ -186,25 +186,28 @@ public struct ExportView: View {
     func run(to url: URL, options: ExportOptions) async {
         let started = ContinuousClock.now
         do {
-            let exporter = try RowExporter(url: url, options: options)
-            try exporter.begin(columns: columns)
+            // The writer is an actor: encoding and file writes happen off the main actor
+            // (SPEC §14), and only the row count comes back here for the progress line.
+            let writer = try ExportWriter(url: url, options: options)
+            try await writer.begin(columns: columns)
             switch scope {
             case .selection:
-                exporter.write(rows: selectionRows())
+                await writer.write(rows: selectionRows())
             case .loadedRows:
-                exporter.write(rows: loadedRows())
+                await writer.write(rows: loadedRows())
             case .everything:
                 // Rows are written as they arrive, so memory stays flat.
                 try await streamAll { batch in
-                    exporter.write(rows: batch)
-                    progress = "Wrote \(exporter.writtenRowCount) rows"
+                    let written = await writer.write(rows: batch)
+                    progress = "Wrote \(written) rows"
                 }
             }
-            try exporter.finish()
+            try await writer.finish()
+            let written = await writer.writtenRowCount
             progress = ""
             isRunning = false
             outcome = Outcome(
-                url: url, rows: exporter.writtenRowCount,
+                url: url, rows: written,
                 seconds: started.duration(to: .now).formatted(
                     .units(allowed: [.seconds, .milliseconds], width: .narrow)))
         } catch {

@@ -368,9 +368,16 @@ final class MySQLIntegrationTests: XCTestCase {
             )
             let result = try await connection.executeCollecting("SELECT d, dt FROM zero_dates")
             let row = try XCTUnwrap(result.rows.first)
-            // Whatever the server sends, the driver must produce a value rather than crash.
             XCTAssertEqual(row.count, 2)
-            TestLog.note("mysql zero dates decode as \(row[0].debugDescription) / \(row[1].debugDescription)")
+            // A zero date is a value, not NULL: it keeps its text, which the same
+            // permissive mode accepts back. It used to decode as NULL.
+            XCTAssertEqual(row[0], .raw(typeName: "date", text: "0000-00-00", bytes: nil))
+            XCTAssertEqual(row[1], .raw(typeName: "datetime", text: "0000-00-00 00:00:00", bytes: nil))
+            XCTAssertFalse(row[0].isNull)
+            _ = try await connection.executeCollecting(
+                "INSERT INTO zero_dates VALUES (?, ?)", parameters: [row[0], row[1]])
+            let count = try await connection.executeCollecting("SELECT count(*) FROM zero_dates WHERE d = '0000-00-00'")
+            XCTAssertEqual(count.firstText, "2", "the zero date binds back as itself")
             _ = try await connection.executeCollecting("DROP TEMPORARY TABLE zero_dates")
         }
     }
@@ -490,11 +497,22 @@ final class MySQLIntegrationTests: XCTestCase {
 
             let reuse = try await connection.executeCollecting("SELECT 1")
             XCTAssertEqual(reuse.firstText, "1")
+            // The server's own view: nothing of this thread is still running the sleep. A
+            // cancel that only returned to the caller would pass the timing above and
+            // leave the statement running on the server.
+            let stillRunning = try await connection.executeCollecting(
+                """
+                SELECT count(*) FROM information_schema.processlist
+                WHERE id = \(Int(connection.backendID) ?? -1) AND command = 'Query' AND info LIKE '%SLEEP(30)%'
+                """)
+            XCTAssertEqual(stillRunning.firstText, "0", "the sleeping statement was still running on the server")
         }
     }
 
     /// A statement that is not `SLEEP` fails with error 1317 when killed, which the driver
-    /// maps to `.cancelled` (SPEC §4).
+    /// maps to `.cancelled` (SPEC §4). A cross join of the million-row fixture with itself
+    /// runs for hours, so the kill cannot arrive after it has finished, which a keyed
+    /// join could; `BENCHMARK` is no use here, a kill makes it return normally.
     func testAKilledStatementSurfacesAsCancelled() async throws {
         try await withEachServer { connection, _ in
             async let cancellation: Void = {
@@ -503,11 +521,9 @@ final class MySQLIntegrationTests: XCTestCase {
             }()
             let started = ContinuousClock.now
             do {
-                // Long enough to be killed mid-flight, and interruptible.
                 _ = try await connection.executeCollecting(
-                    "SELECT COUNT(*) FROM big_table a JOIN big_table b ON a.id = b.id + 1"
-                )
-                TestLog.note("the join finished before the kill arrived; cancellation not exercised")
+                    "SELECT COUNT(*) FROM big_table a, big_table b WHERE a.id + b.id = -1")
+                XCTFail("the cross join cannot finish in time; the kill must have failed to reach it")
             } catch let error as DBError {
                 XCTAssertEqual(error, .cancelled, "expected .cancelled, got \(error)")
             }
@@ -516,6 +532,43 @@ final class MySQLIntegrationTests: XCTestCase {
             let reuse = try await connection.executeCollecting("SELECT 1")
             XCTAssertEqual(reuse.firstText, "1")
         }
+    }
+
+    /// The connection itself is killed from another session while a statement runs (a
+    /// DBA's `KILL`, a VPN drop): the error says the connection is gone, not that the
+    /// statement was wrong, so the session knows to replace it (SPEC §9.6).
+    func testAKilledConnectionIsReportedAsLost() async throws {
+        #if DEBUG
+            // mysql-nio's `MySQLQueryCommand` asserts "Statement not closed" in its deinit
+            // when the connection dies under a prepared statement — an `assert`, so it is
+            // compiled out of the Release build the app ships as, but it aborts a Debug
+            // test process. The mapping itself is exercised by the grid's recovery test,
+            // which kills the connection between statements (DECISIONS.md ADR-0044).
+            throw XCTSkip("mysql-nio asserts in Debug when a connection is killed mid-statement")
+        #else
+            try await withEachServer { connection, server in
+            let killer = try await MySQLDriver.connect(server.resolvedConfig(), logger: logger)
+            defer { Task { await killer.close() } }
+            let victim = Int(connection.backendID) ?? -1
+            async let kill: Void = {
+                try? await Task.sleep(for: .milliseconds(400))
+                _ = try? await killer.executeCollecting("KILL CONNECTION \(victim)")
+            }()
+            do {
+                _ = try await connection.executeCollecting("SELECT SLEEP(30)")
+                XCTFail("expected the killed connection to fail")
+            } catch let error as DBError {
+                XCTAssertTrue(error.indicatesLostConnection, "expected a lost-connection error, got \(error)")
+            }
+            await kill
+            do {
+                _ = try await connection.executeCollecting("SELECT 1")
+                XCTFail("a killed connection must not answer")
+            } catch let error as DBError {
+                XCTAssertTrue(error.indicatesLostConnection, "got \(error)")
+            }
+        }
+        #endif
     }
 
     func testTransactionsCommitAndRollBack() async throws {

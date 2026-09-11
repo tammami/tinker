@@ -555,6 +555,81 @@ final class PostgresIntegrationTests: XCTestCase {
         }
     }
 
+    /// SPEC §4 and §12.6: a slow consumer must not turn a large result into a large
+    /// resident set. The channel between the driver and the stream holds a few batches;
+    /// the rest waits on the server. Two million rows read one batch at a time, yielding
+    /// between batches, must leave the process about where it started.
+    func testASlowConsumerDoesNotAccumulateTheResultInMemory() async throws {
+        try await withEachServer { connection, _ in
+            let before = residentMemoryBytes()
+            var rows = 0
+            var batches = 0
+            for try await event in connection.execute("SELECT g, g * 2 FROM generate_series(1, 2000000) AS g", parameters: []) {
+                guard case let .rows(batch) = event else { continue }
+                rows += batch.count
+                batches += 1
+                // A consumer that is slower than the socket.
+                if batches % 50 == 0 { try await Task.sleep(for: .milliseconds(1)) }
+            }
+            let after = residentMemoryBytes()
+            XCTAssertEqual(rows, 2_000_000)
+            let growth = Int64(after) - Int64(before)
+            XCTAssertLessThan(
+                growth, 96 * 1_024 * 1_024,
+                "resident memory grew by \(growth / 1_048_576) MB while streaming; the result was being buffered")
+        }
+    }
+
+    /// Leaving the loop early — what the grid does at its memory cap — drops the stream
+    /// without cancelling the task. The producer must stop and the connection be usable
+    /// at once, not after the remaining rows have been pulled.
+    func testLeavingTheStreamEarlyStopsTheProducerAndFreesTheConnection() async throws {
+        try await withEachServer { connection, _ in
+            var batches = 0
+            for try await event in connection.execute("SELECT * FROM generate_series(1, 5000000)", parameters: []) {
+                guard case .rows = event else { continue }
+                batches += 1
+                if batches == 2 { break }
+            }
+            let started = ContinuousClock.now
+            let reuse = try await connection.executeCollecting("SELECT 1")
+            XCTAssertEqual(reuse.firstText, "1")
+            XCTAssertLessThan(started.duration(to: .now), .seconds(5))
+        }
+    }
+
+    /// The backend is terminated from another session while a statement runs (a DBA's
+    /// `pg_terminate_backend`, a failover): the error says the connection is gone, not
+    /// that the statement was wrong, so the session knows to replace it (SPEC §9.6).
+    func testATerminatedBackendIsReportedAsALostConnection() async throws {
+        try await withEachServer { connection, server in
+            let killer = try await PostgresDriver.connect(server.resolvedConfig(), logger: logger)
+            defer { Task { await killer.close() } }
+            let victim = Int32(connection.backendID) ?? -1
+            async let terminate: Void = {
+                try? await Task.sleep(for: .milliseconds(400))
+                _ = try? await killer.executeCollecting("SELECT pg_terminate_backend(\(victim))")
+            }()
+            do {
+                _ = try await connection.executeCollecting("SELECT pg_sleep(30)")
+                XCTFail("expected the terminated backend to fail the statement")
+            } catch let error as DBError {
+                XCTAssertTrue(error.indicatesLostConnection, "expected a lost-connection error, got \(error)")
+                if case let .server(serverError) = error {
+                    XCTAssertEqual(serverError.sqlState, "57P01")
+                    XCTAssertTrue(serverError.message.contains("terminating connection"), serverError.message)
+                }
+            }
+            await terminate
+            do {
+                _ = try await connection.executeCollecting("SELECT 1")
+                XCTFail("a terminated backend must not answer")
+            } catch let error as DBError {
+                XCTAssertTrue(error.indicatesLostConnection, "got \(error)")
+            }
+        }
+    }
+
     // MARK: - Transactions
 
     func testTransactionsCommitAndRollBack() async throws {

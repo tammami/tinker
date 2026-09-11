@@ -722,3 +722,47 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
   since ADR-0040 (a released connection is not free until its reset ends), at the cost of
   an occasional extra connection. Converting them is mechanical and listed for Phase 4.
 - Keepalive, backpressure and the cancel-hits-next-statement race are Phase 3.
+
+## 2026-09-11 — Review, Phase 3: performance and reliability (ADR-0044)
+
+### Done
+- Back-pressure: `QueryEventChannel` (DBCore) holds four batches; `send` waits, and the
+  wait reaches PostgreSQL's socket and SQLite's `step`. A consumer that leaves the loop
+  drops the stream, which cancels the statement on the server. MySQL keeps its unbounded
+  buffer, because mysql-nio's row callback cannot be paused (recorded, not hidden).
+- Keepalive every 60 s on idle connections and a 5 s deadline on every ping; a hung ping
+  is abandoned and its connection replaced instead of every lease queueing behind it.
+- A cancel that finds a newer statement running when its helper connection is ready is
+  dropped (PostgreSQL, MySQL); an abandoned statement still counts as running until the
+  server is done with it, so the cancel a dropped stream asks for is never mistaken for
+  stale.
+- `GridModel` emits `page load` signposts; `GridPerformanceTests` measure the first page
+  (`XCTClockMetric`, `XCTOSSignpostMetric`; 38 ms signposted, 104 ms end to end) and
+  fifty pages (`XCTMemoryMetric`, peak 100 MB) and hold the §12.6 500 ms bound.
+- Fault injection against real servers: `pg_terminate_backend` mid-statement, `KILL
+  CONNECTION` between statements, MySQL `KILL QUERY` proven through the process list,
+  a killed backend replaced on the next lease.
+- Dumps read every table under one snapshot and fail rather than misorder when a
+  foreign-key read fails. A MySQL zero date is a value with its text, not NULL.
+- Editor: windowed highlighting past 200,000 units, re-done on scroll; bracket matching
+  without copying the buffer, bounded to 20,000 units; the gutter starts at the first
+  visible line from a line-start table; the elapsed label re-renders alone; the grid
+  redraws visible cells only when the selection changed. Export encodes and writes on an
+  actor, off the main actor.
+
+### Tests
+- `QueryEventChannelTests` (7); `ConnectionSessionTests` (+2); `PostgresIntegrationTests`
+  (+3, one holding resident memory under 96 MB across two million streamed rows);
+  `MySQLIntegrationTests` (process-list assertion, cross-join kill, zero dates, and a
+  Release-only killed-connection test); `GridIntegrationTests` (+2); `GridPerformanceTests`
+  (2); `ScriptTransferIntegrationTests.testADumpReadsEveryTableFromOneSnapshot`.
+- `Scripts/ci.sh`: 695 tests, 0 failures, 2 skips (the Debug-only mysql-nio assertion;
+  the local server trusts the user); app built with zero warnings; smoke test passed.
+
+### Not done / deferred
+- MySQL back-pressure (needs mysql-nio); the mid-statement MySQL kill test runs only in
+  Release builds. Main-thread hitch measurement in the real `NSTableView` and the editor
+  timings need an app-hosted performance target (Phase 5).
+- The cancel-race guard has no deterministic test; the window is the helper connect time.
+- Cross-engine transfer of `all_types` and the wider fixture (BC dates, `bit varying`,
+  `DECIMAL UNSIGNED`) remain open; the grid fidelity test covers text escapes and scale.

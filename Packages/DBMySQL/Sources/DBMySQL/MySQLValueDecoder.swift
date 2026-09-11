@@ -32,6 +32,17 @@ public struct MySQLValueDecoder: Sendable {
         self.settings = settings
     }
 
+    /// The text of a zero date. The text protocol carries it as written; the binary
+    /// protocol carries an empty value, which reads back as the canonical zero.
+    static func zeroDateText(_ data: MySQLData, _ buffer: inout ByteBuffer, withTime: Bool) -> String {
+        if data.format == .text, buffer.readableBytes > 0,
+            let text = buffer.readString(length: buffer.readableBytes), !text.isEmpty
+        {
+            return text
+        }
+        return withTime ? "0000-00-00 00:00:00" : "0000-00-00"
+    }
+
     /// Decodes one cell, using its column definition for the details the value alone does
     /// not carry: unsigned-ness, `tinyint(1)`, and whether a string column is really binary.
     public func decode(_ data: MySQLData, column: MySQLProtocol.ColumnDefinition41) -> DBValue {
@@ -86,7 +97,13 @@ public struct MySQLValueDecoder: Sendable {
             return .decimal(readString(&buffer))
 
         case .date, .newdate:
-            guard let time = data.time, let year = time.year else { return .null }
+            guard let time = data.time, let year = time.year else {
+                // Not NULL — the buffer is there — but not a date either: MySQL's zero
+                // date, which the binary protocol sends as an empty value. Kept as its
+                // text, which the same permissive `sql_mode` accepts back; it used to
+                // read as NULL, which is a different value.
+                return .raw(typeName: "date", text: Self.zeroDateText(data, &buffer, withTime: false), bytes: nil)
+            }
             return .date(
                 DBDate(
                     year: Int(year), month: Int(time.month ?? 1), day: Int(time.day ?? 1)
@@ -101,7 +118,10 @@ public struct MySQLValueDecoder: Sendable {
                 ))
 
         case .datetime, .datetime2, .timestamp, .timestamp2:
-            guard let time = data.time, let year = time.year else { return .null }
+            guard let time = data.time, let year = time.year else {
+                let typeName = column.columnType == .timestamp || column.columnType == .timestamp2 ? "timestamp" : "datetime"
+                return .raw(typeName: typeName, text: Self.zeroDateText(data, &buffer, withTime: true), bytes: nil)
+            }
             let date = DBDate(year: Int(year), month: Int(time.month ?? 1), day: Int(time.day ?? 1))
             let clock = DBTime(
                 hour: Int(time.hour ?? 0), minute: Int(time.minute ?? 0),

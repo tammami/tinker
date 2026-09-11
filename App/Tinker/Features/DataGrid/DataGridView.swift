@@ -153,6 +153,7 @@ public struct DataGridView: NSViewRepresentable {
         coordinator.hiddenColumns = hiddenColumns
         if coordinator.revision != revision || modelChanged {
             coordinator.revision = revision
+            coordinator.renderedSelection = selection
             // A reload tears down the cell an inline editor sits in, which would end the
             // edit and commit half-typed text; it waits until the editor is done.
             if coordinator.inlineEditor != nil {
@@ -160,7 +161,8 @@ public struct DataGridView: NSViewRepresentable {
             } else {
                 coordinator.reloadAfterRevision()
             }
-        } else {
+        } else if coordinator.renderedSelection != selection {
+            coordinator.renderedSelection = selection
             coordinator.redrawVisibleCells()
         }
     }
@@ -186,6 +188,10 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
     }
     weak var scrollView: NSScrollView?
     var revision = -1
+    /// The selection the visible cells were last drawn for. `updateNSView` runs on every
+    /// SwiftUI render of the pane — a keystroke in the search field, a status change —
+    /// and used to redraw every visible cell each time; now only a changed selection does.
+    var renderedSelection: GridSelection?
     private var peekObserver: (any NSObjectProtocol)?
 
     /// The UI demo cannot right-click, so it asks for the map popover this way. The

@@ -257,6 +257,53 @@ final class ScriptTransferIntegrationTests: XCTestCase {
         }
     }
 
+    /// The data phase reads every table under one snapshot, the way `pg_dump` and
+    /// `mysqldump --single-transaction` do. A row written from another session while the
+    /// parent table is being dumped must not turn up in the child table dumped after it:
+    /// a child with no parent is a restore that fails on its first foreign key.
+    func testADumpReadsEveryTableFromOneSnapshot() async throws {
+        try await withSession { session, server, dialect in
+            // A file has one writer at a time; the snapshot matters where sessions race.
+            guard dialect != .sqlite else { return }
+            _ = try await session.connect()
+            try await session.withLease { connection in
+                try await createFixture(dialect: dialect, on: connection)
+                let writer = try await Self.registry.connect(server.resolvedConfig(), logger: logger)
+                defer { Task { await writer.close() } }
+
+                let dumper = DatabaseDumper(dialect: dialect, options: .preferred(for: dialect))
+                let selection = try await selection(
+                    prefix: "xfer_", schema: schema(server), introspector: connection.introspector)
+                let channel = ScriptChannel()
+                async let dumped = dumper.run(selection, on: connection, into: channel) { _ in }
+                var wroteMidway = false
+                while let chunk = try await channel.next() {
+                    // The first row of the parent table is on its way: the snapshot has been
+                    // taken. A parent and a child are written from the other session now,
+                    // before the child table is read.
+                    let touchesParent: Bool
+                    switch chunk {
+                    case let .statement(sql, _): touchesParent = sql.hasPrefix("INSERT INTO") && sql.contains("xfer_parent")
+                    case let .copyBegin(table, _, _): touchesParent = table.name == "xfer_parent"
+                    case .copyLines, .copyEnd: touchesParent = false
+                    }
+                    if touchesParent, !wroteMidway {
+                        wroteMidway = true
+                        _ = try await writer.executeCollecting("INSERT INTO xfer_parent (name) VALUES ('Late')")
+                        _ = try await writer.executeCollecting(
+                            "INSERT INTO xfer_child (parent_id, note) SELECT id, 'late' FROM xfer_parent WHERE name = 'Late'")
+                    }
+                }
+                let outcome = try await dumped
+                XCTAssertTrue(wroteMidway, "the test never saw the parent table's data")
+                XCTAssertEqual(outcome.rows, 7, "rows written during the dump must be outside its snapshot")
+                let inTransaction = await connection.isInTransaction
+                XCTAssertFalse(inTransaction, "the snapshot transaction is closed when the dump ends")
+                try await dropFixture(dialect: dialect, on: connection)
+            }
+        }
+    }
+
     func testCopyPasteBetweenConnectionsRenamesTables() async throws {
         try await withSession { session, server, dialect in
             _ = try await session.connect()

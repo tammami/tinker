@@ -125,7 +125,7 @@ public struct QueryTabView: View {
                 Label("Run Selected", systemImage: "text.line.first.and.arrowtriangle.forward")
             }
             .disabled(controller.isRunning || !controller.hasSelection)
-            .help("Run only the highlighted text (⌘⇧R)")
+            .help("Run only the highlighted text (⌘⌃R)")
 
             Button {
                 controller.run(all: true)
@@ -162,7 +162,10 @@ public struct QueryTabView: View {
                 }
                 .help("Cancel on the server (⌘.)")
                 ProgressView().controlSize(.small)
-                Text(QueryTabController.format(controller.elapsed))
+                // Its own view: `elapsed` changes ten times a second while a statement
+                // runs, and reading it here re-rendered the whole tab — editor bridge
+                // included — on every tick.
+                ElapsedLabel(controller: controller)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -655,5 +658,15 @@ struct TextResultView: View {
             text += "\n… \(grid.displayRowCount - limit) more rows; export to get them all\n"
         }
         return text
+    }
+}
+
+/// The running time of the current statement. Kept in a view of its own so that only
+/// this label re-renders on each tick of the timer, not the tab around it.
+private struct ElapsedLabel: View {
+    let controller: QueryTabController
+
+    var body: some View {
+        Text(QueryTabController.format(controller.elapsed))
     }
 }

@@ -301,6 +301,11 @@ public struct DatabaseDumper: Sendable {
         // MARK: Data
         if options.content.includesData {
             state.stage = "Data"
+            // One snapshot for every table, the way `pg_dump` and `mysqldump
+            // --single-transaction` read: a row written while the dump runs is either in
+            // every table it touches or in none, never in the child but not the parent.
+            // A failed dump leaves the transaction open; the pool's release rolls it back.
+            _ = try await connection.executeCollecting(Self.snapshotBegin(dialect))
             for table in ordered where table.kind != .foreignTable {
                 try Task.checkCancellation()
                 state.currentTable = table.name
@@ -326,6 +331,7 @@ public struct DatabaseDumper: Sendable {
                 state.tablesDone += 1
                 outcome.tables += 1
             }
+            _ = try await connection.executeCollecting("COMMIT")
         } else {
             outcome.tables = ordered.count
             state.tablesDone = ordered.count
@@ -646,6 +652,17 @@ public struct DatabaseDumper: Sendable {
 
     // MARK: - Ordering
 
+    /// Opens the read-only snapshot the data phase reads under. Each engine's own form:
+    /// PostgreSQL and MySQL take a consistent snapshot at the first read, SQLite's
+    /// deferred transaction takes one at its first read too.
+    static func snapshotBegin(_ dialect: SQLDialect) -> String {
+        switch dialect {
+        case .postgresql: "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"
+        case .mysql: "START TRANSACTION READ ONLY, WITH CONSISTENT SNAPSHOT"
+        case .sqlite: "BEGIN"
+        }
+    }
+
     /// Tables sorted so every referenced table comes before the tables that reference
     /// it; a cycle falls back to name order for the tables in it.
     static func orderByDependencies(
@@ -655,7 +672,9 @@ public struct DatabaseDumper: Sendable {
         let byRef = Dictionary(uniqueKeysWithValues: tables.map { ($0.ref, $0) })
         var dependencies: [TableRef: Set<TableRef>] = [:]
         for table in tables {
-            let keys = (try? await introspector.foreignKeys(of: table.ref)) ?? []
+            // A failed read is a failed dump, not a table quietly placed before the one
+            // it references — that restore would fail on the first foreign key.
+            let keys = try await introspector.foreignKeys(of: table.ref)
             let referenced = keys.map(\.referencedTable).filter { $0 != table.ref && byRef[$0] != nil }
             dependencies[table.ref] = Set(referenced)
         }

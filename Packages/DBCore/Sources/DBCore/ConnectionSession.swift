@@ -50,6 +50,13 @@ public actor ConnectionSession {
     /// How long ``lease()`` waits for a connection when every one is in use before it
     /// gives up. Waiting forever showed as a tab stuck on "Running…" with nothing to cancel.
     public static let leaseWaitTimeout: Duration = .seconds(15)
+    /// How often idle pooled connections are pinged (SPEC §4: "idle keepalive 60s"), so a
+    /// socket that died while the laptop slept is found and dropped before a tab needs it.
+    public static let keepaliveInterval: Duration = .seconds(60)
+    /// How long a ping may take before the connection is given up as half-open. Without
+    /// a deadline every lease queued behind one hung ping for as long as TCP took to
+    /// notice, which is minutes.
+    public static let pingTimeout: Duration = .seconds(5)
 
     public nonisolated let config: ConnectionConfig
     private let registry: DriverRegistry
@@ -58,6 +65,11 @@ public actor ConnectionSession {
     private let logger: Logger
     private let clock: any Clock<Duration>
     private let leaseWaitTimeout: Duration
+    private let keepaliveInterval: Duration
+    private let pingTimeout: Duration
+    /// Pings idle connections every `keepaliveInterval`; started with the first pooled
+    /// connection and cancelled by `disconnect()`.
+    private var keepaliveTask: Task<Void, Never>?
 
     private var tunnel: (any Tunnel)?
     private var pool: [PooledConnection] = []
@@ -114,7 +126,9 @@ public actor ConnectionSession {
         tunnelSource: ConnectionSession? = nil,
         logger: Logger = Logger(label: "tinker.session"),
         clock: any Clock<Duration> = ContinuousClock(),
-        leaseWaitTimeout: Duration = ConnectionSession.leaseWaitTimeout
+        leaseWaitTimeout: Duration = ConnectionSession.leaseWaitTimeout,
+        keepaliveInterval: Duration = ConnectionSession.keepaliveInterval,
+        pingTimeout: Duration = ConnectionSession.pingTimeout
     ) {
         self.config = config
         self.registry = registry
@@ -124,6 +138,8 @@ public actor ConnectionSession {
         self.logger = logger
         self.clock = clock
         self.leaseWaitTimeout = leaseWaitTimeout
+        self.keepaliveInterval = keepaliveInterval
+        self.pingTimeout = pingTimeout
     }
 
     // MARK: - State
@@ -229,6 +245,7 @@ public actor ConnectionSession {
             PooledConnection(
                 id: nextConnectionID(), connection: connection, occupancy: .idle, lastUsed: .now
             ))
+        startKeepaliveIfNeeded()
         setState(.connected)
         return await connection.serverVersion
     }
@@ -393,7 +410,7 @@ public actor ConnectionSession {
                 let candidate = pool[index]
                 pool[index].occupancy = .checking
                 do {
-                    try await candidate.connection.ping()
+                    try await pingWithDeadline(candidate.connection)
                 } catch {
                     if let current = poolIndex(of: candidate.id) { pool.remove(at: current) }
                     await candidate.connection.close()
@@ -444,6 +461,7 @@ public actor ConnectionSession {
                 PooledConnection(
                     id: id, connection: connection, occupancy: .leased(newLease.id), lastUsed: .now
                 ))
+            startKeepaliveIfNeeded()
             if config.readOnly {
                 await applyReadOnlyGuard(to: connection)
                 if let current = poolIndex(of: id) { pool[current].readOnlyApplied = isReadOnly }
@@ -539,6 +557,79 @@ public actor ConnectionSession {
     public var pooledConnectionCount: Int { pool.count }
     public var leasedConnectionCount: Int { pool.filter { $0.leasedTo != nil }.count }
 
+    // MARK: - Keepalive
+
+    /// Starts the keepalive loop with the first pooled connection. Structured to the
+    /// session: `disconnect()` cancels it, and a cancelled loop ends at its next sleep.
+    private func startKeepaliveIfNeeded() {
+        guard keepaliveTask == nil else { return }
+        keepaliveTask = Task { [weak self, clock, keepaliveInterval] in
+            while !Task.isCancelled {
+                do { try await clock.sleep(for: keepaliveInterval) } catch { return }
+                guard let self else { return }
+                await self.pingIdleConnections()
+            }
+        }
+    }
+
+    /// Pings every idle connection with a deadline and drops the ones that do not answer,
+    /// then closes the ones idle past the timeout. A connection that died while the
+    /// machine slept is found here, not by the next tab that needed it.
+    private func pingIdleConnections() async {
+        for id in pool.map(\.id) {
+            guard let index = poolIndex(of: id), pool[index].isIdle else { continue }
+            let candidate = pool[index]
+            pool[index].occupancy = .checking
+            do {
+                try await pingWithDeadline(candidate.connection)
+                if let current = poolIndex(of: id) { pool[current].occupancy = .idle }
+            } catch {
+                logger.debug("keepalive ping failed; dropping the connection", metadata: ["error": "\(error)"])
+                if let current = poolIndex(of: id) { pool.remove(at: current) }
+                await candidate.connection.close()
+            }
+        }
+        try? await reapIdleConnections()
+    }
+
+    /// `ping()` bounded by `pingTimeout`. A hung ping is abandoned, not awaited: a driver
+    /// whose ping does not observe cancellation (an event-loop future) would otherwise
+    /// hold every lease behind it until TCP gave up.
+    private func pingWithDeadline(_ connection: any SQLConnection) async throws {
+        let timeout = pingTimeout
+        let clock = clock
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            let once = OnceFlag()
+            let ping = Task {
+                do {
+                    try await connection.ping()
+                    if once.trip() { continuation.resume() }
+                } catch {
+                    if once.trip() { continuation.resume(throwing: error) }
+                }
+            }
+            Task {
+                try? await clock.sleep(for: timeout)
+                guard once.trip() else { return }
+                ping.cancel()
+                continuation.resume(throwing: DBError.timeout(after: timeout))
+            }
+        }
+    }
+
+    /// Trips once, from any thread.
+    private final class OnceFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var tripped = false
+        func trip() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            if tripped { return false }
+            tripped = true
+            return true
+        }
+    }
+
     // MARK: - Failure handling
 
     /// Records that a statement failed because the connection went away.
@@ -569,6 +660,8 @@ public actor ConnectionSession {
         // finds nothing to reuse and is refused rather than handed a closing connection.
         isClosing = true
         defer { isClosing = false }
+        keepaliveTask?.cancel()
+        keepaliveTask = nil
         let closing = pool
         pool.removeAll()
         // A connection in the middle of a ping or a reset has a statement in flight;

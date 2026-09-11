@@ -184,6 +184,12 @@ public struct SQLEditorView: NSViewRepresentable {
 
         context.coordinator.gutter = gutter
         context.coordinator.textView = textView
+        // A large document is highlighted around what is on screen; scrolling moves the
+        // window, so it is re-done after a short pause once the scroll settles.
+        gutter.onScroll = { [weak coordinator = context.coordinator] in
+            guard let coordinator, coordinator.isLargeDocument else { return }
+            coordinator.scheduleHighlighting()
+        }
         context.coordinator.observeDismissRequests()
         context.coordinator.applyHighlighting()
         return scrollView
@@ -462,19 +468,52 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
 
     /// Colours keywords, strings, comments, numbers and placeholders, and marks the
     /// statement under the cursor plus any reported error position.
+    /// Documents up to this many UTF-16 units are highlighted whole on every change; a
+    /// pasted dump beyond it is highlighted around what is on screen and re-done as it
+    /// scrolls, so a keystroke never re-tokenizes ten megabytes.
+    static let fullHighlightLimit = 200_000
+    /// How far past the visible text the window reaches, so a scroll of a page or two
+    /// shows coloured text before the next pass catches up.
+    private static let highlightPadding = 20_000
+
+    /// True when the document is highlighted in windows rather than whole.
+    var isLargeDocument: Bool { (textView?.textStorage?.length ?? 0) > Self.fullHighlightLimit }
+
+    /// The range to highlight now: everything, or a window around the visible text.
+    private func highlightWindow() -> NSRange {
+        guard let textView, let storage = textView.textStorage else { return NSRange(location: 0, length: 0) }
+        let full = NSRange(location: 0, length: storage.length)
+        guard isLargeDocument,
+            let layoutManager = textView.layoutManager,
+            let container = textView.textContainer,
+            let clipView = textView.enclosingScrollView?.contentView
+        else { return full }
+        var visible = clipView.documentVisibleRect
+        visible.origin.y -= textView.textContainerInset.height
+        let glyphs = layoutManager.glyphRange(forBoundingRect: visible, in: container)
+        let characters = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        let start = max(0, characters.location - Self.highlightPadding)
+        let end = min(storage.length, NSMaxRange(characters) + Self.highlightPadding)
+        return NSRange(location: start, length: max(0, end - start))
+    }
+
     func applyHighlighting() {
         guard let textView, let storage = textView.textStorage else { return }
-        let source = textView.string
-        let full = NSRange(location: 0, length: storage.length)
+        let window = highlightWindow()
         let font = textView.font ?? DesignTokens.Fonts.editor()
+        // Tokens come from the window's own text; a window that opens inside a string or
+        // a comment colours that one span wrongly until the next pass, which is the price
+        // of not scanning the whole file on every keystroke.
+        let source =
+            window.length == storage.length ? textView.string : (textView.string as NSString).substring(with: window)
 
         storage.beginEditing()
-        storage.setAttributes([.font: font, .foregroundColor: NSColor.textColor], range: full)
+        storage.setAttributes([.font: font, .foregroundColor: NSColor.textColor], range: window)
 
         let tokens = SQLTokenizer.tokenize(source, dialect: dialect)
         let functionNames = SQLFunctionCatalog.names(for: dialect)
         for (index, token) in tokens.enumerated() {
-            let range = NSRange(location: token.utf16Range.lowerBound, length: token.utf16Range.count)
+            let range = NSRange(location: window.location + token.utf16Range.lowerBound, length: token.utf16Range.count)
             guard NSMaxRange(range) <= storage.length else { continue }
             switch token.kind {
             case .identifier where functionNames.contains(token.text.lowercased()):
@@ -511,7 +550,8 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         // A red squiggle on the token the server complained about, cleared by the next edit.
         if let errorPosition, errorPosition > 0, errorPosition <= storage.length {
             let start = errorPosition - 1
-            let token = SQLTokenizer.token(at: start, in: source, dialect: dialect)
+            // Absolute offset, so the whole text, not the window.
+            let token = SQLTokenizer.token(at: start, in: textView.string, dialect: dialect)
             let range =
                 token.map { NSRange(location: $0.utf16Range.lowerBound, length: $0.utf16Range.count) }
                 ?? NSRange(location: start, length: 1)
@@ -529,23 +569,35 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
     }
 
     /// Underlines the bracket matching the one next to the cursor.
+    /// How far from the caret a matching bracket is looked for. Beyond it the pair is
+    /// not marked, which costs nothing a person would notice; scanning a whole dump on
+    /// every caret move did.
+    private static let bracketScanLimit = 20_000
+
+    /// The two cells last marked, so only they are cleared — not the whole document.
+    private var markedBracketRanges: [NSRange] = []
+
     func highlightMatchingBracket() {
         guard let textView, let storage = textView.textStorage else { return }
-        storage.removeAttribute(
-            .backgroundColor, range: NSRange(location: 0, length: storage.length)
-        )
-        let units = Array(textView.string.utf16)
+        for range in markedBracketRanges where NSMaxRange(range) <= storage.length {
+            storage.removeAttribute(.backgroundColor, range: range)
+        }
+        markedBracketRanges = []
+        // `NSString` reads the buffer in place; `Array(string.utf16)` copied it on every
+        // selection change.
+        let text = textView.string as NSString
         let caret = textView.selectedRange().location
-        guard caret > 0, caret <= units.count else { return }
+        guard caret > 0, caret <= text.length else { return }
         let index = caret - 1
-        guard let scalar = Unicode.Scalar(units[index]) else { return }
-        let openers: [Unicode.Scalar] = ["(", "[", "{"]
-        let closers: [Unicode.Scalar] = [")", "]", "}"]
+        let scalar = text.character(at: index)
+        let openers: [unichar] = [0x28, 0x5B, 0x7B]  // ( [ {
+        let closers: [unichar] = [0x29, 0x5D, 0x7D]  // ) ] }
         var match: Int?
         if let position = openers.firstIndex(of: scalar) {
             var depth = 0
-            for probe in index ..< units.count {
-                guard let candidate = Unicode.Scalar(units[probe]) else { continue }
+            let end = min(text.length, index + Self.bracketScanLimit)
+            for probe in index ..< end {
+                let candidate = text.character(at: probe)
                 if candidate == openers[position] { depth += 1 }
                 if candidate == closers[position] {
                     depth -= 1
@@ -554,8 +606,9 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
             }
         } else if let position = closers.firstIndex(of: scalar) {
             var depth = 0
-            for probe in stride(from: index, through: 0, by: -1) {
-                guard let candidate = Unicode.Scalar(units[probe]) else { continue }
+            let start = max(0, index - Self.bracketScanLimit)
+            for probe in stride(from: index, through: start, by: -1) {
+                let candidate = text.character(at: probe)
                 if candidate == closers[position] { depth += 1 }
                 if candidate == openers[position] {
                     depth -= 1
@@ -565,11 +618,9 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         }
         guard let match else { return }
         for position in [index, match] {
-            storage.addAttribute(
-                .backgroundColor,
-                value: NSColor.selectedTextBackgroundColor,
-                range: NSRange(location: position, length: 1)
-            )
+            let range = NSRange(location: position, length: 1)
+            storage.addAttribute(.backgroundColor, value: NSColor.selectedTextBackgroundColor, range: range)
+            markedBracketRanges.append(range)
         }
     }
 }

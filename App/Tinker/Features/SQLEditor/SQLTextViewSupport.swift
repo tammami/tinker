@@ -218,6 +218,17 @@ public final class SQLGutterView: NSView {
     weak var textView: NSTextView?
     weak var clipView: NSClipView?
     private var scrollObserver: (any NSObjectProtocol)?
+    private var textObserver: (any NSObjectProtocol)?
+    /// Told on every scroll, so a large document can re-highlight around what is shown.
+    var onScroll: (() -> Void)?
+
+    /// UTF-16 offset of the first character of each line, rebuilt when the text changes.
+    /// Drawing used to walk every line from the first on every frame, which made a
+    /// scroll through a 100,000-line script cost 100,000 layout queries; with the table
+    /// the first visible line is a binary search and only the visible lines are walked.
+    private var lineStarts: [Int] = [0]
+    private var lineStartsForLength = 0
+    private var lineStartsDirty = true
 
     public override var isFlipped: Bool { true }
 
@@ -231,20 +242,60 @@ public final class SQLGutterView: NSView {
         scrollObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: clipView, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.needsDisplay = true }
+            MainActor.assumeIsolated {
+                self?.needsDisplay = true
+                self?.onScroll?()
+            }
+        }
+        textObserver = NotificationCenter.default.addObserver(
+            forName: NSText.didChangeNotification, object: textView, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.lineStartsDirty = true }
         }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
-    /// The observer goes when the view leaves the window. `deinit` cannot touch it: it is
-    /// not isolated to the main actor and the token is not `Sendable`.
+    /// The observers go when the view leaves the window. `deinit` cannot touch them: it
+    /// is not isolated to the main actor and the tokens are not `Sendable`.
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard window == nil, let scrollObserver else { return }
-        NotificationCenter.default.removeObserver(scrollObserver)
-        self.scrollObserver = nil
+        guard window == nil else { return }
+        if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+        if let textObserver { NotificationCenter.default.removeObserver(textObserver) }
+        scrollObserver = nil
+        textObserver = nil
+    }
+
+    /// Rebuilds the line-start table when the text changed since it was last built.
+    private func refreshLineStarts(_ text: NSString) {
+        guard lineStartsDirty || lineStartsForLength != text.length else { return }
+        var starts = [0]
+        starts.reserveCapacity(max(16, text.length / 40))
+        var index = 0
+        let length = text.length
+        while index < length {
+            let line = text.lineRange(for: NSRange(location: index, length: 0))
+            let next = NSMaxRange(line)
+            if next <= index || next >= length { break }
+            starts.append(next)
+            index = next
+        }
+        lineStarts = starts
+        lineStartsForLength = length
+        lineStartsDirty = false
+    }
+
+    /// The zero-based line holding `offset`.
+    private func line(containing offset: Int) -> Int {
+        var low = 0
+        var high = lineStarts.count - 1
+        while low < high {
+            let mid = (low + high + 1) / 2
+            if lineStarts[mid] <= offset { low = mid } else { high = mid - 1 }
+        }
+        return low
     }
 
     public override func draw(_ dirtyRect: NSRect) {
@@ -271,8 +322,16 @@ public final class SQLGutterView: NSView {
 
         let regular = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
         let bold = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .bold)
-        var index = 0
-        var lineNumber = 1
+
+        // Start at the first visible line, not at line 1.
+        refreshLineStarts(text)
+        var topPoint = visible.origin
+        topPoint.y -= textView.textContainerInset.height
+        let firstGlyph = layoutManager.glyphIndex(for: topPoint, in: container)
+        let firstCharacter = min(text.length, layoutManager.characterIndexForGlyph(at: firstGlyph))
+        let firstLine = line(containing: firstCharacter)
+        var index = lineStarts[firstLine]
+        var lineNumber = firstLine + 1
 
         while true {
             let lineRange = text.lineRange(for: NSRange(location: index, length: 0))

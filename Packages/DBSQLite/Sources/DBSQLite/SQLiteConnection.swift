@@ -229,36 +229,37 @@ public actor SQLiteConnection: SQLConnection {
         _ sql: String,
         parameters: [DBValue]
     ) -> AsyncThrowingStream<QueryEvent, any Error> {
-        AsyncThrowingStream { continuation in
-            // Unstructured on purpose: cancelling the consumer interrupts the statement
-            // through the handle, which leaves the connection usable (SPEC §13.3).
-            let task = Task { await self.run(sql: sql, parameters: parameters, into: continuation) }
-            continuation.onTermination = { [handle] termination in
-                guard case .cancelled = termination else { return }
-                handle.interrupt()
-                task.cancel()
-            }
+        // A bounded channel: `send` waits on the connection's own thread while the
+        // consumer is behind, with the statement parked between two `step`s, so a large
+        // result is never more than a few batches in memory (SPEC §4).
+        let channel = QueryEventChannel()
+        // Unstructured on purpose: cancelling the consumer interrupts the statement
+        // through the handle, which leaves the connection usable (SPEC §13.3).
+        let task = Task { await self.run(sql: sql, parameters: parameters, into: channel) }
+        return channel.stream { [handle] in
+            handle.interrupt()
+            task.cancel()
         }
     }
 
     private func run(
         sql: String,
         parameters: [DBValue],
-        into continuation: AsyncThrowingStream<QueryEvent, any Error>.Continuation
-    ) {
+        into channel: QueryEventChannel
+    ) async {
         let started = ContinuousClock.now
         guard !closed else {
-            continuation.finish(throwing: DBError.notConnected)
+            await channel.finish(throwing: DBError.notConnected)
             return
         }
         handle.beginStatement(timeout: config.statementTimeout)
         defer { handle.endStatement() }
 
         do {
-            let outcome = try runStatements(sql, parameters: parameters, continuation: continuation)
+            let outcome = try await runStatements(sql, parameters: parameters, channel: channel)
             let keyword = SQLStatement(text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil).leadingKeyword
             if keyword == "PRAGMA" || keyword == "ATTACH" || keyword == "DETACH" { sessionMutated = true }
-            continuation.yield(
+            try await channel.send(
                 .complete(
                     QueryCompletion(
                         affectedRows: outcome.rowCount > 0 ? Int64(outcome.rowCount) : outcome.changes,
@@ -266,9 +267,12 @@ public actor SQLiteConnection: SQLConnection {
                         serverTag: Self.tag(keyword: keyword, rowCount: outcome.rowCount, changes: outcome.changes),
                         durationTotal: started.duration(to: .now)
                     )))
-            continuation.finish()
+            await channel.finish()
+        } catch is CancellationError {
+            // The consumer went away; the interrupt already stopped the statement.
+            await channel.finish(throwing: DBError.cancelled)
         } catch {
-            continuation.finish(throwing: error)
+            await channel.finish(throwing: error)
         }
     }
 
@@ -284,8 +288,8 @@ public actor SQLiteConnection: SQLConnection {
     /// come from the first statement that produces any, later ones only count changes.
     private func runStatements(
         _ sql: String, parameters: [DBValue],
-        continuation: AsyncThrowingStream<QueryEvent, any Error>.Continuation
-    ) throws -> Outcome {
+        channel: QueryEventChannel
+    ) async throws -> Outcome {
         var outcome = Outcome()
         var remaining = Substring(sql)
         var isFirst = true
@@ -314,7 +318,7 @@ public actor SQLiteConnection: SQLConnection {
 
             let columnCount = sqlite3_column_count(statement)
             if columnCount > 0, !outcome.emittedColumns {
-                outcome.rowCount = try stream(statement, columnCount: columnCount, continuation: continuation, sql: text)
+                outcome.rowCount = try await stream(statement, columnCount: columnCount, channel: channel, sql: text)
                 outcome.emittedColumns = true
             } else {
                 try stepToEnd(statement, sql: text)
@@ -329,30 +333,29 @@ public actor SQLiteConnection: SQLConnection {
                 outcome.lastInsertID = sqlite3_last_insert_rowid(handle.pointer)
             }
         }
-        if !outcome.emittedColumns { continuation.yield(.columns([])) }
+        if !outcome.emittedColumns { try await channel.send(.columns([])) }
         return outcome
     }
 
     /// Steps a statement that returns rows, yielding its columns and then batches of rows.
     private func stream(
         _ statement: OpaquePointer, columnCount: Int32,
-        continuation: AsyncThrowingStream<QueryEvent, any Error>.Continuation, sql: String
-    ) throws -> Int {
+        channel: QueryEventChannel, sql: String
+    ) async throws -> Int {
         // The first row is read before the columns are described: a column without a
         // declared type — an expression — is typed by what its first value is.
         var step = sqlite3_step(statement)
         let (columns, declared) = describeColumns(statement, count: columnCount, firstRowAvailable: step == SQLITE_ROW)
-        continuation.yield(.columns(columns))
+        try await channel.send(.columns(columns))
 
         var rows: [[DBValue]] = []
         var bytes = 0
         var delivered = 0
-        func flush() {
-            guard !rows.isEmpty else { return }
-            continuation.yield(.rows(RowBatch(rows: rows, startIndex: delivered)))
-            delivered += rows.count
-            rows.removeAll(keepingCapacity: true)
-            bytes = 0
+        // Parks the statement between two steps while the consumer catches up. The batch
+        // goes by value so nothing mutable is shared across the suspension.
+        func send(_ batch: [[DBValue]], startingAt start: Int) async throws {
+            guard !batch.isEmpty else { return }
+            try await channel.send(.rows(RowBatch(rows: batch, startIndex: start)))
         }
         while step == SQLITE_ROW {
             var row: [DBValue] = []
@@ -367,11 +370,20 @@ public actor SQLiteConnection: SQLConnection {
                 row.append(value)
             }
             rows.append(row)
-            if rows.count >= RowBatching.maxRows || bytes >= RowBatching.maxBytes { flush() }
+            if rows.count >= RowBatching.maxRows || bytes >= RowBatching.maxBytes {
+                let full = rows
+                rows.removeAll(keepingCapacity: true)
+                bytes = 0
+                try await send(full, startingAt: delivered)
+                delivered += full.count
+            }
             step = sqlite3_step(statement)
         }
         guard step == SQLITE_DONE else { throw currentError(sql: sql) }
-        flush()
+        let rest = rows
+        rows.removeAll()
+        try await send(rest, startingAt: delivered)
+        delivered += rest.count
         return delivered
     }
 

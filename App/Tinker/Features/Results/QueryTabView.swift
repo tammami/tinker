@@ -247,7 +247,6 @@ public struct QueryTabView: View {
     /// Which pane of a result is showing.
     enum ResultPane: String, CaseIterable, Identifiable {
         case result = "Rows"
-        case text = "Text"
         case map = "Map"
         case message = "Message"
         case profile = "Profile"
@@ -258,7 +257,6 @@ public struct QueryTabView: View {
         var icon: String {
             switch self {
             case .result: Icon.data
-            case .text: Icon.text
             case .map: Icon.map
             case .message: Icon.message
             case .profile: Icon.profile
@@ -334,7 +332,6 @@ public struct QueryTabView: View {
             switch resultPane {
             case .message: messagePane(result)
             case .result: rowsPane(result)
-            case .text: textPane(result)
             case .map: mapPane(result)
             case .profile:
                 tablePane(
@@ -427,16 +424,6 @@ public struct QueryTabView: View {
     }
 
     /// The rows as aligned plain text, the way a terminal client prints them.
-    private func textPane(_ result: QueryResultTab) -> some View {
-        Group {
-            if let grid = result.grid {
-                TextResultView(grid: grid, revision: controller.revision, fontName: fontName, fontSize: fontSize)
-            } else {
-                EmptyStateView(icon: Icon.text, title: result.message ?? "No rows")
-            }
-        }
-    }
-
     /// A pane that is just a table of strings: Profile and Status both are.
     @ViewBuilder
     private func tablePane(
@@ -663,43 +650,6 @@ extension QueryTabView {
             .disabled(!controller.canGoForward)
             BarDivider()
         }
-    }
-}
-
-/// Rows rendered as monospaced, column-aligned text.
-///
-/// Built from the loaded rows only and capped, because a text view that holds a million
-/// rows would defeat the grid's whole reason for existing.
-struct TextResultView: View {
-    let grid: GridModel
-    let revision: Int
-    let fontName: String
-    let fontSize: Double
-
-    static let rowCap = 2_000
-
-    var body: some View {
-        ScrollView([.vertical, .horizontal]) {
-            Text(rendered)
-                .font(Font(DesignTokens.Fonts.editor(name: fontName, size: CGFloat(fontSize))))
-                .textSelection(.enabled)
-                .padding(DesignTokens.Spacing.md)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .background(Color(nsColor: .textBackgroundColor))
-    }
-
-    private var rendered: String {
-        let limit = min(grid.displayRowCount, Self.rowCap)
-        let rows = (0 ..< limit).compactMap { grid.loadedRow($0) }
-        var text = ClipboardFormatter.render(
-            columns: grid.columns, rows: rows, format: .text,
-            options: .init(includeHeader: true, dialect: grid.dialect)
-        )
-        if grid.displayRowCount > limit {
-            text += "\n… \(grid.displayRowCount - limit) more rows; export to get them all\n"
-        }
-        return text
     }
 }
 

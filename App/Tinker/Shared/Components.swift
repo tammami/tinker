@@ -386,46 +386,58 @@ struct SimpleTable: View {
     var monospaced = true
 
     var body: some View {
-        ScrollView([.vertical, .horizontal]) {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
-                Section {
-                    ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                        HStack(spacing: 0) {
-                            ForEach(Array(columns.enumerated()), id: \.element.id) { position, column in
-                                Text(position < row.count ? row[position] : "")
-                                    .font(monospaced ? .system(.caption, design: .monospaced) : .caption)
-                                    .lineLimit(1)
-                                    .frame(width: column.width, alignment: column.isNumeric ? .trailing : .leading)
-                                    .frame(maxWidth: column.width == nil ? .infinity : nil, alignment: .leading)
-                                    .padding(.horizontal, DesignTokens.Spacing.sm)
-                            }
-                        }
-                        .frame(height: DesignTokens.Metrics.gridRowHeight)
-                        .background(
-                            index.isMultiple(of: 2)
-                                ? Color.clear
-                                : Color(nsColor: .alternatingContentBackgroundColors[1])
-                        )
-                    }
-                } header: {
+        // The viewport's own size is the content's minimum, so a table smaller than the
+        // pane sits at the top left instead of being centred in the empty space — a
+        // scroll view sizes its content to the content's own ideal and centres the rest.
+        GeometryReader { viewport in
+            ScrollView([.vertical, .horizontal]) {
+                table
+                    .frame(
+                        minWidth: viewport.size.width, minHeight: viewport.size.height,
+                        alignment: .topLeading)
+            }
+        }
+    }
+
+    private var table: some View {
+        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
+            Section {
+                ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                     HStack(spacing: 0) {
-                        ForEach(columns) { column in
-                            Text(column.title)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
+                        ForEach(Array(columns.enumerated()), id: \.element.id) { position, column in
+                            Text(position < row.count ? row[position] : "")
+                                .font(monospaced ? .system(.caption, design: .monospaced) : .caption)
                                 .lineLimit(1)
                                 .frame(width: column.width, alignment: column.isNumeric ? .trailing : .leading)
                                 .frame(maxWidth: column.width == nil ? .infinity : nil, alignment: .leading)
                                 .padding(.horizontal, DesignTokens.Spacing.sm)
                         }
                     }
-                    .frame(height: DesignTokens.Metrics.gridHeaderHeight)
-                    .background(.bar)
-                    .overlay(alignment: .bottom) { Divider() }
+                    .frame(height: DesignTokens.Metrics.gridRowHeight)
+                    .background(
+                        index.isMultiple(of: 2)
+                            ? Color.clear
+                            : Color(nsColor: .alternatingContentBackgroundColors[1])
+                    )
                 }
+            } header: {
+                HStack(spacing: 0) {
+                    ForEach(columns) { column in
+                        Text(column.title)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .frame(width: column.width, alignment: column.isNumeric ? .trailing : .leading)
+                            .frame(maxWidth: column.width == nil ? .infinity : nil, alignment: .leading)
+                            .padding(.horizontal, DesignTokens.Spacing.sm)
+                    }
+                }
+                .frame(height: DesignTokens.Metrics.gridHeaderHeight)
+                .background(.bar)
+                .overlay(alignment: .bottom) { Divider() }
             }
-            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         }
+        .frame(minWidth: 0, alignment: .topLeading)
     }
 }
 

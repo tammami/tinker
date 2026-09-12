@@ -28,19 +28,49 @@ public final class SQLTextView: NSTextView {
         }
     }
 
+    /// The band last painted behind the caret's line, so moving off it can be repainted
+    /// without redrawing the page.
+    private var paintedLineRect: NSRect?
+
     public override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
-        guard let layoutManager, let container = textContainer else { return }
+        guard let lineRect = currentLineRect() else { return }
+        paintedLineRect = lineRect
+        NSColor.selectedTextBackgroundColor.withAlphaComponent(0.18).setFill()
+        lineRect.fill()
+    }
+
+    /// The band behind the line the caret is on, in view coordinates; nil when there is
+    /// a selection rather than a caret.
+    private func currentLineRect() -> NSRect? {
+        guard let layoutManager, let container = textContainer else { return nil }
         let caret = selectedRange()
-        guard caret.length == 0, caret.location <= string.utf16.count else { return }
+        guard caret.length == 0, caret.location <= string.utf16.count else { return nil }
         let lineRange = (string as NSString).lineRange(for: NSRange(location: caret.location, length: 0))
         let glyphRange = layoutManager.glyphRange(forCharacterRange: lineRange, actualCharacterRange: nil)
         var lineRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: container)
         lineRect.origin.x = 0
         lineRect.size.width = bounds.width
-        lineRect = lineRect.offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
-        NSColor.selectedTextBackgroundColor.withAlphaComponent(0.18).setFill()
-        lineRect.fill()
+        return lineRect.offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
+    }
+
+    /// Repaints the current-line band and wherever it was last drawn.
+    ///
+    /// The line moves and grows as the caret moves and the line wraps, and the band is
+    /// painted in `drawBackground`, so something has to invalidate it. Marking the whole
+    /// view for display did that — and made every character typed repaint the entire
+    /// page, which is what flickered. Only the two bands need it.
+    func invalidateCurrentLine() {
+        let wanted = currentLineRect()
+        var dirty = wanted ?? .zero
+        if let painted = paintedLineRect {
+            dirty = wanted.map { $0.union(painted) } ?? painted
+        }
+        guard !dirty.isEmpty else { return }
+        // A line that grows downwards as it wraps leaves the band below it to repaint.
+        dirty.size.height += DesignTokens.Metrics.gridRowHeight
+        setNeedsDisplay(dirty)
+        if wanted == nil { paintedLineRect = nil }
     }
 
     /// `⌘R` runs the statement at the cursor, `⌘⌥R` the page, `⌘/` toggles line comments and `⌘D` duplicates

@@ -209,7 +209,12 @@ public struct SQLEditorView: NSViewRepresentable {
             )
             gutter.needsDisplay = true
         }
-        textView.font = DesignTokens.Fonts.editor(name: fontName, size: fontSize)
+        // Only when it really changed: `NSTextView.font` writes the font over the whole
+        // text storage, which invalidates the document's layout and drops the highlighter's
+        // bold and italic runs. This runs on every keystroke — the binding above sees to
+        // that — and setting the same font each time is what made the editor flicker.
+        let wantedFont = DesignTokens.Fonts.editor(name: fontName, size: fontSize)
+        if textView.font != wantedFont { textView.font = wantedFont }
         textView.isEditable = isEditable
         // The editor is the point of a query tab, so it takes focus as soon as it is on
         // screen, and again each time its tab comes back to the front.
@@ -350,7 +355,9 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         guard let textView else { return }
         text = textView.string
         delegate?.editorDidChangeText(textView.string)
-        textView.needsDisplay = true
+        // Only the caret's own line band, not the page: the text system already repaints
+        // the glyphs that changed.
+        textView.invalidateCurrentLine()
         gutter?.needsDisplay = true
         scheduleHighlighting()
         offerCompletions()
@@ -446,7 +453,7 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         guard let textView else { return }
         let range = textView.selectedRange()
         delegate?.editorDidChangeSelection(offset: range.location, length: range.length)
-        textView.needsDisplay = true
+        textView.invalidateCurrentLine()
         // The current line is marked in the gutter too, so it follows the caret.
         gutter?.needsDisplay = true
         highlightMatchingBracket()
@@ -507,45 +514,52 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
         let source =
             window.length == storage.length ? textView.string : (textView.string as NSString).substring(with: window)
 
-        storage.beginEditing()
-        storage.setAttributes([.font: font, .foregroundColor: NSColor.textColor], range: window)
-
+        let bold = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+        let italic = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
         let tokens = SQLTokenizer.tokenize(source, dialect: dialect)
         let functionNames = SQLFunctionCatalog.names(for: dialect)
+
+        // How every stretch of the window should look, gaps between tokens included, so
+        // the pass below can write only what is not already right.
+        var wanted: [Style] = []
+        var cursor = window.location
         for (index, token) in tokens.enumerated() {
             let range = NSRange(location: window.location + token.utf16Range.lowerBound, length: token.utf16Range.count)
-            guard NSMaxRange(range) <= storage.length else { continue }
+            guard NSMaxRange(range) <= storage.length, range.location >= cursor else { continue }
+            if range.location > cursor {
+                wanted.append(Style(range: NSRange(location: cursor, length: range.location - cursor),
+                                    color: .textColor, font: font))
+            }
+            cursor = NSMaxRange(range)
             switch token.kind {
             case .identifier where functionNames.contains(token.text.lowercased()):
                 // A known function is one the engine documents, followed by its parentheses.
                 let next = tokens[(index + 1)...].first { $0.kind != .whitespace }
-                if next?.text == "(" {
-                    storage.addAttribute(.foregroundColor, value: NSColor.systemIndigo, range: range)
-                }
+                let isCall = next?.text == "("
+                wanted.append(Style(range: range, color: isCall ? .systemIndigo : .textColor, font: font))
             case .keyword:
-                storage.addAttributes(
-                    [
-                        .foregroundColor: NSColor.systemPink,
-                        .font: NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask),
-                    ], range: range)
+                wanted.append(Style(range: range, color: .systemPink, font: bold))
             case .string:
-                storage.addAttribute(.foregroundColor, value: NSColor.systemRed, range: range)
+                wanted.append(Style(range: range, color: .systemRed, font: font))
             case .comment:
-                storage.addAttributes(
-                    [
-                        .foregroundColor: NSColor.systemGreen,
-                        .font: NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask),
-                    ], range: range)
+                wanted.append(Style(range: range, color: .systemGreen, font: italic))
             case .number:
-                storage.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: range)
+                wanted.append(Style(range: range, color: .systemBlue, font: font))
             case .parameter:
-                storage.addAttribute(.foregroundColor, value: NSColor.systemPurple, range: range)
+                wanted.append(Style(range: range, color: .systemPurple, font: font))
             case .quotedIdentifier:
-                storage.addAttribute(.foregroundColor, value: NSColor.systemTeal, range: range)
+                wanted.append(Style(range: range, color: .systemTeal, font: font))
             case .identifier, .punctuation, .whitespace:
-                break
+                wanted.append(Style(range: range, color: .textColor, font: font))
             }
         }
+        if cursor < NSMaxRange(window) {
+            wanted.append(Style(range: NSRange(location: cursor, length: NSMaxRange(window) - cursor),
+                                color: .textColor, font: font))
+        }
+
+        storage.beginEditing()
+        write(wanted, to: storage)
 
         // A red squiggle on the token the server complained about, cleared by the next edit.
         if let errorPosition, errorPosition > 0, errorPosition <= storage.length {
@@ -564,8 +578,46 @@ public final class SQLEditorCoordinator: NSObject, NSTextViewDelegate {
             }
         }
         storage.endEditing()
-        textView.needsDisplay = true
+        // No blanket redraw: the attribute changes above already invalidate the runs they
+        // touched, and repainting the page on every pass is what flickered.
         gutter?.needsDisplay = true
+    }
+
+    /// How one stretch of the document should be drawn.
+    private struct Style {
+        let range: NSRange
+        let color: NSColor
+        let font: NSFont
+    }
+
+    /// Writes only the attributes that are not already what they should be.
+    ///
+    /// Writing an attribute invalidates its range for display whether or not the value
+    /// changed, and a font invalidates layout as well. Colouring the whole document on
+    /// every keystroke therefore repainted the whole editor — that was the flicker. After
+    /// an ordinary keystroke almost every stretch already looks right, so this writes
+    /// little or nothing.
+    private func write(_ styles: [Style], to storage: NSTextStorage) {
+        for style in styles {
+            // Collected first: the attributes must not be changed while they are enumerated.
+            var wrong: [(range: NSRange, color: Bool, font: Bool, underline: Bool)] = []
+            storage.enumerateAttributes(in: style.range, options: []) { existing, subrange, _ in
+                let color = existing[.foregroundColor] as? NSColor != style.color
+                let font = existing[.font] as? NSFont != style.font
+                let underline = existing[.underlineStyle] != nil
+                if color || font || underline {
+                    wrong.append((subrange, color, font, underline))
+                }
+            }
+            for piece in wrong {
+                if piece.color { storage.addAttribute(.foregroundColor, value: style.color, range: piece.range) }
+                if piece.font { storage.addAttribute(.font, value: style.font, range: piece.range) }
+                if piece.underline {
+                    storage.removeAttribute(.underlineStyle, range: piece.range)
+                    storage.removeAttribute(.underlineColor, range: piece.range)
+                }
+            }
+        }
     }
 
     /// Underlines the bracket matching the one next to the cursor.

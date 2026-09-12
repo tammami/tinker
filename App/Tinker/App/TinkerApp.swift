@@ -35,7 +35,7 @@ struct TinkerApp: App {
     var body: some Scene {
         WindowGroup(Product.name, id: Self.workspaceWindowID) {
             WorkspaceView(environment: environment, settings: settings)
-                .frame(minWidth: 960, minHeight: 600)
+                .frame(minWidth: DesignTokens.Metrics.windowMinWidth, minHeight: 600)
                 // A database file dropped anywhere on the window opens as a connection.
                 .dropDestination(for: URL.self) { urls, _ in
                     guard let controller = CommandCenter.shared.current else { return false }

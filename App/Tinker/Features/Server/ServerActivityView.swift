@@ -404,14 +404,15 @@ public struct ServerActivityView: View {
                 icon: Icon.activity, title: "No sessions to show",
                 message: controller.search.isEmpty ? nil : "Nothing matches “\(controller.search)”.")
         } else {
-            VStack(spacing: 0) {
-                columnHeader(["ID", "User", "Database", "Client", "State", "Duration", "Query"], widths: sessionWidths)
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(controller.visibleSessions.enumerated()), id: \.element.id) { index, session in
-                            sessionRow(session, index: index)
-                        }
+            WideRows {
+                Section {
+                    ForEach(Array(controller.visibleSessions.enumerated()), id: \.element.id) { index, session in
+                        sessionRow(session, index: index)
                     }
+                } header: {
+                    columnHeader(
+                        ["ID", "User", "Database", "Client", "State", "Duration", "Query"],
+                        widths: sessionWidths)
                 }
             }
         }
@@ -486,10 +487,8 @@ public struct ServerActivityView: View {
                 message: "The server shows each account only what it is allowed to see.")
         } else {
             VStack(spacing: 0) {
-                columnHeader(
-                    ["Name", "Host", "Super", "Login", "Create DB", "Create role", "Attributes"], widths: userWidths)
-                ScrollView {
-                    LazyVStack(spacing: 0) {
+                WideRows {
+                    Section {
                         ForEach(Array(controller.visibleUsers.enumerated()), id: \.element.id) { index, user in
                             let isSelected = controller.selectedUserID == user.id
                             HStack(spacing: 0) {
@@ -547,6 +546,10 @@ public struct ServerActivityView: View {
                                 }
                             }
                         }
+                    } header: {
+                        columnHeader(
+                            ["Name", "Host", "Super", "Login", "Create DB", "Create role", "Attributes"],
+                            widths: userWidths)
                     }
                 }
                 if let user = selectedUser {
@@ -596,39 +599,38 @@ public struct ServerActivityView: View {
         if controller.visibleVariables.isEmpty {
             EmptyStateView(icon: Icon.variable, title: controller.isLoading ? "Reading…" : "No settings to show")
         } else {
-            VStack(spacing: 0) {
-                columnHeader(["Name", "Value", "Unit", "Category", "Description"], widths: variableWidths)
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(controller.visibleVariables.enumerated()), id: \.element.id) { index, variable in
-                            HStack(spacing: 0) {
-                                cell(variableWidths[0]) {
-                                    Text(variable.name).font(.system(.callout, design: .monospaced))
-                                }
-                                cell(variableWidths[1]) {
-                                    Text(variable.value).font(.system(.callout, design: .monospaced))
-                                }
-                                cell(variableWidths[2]) { Text(variable.unit ?? "").foregroundStyle(.secondary) }
-                                cell(variableWidths[3]) { Text(variable.category ?? "").foregroundStyle(.secondary) }
-                                cell(nil) { Text(variable.summary ?? "").foregroundStyle(.secondary) }
+            WideRows {
+                Section {
+                    ForEach(Array(controller.visibleVariables.enumerated()), id: \.element.id) { index, variable in
+                        HStack(spacing: 0) {
+                            cell(variableWidths[0]) {
+                                Text(variable.name).font(.system(.callout, design: .monospaced))
                             }
-                            .font(.callout)
-                            .frame(height: 24)
-                            .background(
-                                index.isMultiple(of: 2)
-                                    ? Color.clear : Color(nsColor: .alternatingContentBackgroundColors[1])
-                            )
-                            .contextMenu {
-                                Button {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(
-                                        "\(variable.name) = \(variable.value)", forType: .string)
-                                } label: {
-                                    Label("Copy", systemImage: Icon.copy)
-                                }
+                            cell(variableWidths[1]) {
+                                Text(variable.value).font(.system(.callout, design: .monospaced))
+                            }
+                            cell(variableWidths[2]) { Text(variable.unit ?? "").foregroundStyle(.secondary) }
+                            cell(variableWidths[3]) { Text(variable.category ?? "").foregroundStyle(.secondary) }
+                            cell(nil) { Text(variable.summary ?? "").foregroundStyle(.secondary) }
+                        }
+                        .font(.callout)
+                        .frame(height: 24)
+                        .background(
+                            index.isMultiple(of: 2)
+                                ? Color.clear : Color(nsColor: .alternatingContentBackgroundColors[1])
+                        )
+                        .contextMenu {
+                            Button {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(
+                                    "\(variable.name) = \(variable.value)", forType: .string)
+                            } label: {
+                                Label("Copy", systemImage: Icon.copy)
                             }
                         }
                     }
+                } header: {
+                    columnHeader(["Name", "Value", "Unit", "Category", "Description"], widths: variableWidths)
                 }
             }
         }

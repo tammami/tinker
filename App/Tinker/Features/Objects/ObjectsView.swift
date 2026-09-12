@@ -208,26 +208,26 @@ public struct ObjectsView: View {
     }
 
     private var list: some View {
-        ScrollView {
-            LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
-                if !controller.visible.isEmpty {
-                    Section {
-                        ForEach(Array(controller.visible.enumerated()), id: \.element.id) { index, object in
-                            objectRow(object, index: index)
-                        }
-                    } header: {
-                        header
+        // The columns have set widths, so on a narrow window a row is wider than the pane
+        // and scrolls sideways: centred, it put the name off the pane's leading edge.
+        WideRows {
+            if !controller.visible.isEmpty {
+                Section {
+                    ForEach(Array(controller.visible.enumerated()), id: \.element.id) { index, object in
+                        objectRow(object, index: index)
                     }
+                } header: {
+                    header
                 }
-                if !controller.visibleRoutines.isEmpty {
-                    Section {
-                        ForEach(Array(controller.visibleRoutines.enumerated()), id: \.element.id) { index, routine in
-                            routineRow(routine, index: index)
-                        }
-                    } header: {
-                        SectionHeading(text: "Functions and procedures")
-                            .background(.bar)
+            }
+            if !controller.visibleRoutines.isEmpty {
+                Section {
+                    ForEach(Array(controller.visibleRoutines.enumerated()), id: \.element.id) { index, routine in
+                        routineRow(routine, index: index)
                     }
+                } header: {
+                    SectionHeading(text: "Functions and procedures")
+                        .background(.bar)
                 }
             }
         }

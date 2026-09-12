@@ -35,24 +35,36 @@ public struct QueryBuilderView: View {
                 InlineBanner(kind: .success, message: status) { controller.clearStatus() }
                 Divider()
             }
-            HSplitView {
-                tableList
-                    .frame(minWidth: 160, idealWidth: 200, maxWidth: 240)
-                VSplitView {
-                    BuilderCanvas(controller: controller)
-                        .frame(minHeight: 220)
-                    clauseEditor
-                        .frame(minHeight: 160, idealHeight: 220)
+            // Three panes with minimums of their own: a list to drag from, a canvas to drop
+            // on, and the statement they build. Below `BuilderMetrics.minimumWidth` they
+            // scroll sideways rather than ask the window for the room, which the split view
+            // would take out of the sidebar — whose content cannot narrow and would then
+            // hang off the window's leading edge.
+            GeometryReader { viewport in
+                ScrollView(.horizontal) {
+                    HSplitView {
+                        tableList
+                            .frame(minWidth: 160, idealWidth: 200, maxWidth: 240)
+                        VSplitView {
+                            BuilderCanvas(controller: controller)
+                                .frame(minHeight: 220)
+                            clauseEditor
+                                .frame(minHeight: 160, idealHeight: 220)
+                        }
+                        .frame(minWidth: 480, maxWidth: .infinity)
+                        .layoutPriority(1)
+                        VSplitView {
+                            sqlPane
+                                .frame(minHeight: 120, idealHeight: 260)
+                            previewPane
+                                .frame(minHeight: 120)
+                        }
+                        .frame(minWidth: 280, idealWidth: 380, maxWidth: 560)
+                    }
+                    .frame(
+                        width: max(viewport.size.width, BuilderMetrics.minimumWidth),
+                        height: viewport.size.height)
                 }
-                .frame(minWidth: 480, maxWidth: .infinity)
-                .layoutPriority(1)
-                VSplitView {
-                    sqlPane
-                        .frame(minHeight: 120, idealHeight: 260)
-                    previewPane
-                        .frame(minHeight: 120)
-                }
-                .frame(minWidth: 280, idealWidth: 380, maxWidth: 560)
             }
         }
         .task { await controller.loadTables() }
@@ -606,6 +618,9 @@ public struct QueryBuilderView: View {
 /// The geometry every card shares, so join lines can be computed rather than measured.
 enum BuilderMetrics {
     static let cardWidth: CGFloat = 200
+    /// The three panes' own minimums with the dividers between them: narrower than this and
+    /// the builder scrolls sideways instead of squeezing what is beside it.
+    static let minimumWidth: CGFloat = 160 + 480 + 280 + 2
     static let headerHeight: CGFloat = 28
     static let rowHeight: CGFloat = 22
     static let canvasPadding: CGFloat = 400

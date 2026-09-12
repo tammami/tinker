@@ -11,11 +11,24 @@ struct PaneBar<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        HStack(spacing: DesignTokens.Spacing.sm) { content }
-            .padding(.horizontal, DesignTokens.Spacing.md)
-            .frame(height: height)
-            .frame(maxWidth: .infinity)
-            .background(material)
+        // Read the width, then lay the controls out in a scroller at least that wide.
+        //
+        // A row of controls is a view that could always be wider, and an `HStack` hands that
+        // appetite to whatever contains it. In the detail column of a split view the room it
+        // asks for is taken out of the sidebar, whose own content will not lay out below its
+        // minimum and is then drawn hanging off the window's leading edge. A reader has no
+        // width of its own to pass on, so the bar stops asking; the scroller keeps every
+        // control reachable when the window is narrower than the bar needs — a transaction's
+        // Commit and Rollback are not something to lose off the edge.
+        GeometryReader { viewport in
+            ScrollView(.horizontal) {
+                HStack(spacing: DesignTokens.Spacing.sm) { content }
+                    .padding(.horizontal, DesignTokens.Spacing.md)
+                    .frame(minWidth: viewport.size.width, minHeight: height, alignment: .leading)
+            }
+        }
+        .frame(height: height)
+        .background(material)
     }
 }
 
@@ -368,6 +381,29 @@ struct SectionHeading: View {
         .padding(.horizontal, inset)
         .padding(.top, DesignTokens.Spacing.md)
         .padding(.bottom, DesignTokens.Spacing.xs)
+    }
+}
+
+/// Rows whose columns have set widths: a header that stays put, and a sideways scroller.
+///
+/// Such a row is wider than a narrow pane can show, and a plain vertical scroller centres
+/// what it cannot fit — which puts the first column off the pane's leading edge, and asks
+/// the split view for a width the sidebar then has to give up. The reader here has no width
+/// of its own to ask for, so the pane narrows and the rows scroll instead.
+///
+/// The content is a `LazyVStack`'s worth of `Section`s; each section's header pins.
+struct WideRows<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        GeometryReader { viewport in
+            ScrollView([.vertical, .horizontal]) {
+                LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) { content }
+                    .frame(
+                        minWidth: viewport.size.width, minHeight: viewport.size.height,
+                        alignment: .topLeading)
+            }
+        }
     }
 }
 

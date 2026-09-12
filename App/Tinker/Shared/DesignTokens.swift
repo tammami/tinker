@@ -35,8 +35,16 @@ public enum DesignTokens {
         public static let maximumColumnWidth: CGFloat = 1_200
         /// Text longer than this is truncated in a cell; the full value is in the inspector.
         public static let inCellTextLimit = 512
+        /// SwiftUI will not lay the sidebar's content out narrower than this whatever the
+        /// column is told: in a narrower pane the content is drawn at this width anyway,
+        /// anchored to the trailing edge, so its first characters hang off the window's
+        /// leading edge. Nothing beside it may claim a width it cannot give up.
         public static let sidebarMinWidth: CGFloat = 220
         public static let sidebarIdealWidth: CGFloat = 270
+        /// The window's own floor: `sidebarMinWidth` and enough beside it for a grid, its
+        /// bar and its status line to still read. Low enough to tile the window to half of
+        /// a laptop screen, which is what the floor is for.
+        public static let windowMinWidth: CGFloat = 800
         public static let inspectorWidth: CGFloat = 300
         /// The workspace tab strip.
         public static let tabHeight: CGFloat = 34

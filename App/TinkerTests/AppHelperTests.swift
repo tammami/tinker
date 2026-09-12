@@ -84,9 +84,72 @@ final class AppHelperTests: XCTestCase {
         XCTAssertEqual(tab.grids.count, 1, "setting on an empty tab adds the grid")
     }
 
+    // MARK: Cell inspector
+
+    func testAnUntouchedFormFieldIsNotReportedAsChanged() {
+        // The row form fills each field with the same text the clipboard would carry.
+        // Anything it fills in and nobody touches must read back as unchanged, or leaving
+        // the field writes an UPDATE for a row that was never edited.
+        let untouched: [(String, DBValue)] = [
+            ("7", .int(7)),
+            ("01.01", .string("01.01")),
+            ("1.7500", .decimal("1.7500")),
+            ("{1,2}", .array([.int(1), .int(2)])),
+            ("", .null),
+        ]
+        for (draft, value) in untouched {
+            XCTAssertFalse(
+                CellInspectorView.isChanged(draft: draft, from: value),
+                "\(value) filled the field with \(draft) and was not edited")
+        }
+    }
+
+    func testATypedFormFieldIsReportedAsChanged() {
+        XCTAssertTrue(CellInspectorView.isChanged(draft: "8", from: .int(7)))
+        XCTAssertTrue(CellInspectorView.isChanged(draft: "{1,3}", from: .array([.int(1), .int(2)])))
+        XCTAssertTrue(
+            CellInspectorView.isChanged(draft: "", from: .string("01.01")),
+            "a field cleared by hand is a change, not a no-op")
+        XCTAssertTrue(
+            CellInspectorView.isChanged(draft: "text", from: .null),
+            "typing into a NULL field is a change")
+    }
+
+    func testAQueryResultOffersOnlyItsWritableColumnsForEditing() async {
+        // A query may return columns that belong to no writable table. The inspector asks
+        // the grid the same question the grid asks itself before a write, so a column the
+        // grid would refuse is not offered as a field to type into.
+        let grid = GridModel(source: .query("SELECT id, name, id * 2 FROM invoices"), dialect: .sqlite,
+                             loader: ThreeColumnLoader())
+        await grid.load(page: 0)
+        grid.editTarget = TableRef(database: "main", schema: "main", name: "invoices")
+        grid.setIdentity(columns: ["id"], kind: .int)
+        XCTAssertTrue(grid.isEditable, "the query reads one table and its key is in the result")
+        grid.editableColumns = ["id", "name"]
+        XCTAssertTrue(grid.isColumnEditable(0))
+        XCTAssertTrue(grid.isColumnEditable(1))
+        XCTAssertFalse(grid.isColumnEditable(2), "a computed column belongs to no table and is read only")
+        XCTAssertFalse(grid.isColumnEditable(9), "a column past the end is never editable")
+    }
+
     private func makeGrid() -> GridModel {
         GridModel(source: .query("SELECT 1"), dialect: .sqlite, loader: EmptyLoader())
     }
+}
+
+/// Three columns, the last of them computed, so per-column editing can be tested.
+struct ThreeColumnLoader: GridDataLoader {
+    func loadPage(_ request: PageRequest) async throws -> LoadedPage {
+        LoadedPage(
+            columns: [
+                ColumnMeta(id: 0, name: "id", nativeTypeName: "integer", kind: .int, isPrimaryKey: true),
+                ColumnMeta(id: 1, name: "name", nativeTypeName: "text", kind: .string),
+                ColumnMeta(id: 2, name: "double_id", nativeTypeName: "integer", kind: .int),
+            ],
+            rows: [[.int(1), .string("one"), .int(2)]])
+    }
+
+    func exactCount(filter: [FilterRule]) async throws -> Int64 { 1 }
 }
 
 struct EmptyLoader: GridDataLoader {

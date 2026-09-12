@@ -15,6 +15,9 @@ public struct CellInspectorView: View {
     let onCommit: (Int, String) -> Void
     let onSetNull: (Int) -> Void
     let onFollow: (Int) -> Void
+    /// Whether the grid would accept a write to this column. A query result may carry
+    /// columns that belong to no writable table; they are shown, not offered for editing.
+    var isColumnEditable: (Int) -> Bool = { _ in true }
     /// Whether a column takes part in a foreign key, so its value can be picked.
     var canPickReference: (Int) -> Bool = { _ in false }
     /// Opens the foreign-key picker for a column.
@@ -80,7 +83,7 @@ public struct CellInspectorView: View {
                         }
                     }
                     Spacer()
-                    if isEditable, canPickReference(focusedColumn) {
+                    if isEditable, isColumnEditable(focusedColumn), canPickReference(focusedColumn) {
                         Button {
                             onPickReference(focusedColumn)
                         } label: {
@@ -103,7 +106,7 @@ public struct CellInspectorView: View {
                     columnName: column.name,
                     kind: column.kind,
                     value: value,
-                    isEditable: isEditable,
+                    isEditable: isEditable && isColumnEditable(focusedColumn),
                     onCommit: { onCommit(focusedColumn, $0) },
                     onSetNull: { onSetNull(focusedColumn) }
                 )
@@ -130,11 +133,13 @@ public struct CellInspectorView: View {
                         RowFormField(
                             column: column,
                             value: rowValues.indices.contains(index) ? rowValues[index] : .null,
-                            isEditable: isEditable,
+                            isEditable: isEditable && isColumnEditable(index),
                             hasReference: hasReference(index),
+                            canPick: canPickReference(index),
                             onCommit: { onCommit(index, $0) },
                             onSetNull: { onSetNull(index) },
-                            onFollow: { onFollow(index) }
+                            onFollow: { onFollow(index) },
+                            onPick: { onPickReference(index) }
                         )
                     }
                 }
@@ -183,6 +188,7 @@ private struct RowFormField: View {
     @State private var draft = ""
     @State private var isNull = false
     @State private var isPickerShown = false
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
@@ -215,7 +221,11 @@ private struct RowFormField: View {
                     .font(.system(.body, design: .monospaced))
                     .lineLimit(1 ... 6)
                     .disabled(!isEditable)
-                    .onSubmit { if draft != (value.text ?? "") { onCommit(draft) } }
+                    .focused($isFocused)
+                    .onSubmit { commitIfChanged() }
+                    // Leaving the field commits it too. Return alone would mean a value
+                    // typed and then clicked away from was dropped without a word.
+                    .onChange(of: isFocused) { _, focused in if !focused { commitIfChanged() } }
                 if isPickerShown, isEditable, TemporalText.isTemporal(column.kind) {
                     TemporalPickerView(kind: column.kind, text: draft) { picked in
                         draft = picked
@@ -235,6 +245,11 @@ private struct RowFormField: View {
     private func load() {
         isNull = value.isNull
         draft = value.isNull ? "" : ClipboardFormatter.cellText(value)
+    }
+
+    private func commitIfChanged() {
+        guard isEditable, CellInspectorView.isChanged(draft: draft, from: value) else { return }
+        onCommit(draft)
     }
 }
 
@@ -392,6 +407,17 @@ private struct CellValueEditor: View {
 }
 
 extension CellInspectorView {
+    /// Whether a form field's draft differs from the value it was filled from, which is
+    /// what decides whether leaving the field writes anything.
+    ///
+    /// The comparison has to be against the same text the field was filled with. An array
+    /// and a geometry have no `DBValue.text` at all, so comparing with that reported every
+    /// untouched field as changed — and with auto-commit on, sent an UPDATE for a row
+    /// nobody had edited.
+    static func isChanged(draft: String, from value: DBValue) -> Bool {
+        draft != (value.isNull ? "" : ClipboardFormatter.cellText(value))
+    }
+
     /// Sixteen bytes a line, offset, hex and printable text — the usual shape.
     static func hexDump(_ data: Data, limit: Int = 4_096) -> String {
         var lines: [String] = []

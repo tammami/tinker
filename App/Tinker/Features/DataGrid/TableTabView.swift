@@ -359,6 +359,7 @@ public struct TableTabView: View {
                                 row: controller.selection.focusRow, column: column
                             )
                         },
+                        isColumnEditable: { model.isColumnEditable($0) },
                         canPickReference: { column in controller.gridColumnReferences(column) },
                         onPickReference: { column in controller.requestReferencePicker(column: column) }
                     )

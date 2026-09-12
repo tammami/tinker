@@ -173,7 +173,7 @@ public struct SettingsView: View {
                 Label("Updates", systemImage: Icon.update)
             } footer: {
                 Text(
-                    "Updates are fetched from the release feed only when you ask, or on a daily schedule when the switch is on. Every update is signed; one that does not verify is refused."
+                    "Updates are fetched from the release feed only when you ask, or on a daily schedule when the switch is on. A version found on the schedule arrives as a macOS notification rather than a window over your work; click it to see what changed. Every update is signed; one that does not verify is refused."
                 )
             }
         }

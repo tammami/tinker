@@ -4,6 +4,40 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.3] - 2026-09-12
+
+### Added
+- **A new version tells you the way everything else on macOS does.** An update found on the
+  daily schedule arrives as a notification instead of Sparkle's window opening over your
+  work; click it to see what changed and install it. A check you start yourself still opens
+  the window straight away. Permission to notify is asked for when you turn the
+  automatic-check switch on, and never before.
+- **"Choose from referenced table" in the inspector's Row pane.** A foreign key could be
+  picked from a list in the Cell pane but not in the form beside it.
+
+### Fixed
+- **Typing in the SQL editor no longer makes the text flicker.** Every keystroke repainted
+  the whole editor twice: the view's font was written over the entire document on each
+  change, which laid the page out again and dropped the highlighter's bold and italic runs,
+  and the highlighting pass reset every attribute before colouring them back. The font is
+  now written only when it changed, the pass writes only what is not already right, and the
+  caret's line band is invalidated instead of the page. Measured while typing a character
+  every 0.9 s: 383 points of the editor repainted per keystroke before, 112 after.
+- **An edit in the Row pane is saved when you leave the field.** It committed only on
+  Return, so a value typed and then clicked away from was dropped without a word.
+- **No more UPDATE for a row nobody edited.** The Row pane decided a field had changed by
+  comparing against a rendering the field was never filled from, so every untouched array or
+  geometry column read back as edited — and with auto-commit on, that was written to the
+  server.
+- **A column the grid will not write is no longer offered for typing.** A query result's
+  computed column looked editable and refused only once Return was pressed.
+- **Profile and Status start at the top left.** Both floated in the middle of their pane
+  when the table was smaller than the space it had.
+
+### Removed
+- **The Text pane.** It rendered a whole result into a single text view, which hung the app
+  on anything large; the grid is what results are for.
+
 ## [0.1.2] - 2026-09-11
 
 ### Changed

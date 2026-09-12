@@ -88,11 +88,11 @@ enum UIDemo {
                 UserDefaults.standard.set(true, forKey: "uiDemo.referencePick")
                 if let preferred { controller.openTable(preferred.ref, connectionID: config.id) }
             case "inspector":
-                workspace.isInspectorVisible = true
+                workspace.selectedTab?.isInspectorVisible = true
             case "datepicker":
                 if let preferred {
                     let tab = controller.openTable(preferred.ref, connectionID: config.id)
-                    workspace.isInspectorVisible = true
+                    workspace.selectedTab?.isInspectorVisible = true
                     if let table = controller.tableController(for: tab) {
                         try? await Task.sleep(for: .milliseconds(900))
                         if let column = table.model?.columns.firstIndex(where: {
@@ -182,7 +182,7 @@ enum UIDemo {
                     query.run(all: true)
                     try? await Task.sleep(for: .milliseconds(1500))
                     query.selection = GridSelection(row: 0, column: 1)
-                    workspace.isInspectorVisible = true
+                    workspace.selectedTab?.isInspectorVisible = true
                 }
             case "sidebarfilter":
                 // The sidebar filter is fuzzy: `ak` keeps `aset_kelompok`.

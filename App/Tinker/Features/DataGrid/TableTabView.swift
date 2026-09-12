@@ -7,7 +7,7 @@ import SwiftUI
 public struct TableTabView: View {
     @Bindable var controller: TableTabController
     @Bindable var workspace: WorkspaceModel
-    let tab: WorkspaceTab
+    @Bindable var tab: WorkspaceTab
 
     /// Which half of the tab is showing.
     enum Mode: String, CaseIterable, Identifiable {
@@ -149,7 +149,7 @@ public struct TableTabView: View {
                         name: .tinkerPeekOnMap, object: controller, userInfo: ["row": 2, "column": column])
                 }
             }
-            controller.onRequestInspector = { workspace.isInspectorVisible = true }
+            controller.onRequestInspector = { tab.isInspectorVisible = true }
             controller.onFollowReference = { table, rules in
                 workspace.followReference(to: table, connectionID: tab.connectionID, filter: rules)
             }
@@ -219,7 +219,7 @@ public struct TableTabView: View {
                 .buttonStyle(.borderless)
                 .help("Show or hide the filter bar (⌘⇧F)")
 
-                Toggle(isOn: $workspace.isInspectorVisible) {
+                Toggle(isOn: $tab.isInspectorVisible) {
                     Label("Inspector", systemImage: Icon.inspector)
                 }
                 .toggleStyle(.button)
@@ -332,7 +332,7 @@ public struct TableTabView: View {
                     }
                 }
 
-                if workspace.isInspectorVisible, let model = controller.model {
+                if tab.isInspectorVisible, let model = controller.model {
                     Divider()
                     CellInspectorView(
                         columns: model.columns,

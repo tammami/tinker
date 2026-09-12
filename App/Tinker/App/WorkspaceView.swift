@@ -374,12 +374,12 @@ public struct WorkspaceView: View {
             .help("Quick-open a table (⌘⇧O)")
 
             Button {
-                workspace.isInspectorVisible.toggle()
+                workspace.toggleInspector()
             } label: {
                 Label("Inspector", systemImage: Icon.inspector)
             }
-            .help("Show or hide the inspector (⌘⌥I)")
-            .disabled(!(workspace.selectedTab.map { !$0.isQueryTab && $0.tableRef != nil } ?? false))
+            .help("Show or hide the inspector of the tab in front (⌘⌥I)")
+            .disabled(!workspace.canShowInspector)
         }
     }
 

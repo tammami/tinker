@@ -244,7 +244,7 @@ struct TinkerCommands: Commands {
         CommandGroup(after: .sidebar) {
             Button("Toggle Sidebar") { workspace?.isSidebarVisible.toggle() }
                 .keyboardShortcut("s", modifiers: [.command, .option])
-            Button("Toggle Inspector") { workspace?.workspace.isInspectorVisible.toggle() }
+            Button("Toggle Inspector") { workspace?.workspace.toggleInspector() }
                 .keyboardShortcut("i", modifiers: [.command, .option])
             Button("Toggle Filter Bar") { workspace?.workspace.isFilterBarVisible.toggle() }
                 .keyboardShortcut("f", modifiers: [.command, .shift])

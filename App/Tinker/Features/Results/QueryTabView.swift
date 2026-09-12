@@ -7,7 +7,7 @@ import SwiftUI
 public struct QueryTabView: View {
     @Bindable var controller: QueryTabController
     @Bindable var workspace: WorkspaceModel
-    let tab: WorkspaceTab
+    @Bindable var tab: WorkspaceTab
     let fontName: String
     let fontSize: Double
 
@@ -102,7 +102,7 @@ public struct QueryTabView: View {
     var editorToolbar: some View {
         toolbarContent
             .onAppear {
-                controller.onRequestInspector = { workspace.isInspectorVisible = true }
+                controller.onRequestInspector = { tab.isInspectorVisible = true }
                 controller.onFollowReference = { table, rules in
                     workspace.followReference(to: table, connectionID: controller.connectionID, filter: rules)
                 }
@@ -222,6 +222,16 @@ public struct QueryTabView: View {
             }
 
             Spacer()
+
+            // The query tab has an inspector of its own, so it has its own switch for it;
+            // without one it could only be turned off from whichever table tab turned it on.
+            Toggle(isOn: $tab.isInspectorVisible) {
+                Label("Inspector", systemImage: Icon.inspector)
+            }
+            .toggleStyle(.button)
+            .buttonStyle(.borderless)
+            .disabled(controller.selectedResult?.grid == nil)
+            .help("Show or hide the inspector for the selected result (⌘⌥I)")
 
             // Export sits where the eye lands after a query: the result's rows to a file.
             Button {
@@ -482,7 +492,7 @@ public struct QueryTabView: View {
                         revision: controller.revision,
                         delegate: controller
                     )
-                    if workspace.isInspectorVisible {
+                    if tab.isInspectorVisible {
                         Divider()
                         CellInspectorView(
                             columns: grid.columns,

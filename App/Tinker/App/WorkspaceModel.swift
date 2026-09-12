@@ -32,6 +32,9 @@ public final class WorkspaceTab: Identifiable {
     public var sql: String = ""
     /// Off means the tab holds its transaction open until the user commits.
     public var autoCommit = true
+    /// Whether this tab shows the inspector beside its grid. Each tab keeps its own:
+    /// opening it to read a row of one table said nothing about the next tab.
+    public var isInspectorVisible = false
     // The grid, the results, the running state and the banner live on the tab's
     // controller, which the views observe directly; copies here had no readers.
 
@@ -194,7 +197,6 @@ public final class WorkspaceModel {
     /// reads it to decide, before the pasteboard is loaded, whether it can take the drop.
     @ObservationIgnored public var draggedConnectionID: UUID?
     public var isSidebarVisible = true
-    public var isInspectorVisible = false
     public var quickOpenQuery = ""
     public var isQuickOpenPresented = false
     /// The table designer's two entry points.
@@ -246,6 +248,19 @@ public final class WorkspaceModel {
 
     public var selectedTab: WorkspaceTab? {
         tabs.first { $0.id == selectedTabID }
+    }
+
+    /// Whether the tab in front has a grid for the inspector to describe. Only a table
+    /// and a query result do; the others have nothing to show beside them.
+    public var canShowInspector: Bool {
+        selectedTab.map { $0.isQueryTab || $0.tableRef != nil } ?? false
+    }
+
+    /// Shows or hides the inspector of the tab in front, which is what the menu item,
+    /// the toolbar button and the command palette all mean.
+    public func toggleInspector() {
+        guard canShowInspector, let tab = selectedTab else { return }
+        tab.isInspectorVisible.toggle()
     }
 
     /// The connection the current tab belongs to, which is what the toolbar acts on.

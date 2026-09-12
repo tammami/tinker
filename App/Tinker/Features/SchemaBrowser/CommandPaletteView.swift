@@ -174,7 +174,7 @@ public struct CommandPaletteView: View {
             ("Commit", Icon.commit, "⌘⇧S", { controller.commit() }),
             ("Rollback", Icon.rollback, "⌘⇧⌫", { controller.rollback() }),
             ("Refresh", Icon.refresh, "F5", { controller.refresh() }),
-            ("Toggle Inspector", Icon.inspector, "⌘⌥I", { ws.isInspectorVisible.toggle() }),
+            ("Toggle Inspector", Icon.inspector, "⌘⌥I", { ws.toggleInspector() }),
             ("Toggle Filter Bar", Icon.filter, "⌘⇧F", { ws.isFilterBarVisible.toggle() }),
             ("Toggle Sidebar", Icon.sidebar, "⌘⌥S", { controller.isSidebarVisible.toggle() }),
             ("Toggle Read-Only", Icon.lock, "⌘⇧L", { controller.toggleReadOnly() }),

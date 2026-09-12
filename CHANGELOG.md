@@ -4,6 +4,30 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.4] - 2026-09-12
+
+### Fixed
+- **The sidebar no longer hangs off the left edge of the window.** At a narrow window the
+  pane beside it asked for more room than there was, the split view took that room out of
+  the sidebar, and the sidebar's content — which will not lay out below its own minimum —
+  was drawn over the window's edge, so "database" read as "tabase". Four panes did it: the
+  bar above every pane, the objects list, the server's sessions, users and settings, and the
+  query builder, whose three panes wanted 1144 pt between them and so spilled the sidebar at
+  every width the app allowed. Each of them now narrows and scrolls sideways instead.
+- **The objects list starts at the Name column again.** It was wider than a narrow pane, and
+  a vertical scroller centres what it cannot fit, which pushed the first column off the
+  pane's leading edge.
+
+### Changed
+- **The window can be made narrower: 800 pt instead of 960.** Enough to tile it to half a
+  laptop screen, which is what a minimum width is for.
+- **The inspector belongs to the tab, not the workspace.** Opening it to read a row of a
+  table used to open it beside every query result too, where nothing in the query tab could
+  close it again. Each tab keeps its own, and the query bar has its own switch for it.
+- **A bar with more controls than fit scrolls sideways.** It used to squeeze the labels
+  until they wrapped; now they keep their width, and nothing — a transaction's Commit and
+  Rollback included — is lost off the edge.
+
 ## [0.1.3] - 2026-09-12
 
 ### Added

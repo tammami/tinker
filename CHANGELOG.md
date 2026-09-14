@@ -4,6 +4,38 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.5] - 2026-09-14
+
+### Added
+- **Enum and SET columns are picked, not typed.** Editing an enum cell opens its values in a
+  menu over the cell, with the current one ticked; a MySQL SET gets checkboxes and an Apply
+  button. The inspector's Cell and Row panes offer the same controls. A value typed or
+  pasted that is not one of the column's values is refused before anything is written, and
+  the message names the values that are.
+- **Rows paste straight in from a spreadsheet or a CSV.** ⌘V in the grid pastes. Lines with
+  as many values as the table has columns — or under a first line naming the columns, in
+  any order and without the auto-increment key — are added as new rows, each value in its
+  own column; fewer values fill cells from the one selected, as before. Excel's quoted
+  cells, line breaks inside a cell and CRLF line ends come through, and a comma inside one
+  value does not split it. With auto-commit on the rows are written at once; on a
+  production connection they wait for Commit like any other edit.
+
+### Fixed
+- **Pasting a table finishes.** Confirming the structure review brought the Paste sheet
+  back empty instead of copying the rows, so a paste never completed. The review now opens
+  over the sheet, and the paste runs to its result in the same place.
+- **A MySQL paste lands in the chosen database** when the connection has no default
+  database. It failed with "No database selected".
+- **A pasted table no longer carries a foreign key to a table that is not there.** Pasting
+  one table into another database copied its key to a parent the target did not have:
+  MySQL then refused every new row in the copy, and PostgreSQL refused the paste. A key now
+  comes along when its table is part of the paste or already exists on the target, and is
+  otherwise left out and named under "Left out of the paste".
+- **The structure review shows every statement in full**, in a box that scrolls, instead of
+  the first few cut off in the subtitle.
+- **Copied cells keep their tabs and line breaks.** They are quoted the way a spreadsheet
+  quotes them rather than turned into spaces, so a copy pastes back whole.
+
 ## [0.1.4] - 2026-09-12
 
 ### Fixed

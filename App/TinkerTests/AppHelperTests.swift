@@ -50,6 +50,56 @@ final class AppHelperTests: XCTestCase {
         XCTAssertTrue(many.message.contains("Auto-commit is on"))
     }
 
+    // MARK: Paste structure review
+
+    /// Waits, boundedly, for the controller to put its review up.
+    private func waitForReview(on controller: TransferController) async {
+        for _ in 0 ..< 1_000 where controller.pendingReview == nil { await Task.yield() }
+    }
+
+    func testStructureReviewWithNothingToRunDoesNotAsk() async {
+        let controller = TransferController(environment: AppEnvironment(secrets: EphemeralSecretStore()))
+        let approved = await controller.reviewStructure([], target: "MySQL", source: "Localhost")
+        XCTAssertTrue(approved)
+        XCTAssertNil(controller.pendingReview, "an empty structure is not a question")
+    }
+
+    func testStructureReviewWaitsOnTheControllerUntilConfirmed() async {
+        let controller = TransferController(environment: AppEnvironment(secrets: EphemeralSecretStore()))
+        let answer = Task {
+            await controller.reviewStructure(["CREATE TABLE a (id int)"], target: "MySQL", source: "Localhost")
+        }
+        await waitForReview(on: controller)
+        let review = controller.pendingReview
+        XCTAssertEqual(review?.title, "Run this structure on “MySQL”?")
+        XCTAssertEqual(review?.confirmTitle, "Run and Copy Rows")
+        XCTAssertEqual(review?.detail, "CREATE TABLE a (id int);", "the statements are shown whole, not cut to fit")
+        XCTAssertFalse(review?.message.contains("CREATE") ?? true, "the subtitle only says what will happen")
+        // The question lives on the controller the paste sheet owns, not on the workspace,
+        // so presenting it cannot replace the sheet and restart the paste.
+        await review?.action()
+        let approved = await answer.value
+        XCTAssertTrue(approved)
+        XCTAssertNil(controller.pendingReview)
+        controller.declineReview()  // a late dismissal after the answer is ignored, not a second resume
+    }
+
+    func testStructureReviewDeclinedByCancelOrDismissal() async {
+        let controller = TransferController(environment: AppEnvironment(secrets: EphemeralSecretStore()))
+        let cancelled = Task { await controller.reviewStructure(["CREATE TABLE a (id int)"], target: "t", source: "s") }
+        await waitForReview(on: controller)
+        controller.pendingReview?.onCancel?()
+        let first = await cancelled.value
+        XCTAssertFalse(first, "the review's own Cancel declines")
+
+        let stopped = Task { await controller.reviewStructure(["CREATE TABLE a (id int)"], target: "t", source: "s") }
+        await waitForReview(on: controller)
+        controller.cancel()
+        let second = await stopped.value
+        XCTAssertFalse(second, "the sheet's Cancel declines a review still waiting instead of leaving the paste hung")
+        XCTAssertNil(controller.pendingReview)
+    }
+
     func testHostKeyTrustReadsBothFilesAndWritesOnlyTinkersOwn() {
         let trust = HostKeyPrompt.trust
         XCTAssertEqual(trust.readPaths, [KnownHostsFile.defaultPath, HostKeyPrompt.recordPath])

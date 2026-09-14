@@ -117,12 +117,20 @@ public struct DestructiveConfirmationView: View {
             title: confirmation.title,
             icon: isInformational ? Icon.info : Icon.warning,
             subtitle: confirmation.message,
-            width: DesignTokens.Metrics.compactSheetWidth
+            width: confirmation.detail == nil
+                ? DesignTokens.Metrics.compactSheetWidth : DesignTokens.Metrics.sheetWidth
         ) {
-            if let required = confirmation.requiredTypedName {
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                    Text("Type “\(required)” to confirm").font(.caption).foregroundStyle(.secondary)
-                    TextField("", text: $typed).textFieldStyle(.roundedBorder)
+            if confirmation.detail != nil || confirmation.requiredTypedName != nil {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                    if let detail = confirmation.detail {
+                        StatementPreview(sql: detail, label: "Statements", maxHeight: 260)
+                    }
+                    if let required = confirmation.requiredTypedName {
+                        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                            Text("Type “\(required)” to confirm").font(.caption).foregroundStyle(.secondary)
+                            TextField("", text: $typed).textFieldStyle(.roundedBorder)
+                        }
+                    }
                 }
             } else {
                 EmptyView()

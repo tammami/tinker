@@ -80,6 +80,20 @@ struct TransferProgressView: View {
     }
 }
 
+extension View {
+    /// Presents the structure review a paste waits on, on top of the sheet that owns the
+    /// controller. Closing it any way other than confirming declines the paste.
+    func structureReview(of controller: TransferController) -> some View {
+        sheet(
+            item: Binding(
+                get: { controller.pendingReview },
+                set: { if $0 == nil { controller.declineReview() } })
+        ) { confirmation in
+            DestructiveConfirmationView(confirmation: confirmation) { controller.declineReview() }
+        }
+    }
+}
+
 /// The table picker a dump or paste of a whole schema shows.
 struct TransferTableList: View {
     let tables: [TableInfo]

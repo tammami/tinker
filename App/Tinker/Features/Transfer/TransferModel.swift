@@ -141,7 +141,13 @@ public final class TransferController {
     /// What a structure synchronisation found.
     public private(set) var schemaResult: SchemaSyncResult?
 
+    /// The structure a paste waits on before it runs, for the sheet that owns this
+    /// controller to present on top of itself. A workspace-level confirmation would take
+    /// that sheet's place and bring it back as a fresh one, orphaning the paste.
+    public private(set) var pendingReview: DestructiveConfirmation?
+
     private var task: Task<Void, Never>?
+    private var reviewAnswer: CheckedContinuation<Bool, Never>?
     private let environment: AppEnvironment
 
     public init(environment: AppEnvironment) {
@@ -151,7 +157,14 @@ public final class TransferController {
     public var isRunning: Bool { phase == .running }
 
     public func cancel() {
+        answerReview(false)
         task?.cancel()
+    }
+
+    /// Declines the pending structure review, if one is still waiting; the paste then
+    /// stops with nothing written. Safe to call after it was answered.
+    public func declineReview() {
+        answerReview(false)
     }
 
     private func begin() {
@@ -373,7 +386,7 @@ public final class TransferController {
                             selection, from: source, to: destination, dialect: sourceDialect, targetDialect: dialect,
                             options: options, renaming: renaming,
                             review: { statements in
-                                await Self.reviewStructure(statements, target: targetName, source: request.source.connectionName)
+                                await self.reviewStructure(statements, target: targetName, source: request.source.connectionName)
                             }
                         ) { progress in
                             Task { @MainActor [weak self] in self?.show(progress) }
@@ -402,28 +415,36 @@ public final class TransferController {
     /// The structure a paste is about to run on the target, shown before it runs. The
     /// statements were rebuilt from the source's catalog: a default expression or a check
     /// constraint there is text the target will execute, so the person reads them
-    /// (ADR-0047). A headless run declines.
-    @MainActor
-    static func reviewStructure(_ statements: [String], target: String, source: String) async -> Bool {
+    /// (ADR-0047). The question waits in `pendingReview` until the sheet answers it, or
+    /// until Cancel declines it.
+    func reviewStructure(_ statements: [String], target: String, source: String) async -> Bool {
         guard !statements.isEmpty else { return true }
-        guard let workspace = CommandCenter.shared.current?.workspace else { return false }
-        let shown = statements.prefix(40).map { statement in
-            let flat = statement.split(whereSeparator: \.isNewline).joined(separator: " ")
-            return "• " + (flat.count > 300 ? String(flat.prefix(300)) + "…" : flat)
-        }
-        var message =
-            "\(statements.count) statement\(statements.count == 1 ? "" : "s") rebuilt from “\(source)” will run on “\(target)” before any rows are copied:\n\n"
-            + shown.joined(separator: "\n")
-        if statements.count > shown.count { message += "\n• … and \(statements.count - shown.count) more" }
+        let message =
+            "\(statements.count) statement\(statements.count == 1 ? "" : "s") rebuilt from “\(source)” will run on “\(target)” before any rows are copied."
+        // Shown whole, as they will be sent: a default or a check constraint is exactly the
+        // part that must not be cut off.
+        let detail = statements.map { $0.hasSuffix(";") ? $0 : $0 + ";" }.joined(separator: "\n\n")
+        // A review still waiting from an earlier run is declined, never left hanging.
+        answerReview(false)
         return await withCheckedContinuation { continuation in
-            workspace.confirmation = DestructiveConfirmation(
+            reviewAnswer = continuation
+            pendingReview = DestructiveConfirmation(
                 title: "Run this structure on “\(target)”?",
                 message: message,
+                detail: detail,
                 confirmTitle: "Run and Copy Rows",
-                action: { continuation.resume(returning: true) },
-                onCancel: { continuation.resume(returning: false) }
+                action: { [weak self] in self?.answerReview(true) },
+                onCancel: { [weak self] in self?.answerReview(false) }
             )
         }
+    }
+
+    /// Resumes the waiting review exactly once; later answers are ignored.
+    private func answerReview(_ approved: Bool) {
+        pendingReview = nil
+        guard let answer = reviewAnswer else { return }
+        reviewAnswer = nil
+        answer.resume(returning: approved)
     }
 
     private func show(_ progress: TransferProgress) {

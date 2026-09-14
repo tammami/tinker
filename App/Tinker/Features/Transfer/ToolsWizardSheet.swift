@@ -295,6 +295,7 @@ struct ToolsWizardSheet: View {
             await target.loadConnection()
             await applyDemoSettings()
         }
+        .structureReview(of: controller)
     }
 
     // MARK: - Header

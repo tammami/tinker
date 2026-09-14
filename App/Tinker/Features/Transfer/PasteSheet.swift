@@ -200,6 +200,7 @@ struct PasteSheet: View {
         .onChange(of: schema) { _, _ in Task { await loadExistingTables() } }
         .onChange(of: useNewDatabase) { _, _ in Task { await loadExistingTables() } }
         .onChange(of: useNewSchema) { _, _ in Task { await loadExistingTables() } }
+        .structureReview(of: controller)
     }
 
     private var sourceLine: String {

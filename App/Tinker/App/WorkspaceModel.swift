@@ -509,6 +509,9 @@ public struct DestructiveConfirmation: Identifiable {
     public let id = UUID()
     public let title: String
     public let message: String
+    /// Text the person has to be able to read in full before confirming — the statements
+    /// about to run — shown in a scrolling box rather than squeezed into the subtitle.
+    public let detail: String?
     /// When set, the user must type this exact name before the action is enabled.
     public let requiredTypedName: String?
     public let confirmTitle: String
@@ -520,6 +523,7 @@ public struct DestructiveConfirmation: Identifiable {
     public init(
         title: String,
         message: String,
+        detail: String? = nil,
         requiredTypedName: String? = nil,
         confirmTitle: String = "Delete",
         action: @escaping @MainActor () async -> Void,
@@ -527,6 +531,7 @@ public struct DestructiveConfirmation: Identifiable {
     ) {
         self.title = title
         self.message = message
+        self.detail = detail
         self.requiredTypedName = requiredTypedName
         self.confirmTitle = confirmTitle
         self.action = action

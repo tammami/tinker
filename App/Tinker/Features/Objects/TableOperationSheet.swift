@@ -572,10 +572,12 @@ private struct ImportCSVSheet: View {
 /// The statement a sheet is about to run, shown as it will be sent.
 struct StatementPreview: View {
     let sql: String
+    var label = "Statement"
+    var maxHeight: CGFloat = 140
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-            Text("Statement").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Text(label).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             ScrollView {
                 Text(sql)
                     .font(.system(.callout, design: .monospaced))
@@ -583,7 +585,7 @@ struct StatementPreview: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(DesignTokens.Spacing.sm)
             }
-            .frame(maxHeight: 140)
+            .frame(maxHeight: maxHeight)
             .background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius))
             .overlay(

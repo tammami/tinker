@@ -140,6 +140,23 @@ public struct TableTabView: View {
                     }
                 }
             }
+            if let wanted = UserDefaults.standard.string(forKey: "uiDemo.choices") {
+                UserDefaults.standard.removeObject(forKey: "uiDemo.choices")
+                Task {
+                    for _ in 0 ..< 8 {
+                        try? await Task.sleep(for: .milliseconds(700))
+                        guard let model = controller.model,
+                            let column = model.columns.firstIndex(where: {
+                                (wanted == "*" || $0.name == wanted) && controller.gridChoices($0.id) != nil
+                            })
+                        else { continue }
+                        controller.selection = GridSelection(row: 0, column: column)
+                        NotificationCenter.default.post(
+                            name: .tinkerPresentChoices, object: controller, userInfo: ["row": 0, "column": column])
+                        return
+                    }
+                }
+            }
             if UserDefaults.standard.bool(forKey: "uiDemo.mapPeek") {
                 UserDefaults.standard.removeObject(forKey: "uiDemo.mapPeek")
                 Task {
@@ -361,7 +378,8 @@ public struct TableTabView: View {
                         },
                         isColumnEditable: { model.isColumnEditable($0) },
                         canPickReference: { column in controller.gridColumnReferences(column) },
-                        onPickReference: { column in controller.requestReferencePicker(column: column) }
+                        onPickReference: { column in controller.requestReferencePicker(column: column) },
+                        choices: { column in controller.gridChoices(column) }
                     )
                     .id(controller.revision)
                 }

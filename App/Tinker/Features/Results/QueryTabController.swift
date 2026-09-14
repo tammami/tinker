@@ -79,6 +79,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     /// can be followed to the row it points at, as on a table tab.
     @ObservationIgnored private var references: [UUID: ReferenceSupport] = [:]
     private var selectedReferences: ReferenceSupport? { selectedResultID.flatMap { references[$0] } }
+    /// The enum and SET columns of each editable result, by column name.
+    @ObservationIgnored private var choices: [UUID: [String: ColumnChoices]] = [:]
 
     var session: ConnectionSession? { environment.session(for: connectionID) }
 
@@ -335,6 +337,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         errorBanner = nil
         results.removeAll()
         references.removeAll()
+        choices.removeAll()
         elapsed = .zero
         startTimer()
         defer {
@@ -411,6 +414,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
                     if editing.key.allSatisfy(names.contains), sameTable {
                         grid.editTarget = editing.table
                         grid.editableColumns = editing.columns.intersection(names)
+                        if !editing.choices.isEmpty { choices[result.id] = editing.choices }
                     } else {
                         grid.setIdentity(columns: [], kind: nil)
                     }
@@ -592,7 +596,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     private func editTarget(
         for table: TableRef?, session: ConnectionSession
     ) async -> (
-        table: TableRef, key: [String], keyKind: DBValueKind?, columns: Set<String>, tableOID: String
+        table: TableRef, key: [String], keyKind: DBValueKind?, columns: Set<String>, tableOID: String,
+        choices: [String: ColumnChoices]
     )? {
         guard let table else { return nil }
         guard
@@ -611,7 +616,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         guard let key, !key.isEmpty else { return nil }
         let keyKind = key.count == 1 ? columns.first { $0.name == key[0] }?.kind : nil
         let editable = Set(columns.filter { !$0.isGenerated }.map(\.name))
-        return (table, key, keyKind, editable, "\(table.schema).\(table.name)")
+        return (table, key, keyKind, editable, "\(table.schema).\(table.name)", ColumnChoices.byName(columns))
     }
 
     // MARK: - Editing a result
@@ -1058,6 +1063,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         availableDatabases = []
         results.removeAll()
         references.removeAll()
+        choices.removeAll()
         selectedResultID = nil
         statusText = "Connected to \(config.name)"
         cachedColumns = [:]
@@ -1394,6 +1400,12 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             bumpRevision()
             return
         }
+        if let choices = gridChoices(column), !choices.accepts(text) {
+            errorBanner = QueryErrorBanner(
+                error: DBError.protocolError(choices.refusal(of: text)), statement: selectedResult?.statement ?? "")
+            bumpRevision()
+            return
+        }
         guard let value = ValueCoercion.coerce(text, to: grid.columns[column].kind) else {
             errorBanner = QueryErrorBanner(
                 error: DBError.protocolError("\"\(text)\" is not a valid \(grid.columns[column].nativeTypeName)"),
@@ -1426,6 +1438,14 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
     public func gridDidRequestFollowReference(row: Int, column: Int) {
         guard let target = referenceTarget(row: row, column: column) else { return }
         onFollowReference?(target.table, target.filter)
+    }
+
+    /// The fixed values a written-back column takes, when it is an enum or a SET.
+    public func gridChoices(_ column: Int) -> ColumnChoices? {
+        guard let grid = selectedResult?.grid, let id = selectedResultID, grid.columns.indices.contains(column),
+            grid.isColumnEditable(column)
+        else { return nil }
+        return choices[id]?[grid.columns[column].name]
     }
 
     public func gridColumnReferences(_ column: Int) -> Bool {

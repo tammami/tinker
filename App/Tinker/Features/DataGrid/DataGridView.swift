@@ -28,11 +28,19 @@ public protocol DataGridDelegate: AnyObject {
     /// The referenced key the picker chose, keyed by referenced column name, is written
     /// back to the row's local columns.
     func gridDidPickReference(row: Int, column: Int, key: [String: DBValue])
+    /// The fixed values an enum or SET column takes, so editing it picks rather than types.
+    /// Nil for a column that takes free values or cannot be written.
+    func gridChoices(_ column: Int) -> ColumnChoices?
     /// What a foreign-key cell's value points at ("Ada" for customer 1), shown beside it.
     /// A dictionary lookup: it is asked for every visible cell on every reload.
     func gridReferenceLabel(row: Int, column: Int) -> String?
     /// The context menu's copy, in the chosen format.
     func gridDidRequestCopy(format: ClipboardFormat)
+    /// Edit › Paste (⌘V) with the grid first responder: the clipboard's rows and columns
+    /// go into the grid.
+    func gridDidRequestPaste()
+    /// Whether a paste would land anywhere, for the menu item.
+    func gridCanPaste() -> Bool
     func gridDidRequestSetNull()
     func gridDidRequestDeleteRows()
     func gridDidRequestAddRow()
@@ -58,6 +66,9 @@ public extension DataGridDelegate {
     func gridColumnReferences(_ column: Int) -> Bool { false }
     func gridReferencePicker(row: Int, column: Int) -> ReferencePickerModel? { nil }
     func gridDidPickReference(row: Int, column: Int, key: [String: DBValue]) {}
+    func gridChoices(_ column: Int) -> ColumnChoices? { nil }
+    func gridDidRequestPaste() {}
+    func gridCanPaste() -> Bool { false }
     func gridReferenceLabel(row: Int, column: Int) -> String? { nil }
     func gridDidRequestSetNull() {}
     func gridDidRequestDeleteRows() {}
@@ -232,8 +243,22 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
                 self.presentReferencePicker(row: row, column: column)
             }
         }
+        choiceObserver = NotificationCenter.default.addObserver(
+            forName: .tinkerPresentChoices, object: nil, queue: .main
+        ) { [weak self] note in
+            let row = note.userInfo?["row"] as? Int
+            let column = note.userInfo?["column"] as? Int
+            let target = (note.object as AnyObject?).map(ObjectIdentifier.init)
+            MainActor.assumeIsolated {
+                guard let self, let row, let column, let delegate = self.delegate,
+                    target == ObjectIdentifier(delegate as AnyObject), let choices = delegate.gridChoices(column)
+                else { return }
+                self.presentChoices(choices, row: row, column: column)
+            }
+        }
     }
     private var pickObserver: (any NSObjectProtocol)?
+    private var choiceObserver: (any NSObjectProtocol)?
 
     /// Removes the observer; the grid's view is going away.
     func stopObservingPeekRequests() {
@@ -241,6 +266,10 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         peekObserver = nil
         if let pickObserver { NotificationCenter.default.removeObserver(pickObserver) }
         pickObserver = nil
+        if let choiceObserver { NotificationCenter.default.removeObserver(choiceObserver) }
+        choiceObserver = nil
+        choicesPopover?.close()
+        choicesPopover = nil
         mapPopover?.close()
         mapPopover = nil
         referencePopover?.close()
@@ -674,6 +703,11 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         let row = selection.focusRow
         let column = selection.focusColumn
         guard model.columns.indices.contains(column), row < model.displayRowCount else { return }
+        // An enum or SET is picked, never typed.
+        if let choices = delegate?.gridChoices(column) {
+            presentChoices(choices, row: row, column: column)
+            return
+        }
         guard let position = position(ofModelColumn: column),
             let cell = tableView.view(atColumn: position, row: row, makeIfNecessary: false) as? GridCellView
         else { return }
@@ -740,6 +774,13 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
                 || (model.isEditable && delegate?.gridColumnReferences(column) == true)
             {
                 menu.addItem(.separator())
+            }
+            if model.isEditable, delegate?.gridChoices(column) != nil {
+                let choose = NSMenuItem(title: "Choose Value…", action: #selector(chooseValue(_:)), keyEquivalent: "")
+                choose.target = self
+                choose.image = NSImage(systemSymbolName: "list.bullet", accessibilityDescription: nil)
+                choose.representedObject = [row, column]
+                menu.addItem(choose)
             }
             if model.isEditable, [.date, .time, .timestamp].contains(model.columns[column].kind) {
                 let pick = NSMenuItem(
@@ -850,6 +891,66 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
 
     private var referencePopover: NSPopover?
 
+    @objc private func chooseValue(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [Int], pair.count == 2,
+            let choices = delegate?.gridChoices(pair[1])
+        else { return }
+        presentChoices(choices, row: pair[0], column: pair[1])
+    }
+
+    /// Offers a column's fixed values over the cell: a menu for an enum, with the current
+    /// value ticked, and checkboxes for a MySQL SET. What is picked goes through the
+    /// delegate's ordinary edit path, so validation, auto-commit and the production gate apply.
+    func presentChoices(_ choices: ColumnChoices, row: Int, column: Int) {
+        guard let tableView, let position = position(ofModelColumn: column) else { return }
+        // ⌥↓ or the inspector can ask for a cell scrolled out of sight; the menu belongs over it.
+        tableView.scrollRowToVisible(row)
+        tableView.scrollColumnToVisible(position)
+        let rect = tableView.frameOfCell(atColumn: position, row: row)
+        let current: String? = model.value(row: row, column: column).flatMap { $0.isNull ? nil : $0.text }
+        if choices.allowsMany {
+            let popover = NSPopover()
+            popover.behavior = .transient
+            let view = ChoiceField(choices: choices, text: current, isEditable: true) {
+                [weak self, weak popover] text in
+                popover?.close()
+                self?.delegate?.gridDidCommitEdit(row: row, column: column, text: text)
+            }
+            .padding(DesignTokens.Spacing.md)
+            .frame(width: 260)
+            popover.contentViewController = NSHostingController(rootView: view)
+            choicesPopover = popover
+            popover.show(relativeTo: rect, of: tableView, preferredEdge: .maxY)
+            return
+        }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        var ticked: NSMenuItem?
+        func add(_ title: String, text: String, isCurrent: Bool) {
+            let item = NSMenuItem(title: title, action: #selector(pickChoice(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = ChoicePick(row: row, column: column, text: text)
+            if isCurrent {
+                item.state = .on
+                ticked = item
+            }
+            menu.addItem(item)
+        }
+        for label in choices.labels { add(label, text: label, isCurrent: label == current) }
+        if choices.isNullable {
+            menu.addItem(.separator())
+            add("NULL", text: "", isCurrent: current == nil)
+        }
+        menu.popUp(positioning: ticked, at: NSPoint(x: rect.minX, y: rect.minY), in: tableView)
+    }
+
+    @objc private func pickChoice(_ sender: NSMenuItem) {
+        guard let pick = sender.representedObject as? ChoicePick else { return }
+        delegate?.gridDidCommitEdit(row: pick.row, column: pick.column, text: pick.text)
+    }
+
+    private var choicesPopover: NSPopover?
+
     @objc private func showInspector(_ sender: NSMenuItem) {
         delegate?.gridDidRequestInspector()
     }
@@ -912,12 +1013,16 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         let columnCount = model.columns.count
         guard rowCount > 0, columnCount > 0 else { return false }
 
-        // ⌥↓ opens the foreign-key picker for the focused cell, when it is one.
-        if event.modifierFlags.contains(.option), event.keyCode == 125, model.isEditable,
-            delegate?.gridColumnReferences(selection.focusColumn) == true
-        {
-            presentReferencePicker(row: selection.focusRow, column: selection.focusColumn)
-            return true
+        // ⌥↓ opens the focused cell's picker: its enum values, or the referenced table.
+        if event.modifierFlags.contains(.option), event.keyCode == 125, model.isEditable {
+            if let choices = delegate?.gridChoices(selection.focusColumn) {
+                presentChoices(choices, row: selection.focusRow, column: selection.focusColumn)
+                return true
+            }
+            if delegate?.gridColumnReferences(selection.focusColumn) == true {
+                presentReferencePicker(row: selection.focusRow, column: selection.focusColumn)
+                return true
+            }
         }
 
         // ⌘A selects everything; the menu's Select All never reaches an NSTableView cell grid.
@@ -1000,10 +1105,17 @@ public final class GridTableView: NSTableView {
         MainActor.assumeIsolated { controller?.delegate?.gridDidRequestRedo() }
     }
 
+    /// Edit › Paste (⌘V): rows copied from a spreadsheet, a CSV or another grid go in as
+    /// cells or as new rows. A cell being edited has its own text field and paste.
+    @objc public func paste(_ sender: Any?) {
+        MainActor.assumeIsolated { controller?.delegate?.gridDidRequestPaste() }
+    }
+
     public override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
         switch item.action {
         case #selector(undo(_:)): return MainActor.assumeIsolated { controller?.delegate?.gridCanUndo() ?? false }
         case #selector(redo(_:)): return MainActor.assumeIsolated { controller?.delegate?.gridCanRedo() ?? false }
+        case #selector(paste(_:)): return MainActor.assumeIsolated { controller?.delegate?.gridCanPaste() ?? false }
         default: return super.validateUserInterfaceItem(item)
         }
     }
@@ -1145,7 +1257,16 @@ final class GridHeaderView: NSTableHeaderView {
     }
 }
 
+/// The cell a value picked from an enum menu goes to.
+private struct ChoicePick {
+    let row: Int
+    let column: Int
+    let text: String
+}
+
 extension Notification.Name {
+    /// Asks the grid to open a column's value picker over a cell (UI demo only).
+    static let tinkerPresentChoices = Notification.Name("TinkerPresentChoices")
     /// Asks the visible grid to open its map popover over a cell (UI demo only).
     static let tinkerPeekOnMap = Notification.Name("TinkerPeekOnMap")
     /// The inspector asks the grid to open the foreign-key picker over a cell.

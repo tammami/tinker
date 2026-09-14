@@ -22,6 +22,8 @@ public struct CellInspectorView: View {
     var canPickReference: (Int) -> Bool = { _ in false }
     /// Opens the foreign-key picker for a column.
     var onPickReference: (Int) -> Void = { _ in }
+    /// The fixed values an enum or SET column takes, offered in place of a text field.
+    var choices: (Int) -> ColumnChoices? = { _ in nil }
 
     enum Pane: String, CaseIterable, Identifiable {
         case cell = "Cell"
@@ -102,14 +104,23 @@ public struct CellInspectorView: View {
                         .help("Open the row this value refers to")
                     }
                 }
-                CellValueEditor(
-                    columnName: column.name,
-                    kind: column.kind,
-                    value: value,
-                    isEditable: isEditable && isColumnEditable(focusedColumn),
-                    onCommit: { onCommit(focusedColumn, $0) },
-                    onSetNull: { onSetNull(focusedColumn) }
-                )
+                if let options = choices(focusedColumn), let value {
+                    ChoiceField(
+                        choices: options,
+                        text: value.isNull ? nil : ClipboardFormatter.cellText(value),
+                        isEditable: isEditable && isColumnEditable(focusedColumn),
+                        onCommit: { onCommit(focusedColumn, $0) }
+                    )
+                } else {
+                    CellValueEditor(
+                        columnName: column.name,
+                        kind: column.kind,
+                        value: value,
+                        isEditable: isEditable && isColumnEditable(focusedColumn),
+                        onCommit: { onCommit(focusedColumn, $0) },
+                        onSetNull: { onSetNull(focusedColumn) }
+                    )
+                }
             } else {
                 EmptyStateView(
                     icon: Icon.inspector, title: "No cell selected",
@@ -136,6 +147,7 @@ public struct CellInspectorView: View {
                             isEditable: isEditable && isColumnEditable(index),
                             hasReference: hasReference(index),
                             canPick: canPickReference(index),
+                            choices: choices(index),
                             onCommit: { onCommit(index, $0) },
                             onSetNull: { onSetNull(index) },
                             onFollow: { onFollow(index) },
@@ -180,6 +192,7 @@ private struct RowFormField: View {
     let isEditable: Bool
     let hasReference: Bool
     var canPick: Bool = false
+    var choices: ColumnChoices?
     let onCommit: (String) -> Void
     let onSetNull: () -> Void
     let onFollow: () -> Void
@@ -216,30 +229,41 @@ private struct RowFormField: View {
             case .bytes(let data):
                 Text("\(data.count) bytes").font(.caption).foregroundStyle(.secondary)
             default:
-                TextField(isNull ? "NULL" : "", text: $draft, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
-                    .lineLimit(1 ... 6)
-                    .disabled(!isEditable)
-                    .focused($isFocused)
-                    .onSubmit { commitIfChanged() }
-                    // Leaving the field commits it too. Return alone would mean a value
-                    // typed and then clicked away from was dropped without a word.
-                    .onChange(of: isFocused) { _, focused in if !focused { commitIfChanged() } }
-                if isPickerShown, isEditable, TemporalText.isTemporal(column.kind) {
-                    TemporalPickerView(kind: column.kind, text: draft) { picked in
-                        draft = picked
-                        isPickerShown = false
-                        onCommit(picked)
-                    }
-                    .padding(DesignTokens.Spacing.sm)
-                    .background(Color(nsColor: .controlBackgroundColor))
-                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius))
+                if let choices {
+                    ChoiceField(
+                        choices: choices, text: value.isNull ? nil : ClipboardFormatter.cellText(value),
+                        isEditable: isEditable, onCommit: onCommit)
+                } else {
+                    freeTextField
                 }
             }
         }
         .onAppear { load() }
         .onChange(of: value) { _, _ in load() }
+    }
+
+    @ViewBuilder
+    private var freeTextField: some View {
+        TextField(isNull ? "NULL" : "", text: $draft, axis: .vertical)
+            .textFieldStyle(.roundedBorder)
+            .font(.system(.body, design: .monospaced))
+            .lineLimit(1 ... 6)
+            .disabled(!isEditable)
+            .focused($isFocused)
+            .onSubmit { commitIfChanged() }
+            // Leaving the field commits it too. Return alone would mean a value
+            // typed and then clicked away from was dropped without a word.
+            .onChange(of: isFocused) { _, focused in if !focused { commitIfChanged() } }
+        if isPickerShown, isEditable, TemporalText.isTemporal(column.kind) {
+            TemporalPickerView(kind: column.kind, text: draft) { picked in
+                draft = picked
+                isPickerShown = false
+                onCommit(picked)
+            }
+            .padding(DesignTokens.Spacing.sm)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius))
+        }
     }
 
     private func load() {
@@ -250,6 +274,78 @@ private struct RowFormField: View {
     private func commitIfChanged() {
         guard isEditable, CellInspectorView.isChanged(draft: draft, from: value) else { return }
         onCommit(draft)
+    }
+}
+
+/// A column's fixed values as a control: a pop-up for an enum, checkboxes for a MySQL SET.
+///
+/// An enum writes as soon as a value is picked. A SET writes with Apply, so ticking three
+/// boxes is one change rather than three.
+struct ChoiceField: View {
+    let choices: ColumnChoices
+    /// The current value's text; nil for NULL.
+    let text: String?
+    let isEditable: Bool
+    let onCommit: (String) -> Void
+
+    @State private var members: Set<String> = []
+
+    /// The pop-up's tag for NULL: a string no label can be, since a label never holds NUL.
+    private static let nullTag = "\u{0}NULL"
+
+    var body: some View {
+        if choices.allowsMany {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                ForEach(choices.labels, id: \.self) { label in
+                    Toggle(
+                        label,
+                        isOn: Binding(
+                            get: { members.contains(label) },
+                            set: { on in
+                                if on { members.insert(label) } else { members.remove(label) }
+                            })
+                    )
+                    .toggleStyle(.checkbox)
+                }
+                HStack {
+                    Spacer()
+                    Button("Apply") { onCommit(choices.text(for: members)) }
+                        .controlSize(.small)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isUnchanged || !choices.accepts(choices.text(for: members)))
+                }
+            }
+            .disabled(!isEditable)
+            .onAppear { load() }
+            .onChange(of: text) { _, _ in load() }
+        } else {
+            Picker(
+                "Value",
+                selection: Binding(
+                    get: { text ?? Self.nullTag },
+                    set: { picked in onCommit(picked == Self.nullTag ? "" : picked) })
+            ) {
+                ForEach(choices.labels, id: \.self) { Text($0).tag($0) }
+                // A value outside the list — stored before the type changed, or by a
+                // non-strict server — is shown as it is rather than as a wrong label.
+                if let text, !choices.labels.contains(text) { Text(text).tag(text) }
+                if choices.isNullable || text == nil {
+                    Divider()
+                    Text("NULL").tag(Self.nullTag)
+                }
+            }
+            .labelsHidden()
+            .disabled(!isEditable)
+        }
+    }
+
+    private var isUnchanged: Bool {
+        guard let text else { return members.isEmpty }
+        return choices.members(of: text) == members
+    }
+
+    private func load() {
+        members = text.flatMap { choices.members(of: $0) } ?? []
     }
 }
 

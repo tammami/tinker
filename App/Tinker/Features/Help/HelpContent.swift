@@ -152,7 +152,7 @@ enum HelpContent {
                 HelpSection(
                     heading: "Copy and paste",
                     paragraphs: [
-                        "Edit › Copy As offers CSV, JSON, Markdown, aligned text, a WHERE-IN list and INSERT statements (⌘⌃C). Paste into Grid fills cells from the clipboard, column by column."
+                        "Edit › Copy As offers CSV, JSON, Markdown, aligned text, a WHERE-IN list and INSERT statements (⌘⌃C). Paste into Grid (⌘V in the grid) takes rows from a spreadsheet, a CSV or another grid: as many columns as the table, or a header naming them, adds new rows with each value in its column; fewer fills cells from the focused one."
                     ]),
             ]),
         HelpTopic(

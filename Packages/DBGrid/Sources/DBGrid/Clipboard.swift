@@ -146,13 +146,11 @@ public enum ClipboardFormatter {
         for row in rows {
             lines.append(
                 row.map { field in
-                    // Tabs and newlines would break the row structure a spreadsheet expects.
-                    let text =
-                        cellText(field, nullText: options.nullText)
-                        .replacingOccurrences(of: "\t", with: " ")
-                        .replacingOccurrences(of: "\n", with: " ")
-                        .replacingOccurrences(of: "\r", with: " ")
-                    return options.guardFormulas && mayCarryFormula(field) ? guardingFormula(text) : text
+                    let text = cellText(field, nullText: options.nullText)
+                    let guarded = options.guardFormulas && mayCarryFormula(field) ? guardingFormula(text) : text
+                    // A tab, a line break or a quote is quoted the way a spreadsheet quotes
+                    // and reads it, so the row structure holds and a copy pastes back whole.
+                    return csvField(guarded, delimiter: "\t")
                 }.joined(separator: "\t"))
         }
         return lines.joined(separator: "\n")
@@ -284,11 +282,7 @@ public enum ClipboardFormatter {
 
     /// Splits pasted TSV into a rectangle of text cells, respecting quoted fields.
     public static func parseTSV(_ text: String) -> [[String]] {
-        text.split(separator: "\n", omittingEmptySubsequences: false)
-            .map { line in
-                line.hasSuffix("\r") ? String(line.dropLast()) : String(line)
-            }
-            .filter { !$0.isEmpty }
-            .map { $0.components(separatedBy: "\t") }
+        // Excel quotes a cell holding a tab, a line break or a quote: CSV's rules, with tabs.
+        CSVReader.parse(text, delimiter: "\t")
     }
 }

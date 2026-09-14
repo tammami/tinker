@@ -547,39 +547,74 @@ public final class TableTabController: DataGridDelegate {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    /// Pastes tab-separated text into the grid starting at the focused cell, adding rows
-    /// when the paste runs past the end (SPEC §12.4).
+    /// Pastes rows from the clipboard — a spreadsheet's cells, a CSV, another grid's copy.
+    ///
+    /// Whole records (as many columns as the table, or lines under a header naming the
+    /// columns) are added as new rows, each value in the column it belongs to.
+    /// Anything narrower fills cells from the focused one, adding rows past the end
+    /// (SPEC §12.4). Either way the values go through the ordinary edit path: validation,
+    /// auto-commit where it is on, the commit preview where it is not.
     public func paste() {
         guard let model, model.isEditable,
             let text = NSPasteboard.general.string(forType: .string)
         else { return }
-        let rows = ClipboardFormatter.parseTSV(text)
-        guard !rows.isEmpty else { return }
-        let startRow = selection.focusRow
-        let startColumn = selection.focusColumn
+        let columns = model.columns.map { meta in
+            columnsInfo.first { $0.name == meta.name }
+                ?? ColumnInfo(
+                    ordinal: meta.id, name: meta.name, nativeType: meta.nativeTypeName, kind: meta.kind,
+                    isNullable: meta.isNullable ?? true)
+        }
+        guard let plan = GridPastePlan.make(text: text, columns: columns, focusColumn: selection.focusColumn)
+        else { return }
         var invalid = 0
+        var skipped = 0
 
-        for (rowOffset, values) in rows.enumerated() {
-            let targetRow = startRow + rowOffset
-            if targetRow >= model.displayRowCount { model.addRow() }
-            for (columnOffset, text) in values.enumerated() {
-                let targetColumn = startColumn + columnOffset
-                guard model.columns.indices.contains(targetColumn) else { continue }
-                let kind = model.columns[targetColumn].kind
-                guard let value = Self.coerce(text, to: kind) else {
+        for (offset, values) in plan.rows.enumerated() {
+            let targetRow: Int
+            if plan.appendsRows {
+                guard model.addRow() != nil else { break }
+                targetRow = model.displayRowCount - 1
+            } else {
+                targetRow = selection.focusRow + offset
+                if targetRow >= model.displayRowCount { model.addRow() }
+            }
+            for (position, text) in values.enumerated() {
+                guard position < plan.columns.count, let column = plan.columns[position] else {
+                    if !text.isEmpty { skipped += 1 }
+                    continue
+                }
+                if let choices = gridChoices(column), !choices.accepts(text) {
                     invalid += 1
                     continue
                 }
-                model.setValue(value, row: targetRow, column: targetColumn)
+                guard let value = Self.coerce(text, to: model.columns[column].kind),
+                    model.setValue(value, row: targetRow, column: column)
+                else {
+                    invalid += 1
+                    continue
+                }
             }
         }
+        model.edits.removeEmptyInserts()
         bumpRevision()
         updateStatus()
+        var problems: [String] = []
         if invalid > 0 {
-            errorText =
+            problems.append(
                 "\(invalid) pasted value\(invalid == 1 ? "" : "s") did not fit the column type and "
-                + "\(invalid == 1 ? "was" : "were") left unchanged"
+                    + "\(invalid == 1 ? "was" : "were") left unchanged")
         }
+        if skipped > 0 {
+            problems.append("\(skipped) pasted value\(skipped == 1 ? "" : "s") had no column to go into")
+        }
+        if !problems.isEmpty { errorText = problems.joined(separator: "; ") }
+        writeIfAutoCommit(plan.appendsRows ? .everything : .loadedRowsOnly)
+    }
+
+    public func gridDidRequestPaste() { paste() }
+
+    public func gridCanPaste() -> Bool {
+        model?.isEditable == true && NSPasteboard.general.string(forType: .string) != nil
     }
 
     /// Turns typed text into a value of the column's kind, or nil when it does not fit.
@@ -634,6 +669,10 @@ public final class TableTabController: DataGridDelegate {
 
     public func gridDidCommitEdit(row: Int, column: Int, text: String) {
         guard let model, model.columns.indices.contains(column) else { return }
+        if let choices = gridChoices(column), !choices.accepts(text) {
+            errorText = choices.refusal(of: text)
+            return
+        }
         guard let value = Self.coerce(text, to: model.columns[column].kind) else {
             errorText = "\"\(text)\" is not a valid \(model.columns[column].nativeTypeName)"
             return
@@ -673,6 +712,13 @@ public final class TableTabController: DataGridDelegate {
     private func scheduleReferenceLabels() {
         guard let model, let session else { return }
         references.scheduleLabels(model: model, session: session) { [weak self] in self?.revision &+= 1 }
+    }
+
+    /// The fixed values a column takes, when it is an enum or a SET.
+    public func gridChoices(_ column: Int) -> ColumnChoices? {
+        guard let model, model.columns.indices.contains(column) else { return nil }
+        let name = model.columns[column].name
+        return columnsInfo.first { $0.name == name }.flatMap(ColumnChoices.init(column:))
     }
 
     /// Whether the column is (part of) a foreign key, so its value can be picked.

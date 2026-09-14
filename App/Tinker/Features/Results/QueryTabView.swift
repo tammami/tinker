@@ -518,7 +518,8 @@ public struct QueryTabView: View {
                             },
                             isColumnEditable: { grid.isColumnEditable($0) },
                             canPickReference: { column in controller.gridColumnReferences(column) },
-                            onPickReference: { column in controller.requestReferencePicker(column: column) }
+                            onPickReference: { column in controller.requestReferencePicker(column: column) },
+                            choices: { column in controller.gridChoices(column) }
                         )
                         .id(controller.revision)
                     }

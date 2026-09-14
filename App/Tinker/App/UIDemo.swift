@@ -77,11 +77,26 @@ enum UIDemo {
         }
         for folder in sidebar.find(id: schema.id)?.children ?? [] { sidebar.markExpanded(folder.id) }
         let tables = sidebar.knownTables.filter { $0.connection == config.id }.map(\.table)
-        let preferred = tables.first { $0.name == "orders" } ?? tables.first { $0.kind == .table } ?? tables.first
+        // `--ui-demo-table <name>` picks the table a scene opens.
+        var preferredTable = "orders"
+        if let index = arguments.firstIndex(of: "--ui-demo-table"), index + 1 < arguments.count {
+            preferredTable = arguments[index + 1]
+        }
+        let preferred =
+            tables.first { $0.name == preferredTable } ?? tables.first { $0.kind == .table } ?? tables.first
 
         for item in wanted {
             switch item {
             case "table":
+                if let preferred { controller.openTable(preferred.ref, connectionID: config.id) }
+            case "choices":
+                // Opens the value picker over the first enum/SET cell, or the column named
+                // with `--ui-demo-column`.
+                var column = ""
+                if let index = arguments.firstIndex(of: "--ui-demo-column"), index + 1 < arguments.count {
+                    column = arguments[index + 1]
+                }
+                UserDefaults.standard.set(column.isEmpty ? "*" : column, forKey: "uiDemo.choices")
                 if let preferred { controller.openTable(preferred.ref, connectionID: config.id) }
             case "reference":
                 // The orders table's customer_id is a foreign key; open the picker over it.

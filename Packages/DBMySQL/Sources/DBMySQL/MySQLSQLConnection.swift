@@ -23,6 +23,8 @@ public actor MySQLSQLConnection: SQLConnection {
     /// Set when a statement changed session state (`USE`, `SET`), so the reset on release
     /// only pays its round trip when there is something to put back.
     private var sessionMutated = false
+    /// Set by a `USE`: the one change the reset cannot undo without a configured database.
+    private var databaseChanged = false
     /// Kept open so a cancel does not have to wait for a fresh handshake (SPEC §7.3).
     private var killConnection: MySQLConnection?
 
@@ -113,12 +115,20 @@ public actor MySQLSQLConnection: SQLConnection {
     /// Puts the session back the way the connection started: the configured database,
     /// the server's default SQL mode and checks, no profiling. Skipped when nothing ran
     /// that could have changed them.
+    ///
+    /// A connection configured without a database cannot be put back after a `USE`: MySQL
+    /// has no way to deselect one. The reset then throws, and the pool drops the connection
+    /// rather than hand the next tab one already pointed at somebody else's database.
     public func resetSessionState() async throws {
         guard sessionMutated, !closed else { return }
         sessionMutated = false
+        let changedDatabase = databaseChanged
+        databaseChanged = false
         if let database = config.database, !database.isEmpty {
             _ = try await Self.rawQuery(
                 "USE \(Identifier.quote(database, dialect: .mysql))", on: underlying, logger: logger, decoder: decoder)
+        } else if changedDatabase {
+            throw DBError.protocolError("A USE on a connection with no default database cannot be undone.")
         }
         for statement in [
             "SET SESSION sql_mode = DEFAULT", "SET SESSION foreign_key_checks = 1", "SET SESSION autocommit = 1",
@@ -331,7 +341,10 @@ public actor MySQLSQLConnection: SQLConnection {
         switch keyword {
         case "BEGIN", "START": transactionOpen = true
         case "COMMIT", "ROLLBACK": transactionOpen = false
-        case "USE", "SET": sessionMutated = true
+        case "USE":
+            sessionMutated = true
+            databaseChanged = true
+        case "SET": sessionMutated = true
         default: break
         }
     }

@@ -394,6 +394,50 @@ final class ScriptTransferIntegrationTests: XCTestCase {
         }
     }
 
+    /// A MySQL paste lands in the chosen database even when the target connection has
+    /// none selected, or was left on another: SHOW CREATE TABLE names the table without
+    /// its database, so the transfer selects it first.
+    func testMySQLPasteLandsInTheChosenDatabaseWhateverTheConnectionIsOn() async throws {
+        try await withSession { session, server, dialect in
+            // PostgreSQL and SQLite get a session on the target database itself.
+            guard dialect == .mysql else { return }
+            _ = try await session.connect()
+            let (sourceLease, source) = try await session.lease()
+            let (targetLease, target) = try await session.lease()
+            defer {
+                Task {
+                    await session.release(sourceLease)
+                    await session.release(targetLease)
+                }
+            }
+            try await createFixture(dialect: dialect, on: source)
+            // Readable by everyone, writable by no one: an unqualified CREATE here fails.
+            _ = try await target.executeCollecting("USE information_schema")
+
+            let renaming = DumpRenaming(
+                schema: schema(server),
+                tableNames: [
+                    "xfer_parent": "xfer_parent_copy", "xfer_child": "xfer_child_copy", "xfer_view": "xfer_view_copy",
+                ])
+            let selection = try await selection(
+                prefix: "xfer_", schema: schema(server), introspector: source.introspector)
+            let outcome = try await TransferRunner.run(
+                selection, from: source, to: target, dialect: dialect, options: .preferred(for: dialect),
+                renaming: renaming
+            ) { _ in }
+            XCTAssertTrue(
+                outcome.execution.failures.isEmpty,
+                outcome.execution.failures.map(\.description).joined(separator: "\n"))
+            let database = try await target.executeCollecting("SELECT DATABASE()").rows.first?.first?.text
+            XCTAssertEqual(database, server.database)
+            let parents = try await count("`\(server.database)`.xfer_parent_copy", on: source)
+            let children = try await count("`\(server.database)`.xfer_child_copy", on: source)
+            XCTAssertEqual(parents, 3)
+            XCTAssertEqual(children, 4)
+            try await dropFixture(dialect: dialect, on: source)
+        }
+    }
+
     func testLargeTableStreamsWithoutBeingHeld() async throws {
         try await withSession { session, server, dialect in
             _ = try await session.connect()

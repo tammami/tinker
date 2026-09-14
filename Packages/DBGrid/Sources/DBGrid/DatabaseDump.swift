@@ -236,6 +236,11 @@ public struct DatabaseDumper: Sendable {
             try await emit("SET FOREIGN_KEY_CHECKS = 0")
             try await emit("SET UNIQUE_CHECKS = 0")
             try await emit("SET sql_mode = 'NO_AUTO_VALUE_ON_ZERO'")
+            // A transfer's CREATE TABLE comes from SHOW CREATE TABLE, which names the table
+            // without its database; the target connection may have none selected, or another.
+            if let target = renaming.schema {
+                try await emit("USE \(Identifier.quote(target.database, dialect: .mysql))")
+            }
         case .sqlite:
             // Tables arrive in dependency order, but a cycle or a self-reference would
             // still trip the checks; the importer turns them back on at the end.

@@ -269,6 +269,32 @@ final class MySQLIntegrationTests: XCTestCase {
         }
     }
 
+    /// A connection opened without a database cannot deselect the one a `USE` picked, so
+    /// its reset refuses — and the pool drops it — instead of passing it on still pointed there.
+    func testResetRefusesAUseItCannotUndo() async throws {
+        try await withEachServer { _, server in
+            var config = server.resolvedConfig()
+            config.database = nil
+            let bare = try await MySQLDriver.connect(config, logger: logger)
+            do {
+                try await bare.resetSessionState()  // nothing ran: nothing to refuse
+                _ = try await bare.executeCollecting("SET SESSION foreign_key_checks = 0")
+                try await bare.resetSessionState()  // a SET alone is put back as before
+                _ = try await bare.executeCollecting("USE \(Identifier.quote(server.database, dialect: .mysql))")
+                let database = try await bare.executeCollecting("SELECT DATABASE()").firstText
+                XCTAssertEqual(database, server.database)
+                do {
+                    try await bare.resetSessionState()
+                    XCTFail("a USE on a connection with no database must not pass as reset")
+                } catch {}
+            } catch {
+                await bare.close()
+                throw error
+            }
+            await bare.close()
+        }
+    }
+
     // MARK: - Types
 
     func testEveryMappedTypeRoundTrips() async throws {

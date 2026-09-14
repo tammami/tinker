@@ -150,6 +150,14 @@ public enum TransferRunner {
         review: StructureReview? = nil,
         progress: @escaping @Sendable (TransferProgress) -> Void
     ) async throws -> TransferOutcome {
+        var renaming = renaming
+        if renaming.existingTargetTables == nil {
+            // Which tables the target already has decides which foreign keys can come along.
+            // A schema that does not exist yet has none.
+            let schema = renaming.schema ?? selection.schema
+            let tables = (try? await target.introspector.tables(in: schema)) ?? []
+            renaming.existingTargetTables = Set(tables.map(\.name))
+        }
         let dumped = ScriptChannel()
         let dumper = DatabaseDumper(dialect: dialect, targetDialect: targetDialect, options: options, renaming: renaming)
         let executor = ScriptExecutor(dialect: targetDialect ?? dialect, options: execution)

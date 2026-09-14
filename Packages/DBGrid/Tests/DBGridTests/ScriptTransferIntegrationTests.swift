@@ -438,6 +438,64 @@ final class ScriptTransferIntegrationTests: XCTestCase {
         }
     }
 
+    /// One table pasted without the table its foreign key points at: the key comes along
+    /// when the target already has that table, and is left out — with a note, and a copy
+    /// that still takes new rows — when it does not.
+    func testAPastedTableKeepsOnlyTheForeignKeysItsTargetCanHonour() async throws {
+        try await withSession { session, server, dialect in
+            _ = try await session.connect()
+            let (sourceLease, source) = try await session.lease()
+            let (targetLease, target) = try await session.lease()
+            defer {
+                Task {
+                    await session.release(sourceLease)
+                    await session.release(targetLease)
+                }
+            }
+            try await createFixture(dialect: dialect, on: source)
+            let all = try await selection(prefix: "xfer_", schema: schema(server), introspector: source.introspector)
+            let childOnly = DumpSelection(schema: all.schema, tables: all.tables.filter { $0.name == "xfer_child" })
+            XCTAssertEqual(childOnly.tables.count, 1)
+            let copy = TableRef(schema: schema(server), name: "xfer_child_copy")
+            let options = DumpOptions.preferred(for: dialect)
+
+            // The parent is on the target: the key comes along, and nothing is noted.
+            let kept = try await TransferRunner.run(
+                childOnly, from: source, to: target, dialect: dialect, options: options,
+                renaming: DumpRenaming(tableNames: ["xfer_child": "xfer_child_copy"])
+            ) { _ in }
+            XCTAssertTrue(kept.execution.failures.isEmpty, kept.execution.failures.map(\.description).joined())
+            XCTAssertFalse(kept.dump.notes.contains { $0.contains("Foreign key") }, kept.dump.notes.joined())
+            let keptKeys = try await target.introspector.foreignKeys(of: copy)
+            XCTAssertEqual(keptKeys.map(\.referencedTable.name), ["xfer_parent"], "\(dialect): the key is kept")
+            _ = try await target.executeCollecting("DROP TABLE xfer_child_copy")
+
+            // A target without the parent: the key is left out and said so.
+            let leftOut = try await TransferRunner.run(
+                childOnly, from: source, to: target, dialect: dialect, options: options,
+                renaming: DumpRenaming(tableNames: ["xfer_child": "xfer_child_copy"], existingTargetTables: [])
+            ) { _ in }
+            XCTAssertTrue(leftOut.execution.failures.isEmpty, leftOut.execution.failures.map(\.description).joined())
+            let copied = try await count("xfer_child_copy", on: target)
+            XCTAssertEqual(copied, 4)
+            if dialect == .sqlite {
+                // SQLite's DDL is kept as written; a key to a missing table does not stop it.
+                XCTAssertFalse(leftOut.dump.notes.contains { $0.contains("Foreign key") })
+            } else {
+                XCTAssertTrue(
+                    leftOut.dump.notes.contains { $0.contains("Foreign key") && $0.contains("xfer_parent") },
+                    "\(dialect): \(leftOut.dump.notes.joined(separator: " | "))")
+                let leftKeys = try await target.introspector.foreignKeys(of: copy)
+                XCTAssertTrue(leftKeys.isEmpty, "\(dialect): the key to the missing table is gone")
+                _ = try await target.executeCollecting(
+                    "INSERT INTO xfer_child_copy (parent_id, note) VALUES (999, 'no such parent')")
+                let withNew = try await count("xfer_child_copy", on: target)
+                XCTAssertEqual(withNew, 5, "\(dialect): the copy takes a new row")
+            }
+            try await dropFixture(dialect: dialect, on: source)
+        }
+    }
+
     func testLargeTableStreamsWithoutBeingHeld() async throws {
         try await withSession { session, server, dialect in
             _ = try await session.connect()

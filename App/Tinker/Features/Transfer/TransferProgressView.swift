@@ -43,10 +43,10 @@ struct TransferProgressView: View {
         }
     }
 
-    /// What a cross-engine transfer could not carry, named so nothing is assumed to have crossed.
+    /// What a transfer could not carry, named so nothing is assumed to have come along.
     private var notesList: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-            Label("Left behind on the way across engines", systemImage: Icon.warning)
+            Label("Left out of the paste", systemImage: Icon.warning)
                 .font(.caption.weight(.semibold)).foregroundStyle(.orange)
             ForEach(Array(controller.notes.enumerated()), id: \.offset) { _, note in
                 Text(note).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)

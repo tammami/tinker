@@ -65,10 +65,18 @@ public struct DumpRenaming: Sendable, Hashable {
     public var schema: SchemaRef?
     /// Source table name → target table name.
     public var tableNames: [String: String] = [:]
+    /// The tables already in the target schema, when the dump goes straight to a
+    /// connection. A foreign key to a table that is neither copied nor already there is
+    /// left out and named in the notes: kept, MySQL creates it and then refuses every new
+    /// row, and PostgreSQL refuses the table. nil — a dump to a file — keeps every key.
+    public var existingTargetTables: Set<String>?
 
-    public init(schema: SchemaRef? = nil, tableNames: [String: String] = [:]) {
+    public init(
+        schema: SchemaRef? = nil, tableNames: [String: String] = [:], existingTargetTables: Set<String>? = nil
+    ) {
         self.schema = schema
         self.tableNames = tableNames
+        self.existingTargetTables = existingTargetTables
     }
 
     public static let none = DumpRenaming()
@@ -112,8 +120,9 @@ public struct DumpOutcome: Sendable, Hashable {
     public var rows: Int64 = 0
     public var statements = 0
     public var duration: Duration = .zero
-    /// What a cross-engine dump left behind, one line each: a view whose SQL is the
-    /// source's, a check constraint, a default the target cannot read.
+    /// What the dump left behind, one line each: across engines a view whose SQL is the
+    /// source's, a check constraint, a default the target cannot read; on any paste a
+    /// foreign key to a table the target does not have.
     public var notes: [String] = []
 
     public init() {}
@@ -290,11 +299,21 @@ public struct DatabaseDumper: Sendable {
                         definition, from: dialect, to: targetDialect, into: targetSchema(selection))
                     translation.definition.ref = targetRef(table.ref, selection)
                     outcome.notes.append(contentsOf: translation.notes)
+                    let dangling = try await danglingForeignKeys(of: table, in: selection, introspector: introspector)
+                    let leftOut = Set(dangling.map(\.name))
+                    translation.definition.foreignKeys.removeAll { leftOut.contains($0.name) }
+                    outcome.notes.append(contentsOf: notes(for: dangling, on: table, selection))
                     for statement in DDLGenerator(dialect: targetDialect).create(translation.definition) {
                         try await emit(statement.sql)
                     }
                 } else {
-                    let ddl = try await introspector.tableDDL(table.ref)
+                    var ddl = try await introspector.tableDDL(table.ref)
+                    let dangling = try await danglingForeignKeys(of: table, in: selection, introspector: introspector)
+                    if !dangling.isEmpty {
+                        // Removed under the source's names, before the rewrite renames them.
+                        ddl = Self.removingForeignKeys(Set(dangling.map(\.name)), from: ddl, dialect: dialect)
+                        outcome.notes.append(contentsOf: notes(for: dangling, on: table, selection))
+                    }
                     for statement in StatementSplitter.split(rewrite(ddl, selection), dialect: dialect) {
                         try await emit(statement.text)
                     }
@@ -539,6 +558,55 @@ public struct DatabaseDumper: Sendable {
             }
         }
         return out
+    }
+
+    // MARK: - Foreign keys the target cannot honour
+
+    /// The keys of `table` that point at a table which is neither part of this paste nor
+    /// already on the target. Empty for a dump to a file, where the target is unknown.
+    private func danglingForeignKeys(
+        of table: TableInfo, in selection: DumpSelection, introspector: any SchemaIntrospector
+    ) async throws -> [ForeignKeyInfo] {
+        guard let existing = renaming.existingTargetTables else { return [] }
+        // SQLite keeps its DDL as written, with keys inline on a column as often as on a
+        // line of their own, and creates a key to a missing table without complaint.
+        guard isCrossEngine || targetDialect != .sqlite else { return [] }
+        let copied = Set(selection.tables.map(\.name))
+        return try await introspector.foreignKeys(of: table.ref).filter { key in
+            // Within one engine a key into another schema keeps naming that schema, which
+            // the paste does not move; across engines every key is moved into the target.
+            guard isCrossEngine || key.referencedTable.schemaRef == table.ref.schemaRef else { return false }
+            return !copied.contains(key.referencedTable.name) && !existing.contains(key.referencedTable.name)
+        }
+    }
+
+    private func notes(for keys: [ForeignKeyInfo], on table: TableInfo, _ selection: DumpSelection) -> [String] {
+        let target = renaming.tableNames[table.name] ?? table.name
+        return keys.map { key in
+            "Foreign key \(key.name) on \(target) left out: \(key.referencedTable.name) is not part of the paste "
+                + "and does not exist on the target. Paste \(key.referencedTable.name) too to keep it."
+        }
+    }
+
+    /// Server DDL without the named foreign-key constraints.
+    ///
+    /// MySQL's `SHOW CREATE TABLE` and the PostgreSQL DDL the introspector builds put each
+    /// constraint on a line of its own, so the line goes, and a comma left before the
+    /// closing parenthesis goes with it. A key written any other way is left as it is.
+    static func removingForeignKeys(_ names: Set<String>, from ddl: String, dialect: SQLDialect) -> String {
+        guard !names.isEmpty else { return ddl }
+        let prefixes = names.map { "CONSTRAINT \(Identifier.quote($0, dialect: dialect)) " }
+        var lines = ddl.components(separatedBy: "\n")
+        lines.removeAll { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.range(of: " FOREIGN KEY", options: .caseInsensitive) != nil
+                && prefixes.contains { trimmed.range(of: $0, options: [.anchored, .caseInsensitive]) != nil }
+        }
+        for index in lines.indices.dropFirst()
+        where lines[index].trimmingCharacters(in: .whitespaces).hasPrefix(")") && lines[index - 1].hasSuffix(",") {
+            lines[index - 1].removeLast()
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - Naming

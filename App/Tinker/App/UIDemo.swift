@@ -216,6 +216,29 @@ enum UIDemo {
                     try? await Task.sleep(for: .milliseconds(400))
                     query.run(all: true)
                 }
+            case "chart":
+                // A million rows grouped by the server into twelve, then drawn instead of
+                // listed. Only the day and the sum are selected: a chart of a column that
+                // barely moves proves nothing about the pane. Which pane opens is decided
+                // in `QueryTabView`, once the result the chart needs has arrived.
+                UserDefaults.standard.set(true, forKey: "uiDemo.chart")
+                let day = config.dialect == .postgresql ? "date_trunc('day', created)::date" : "DATE(created)"
+                let chartSQL = """
+                    SELECT \(day) AS day, sum(amount) AS revenue
+                    FROM big_table
+                    GROUP BY 1
+                    ORDER BY 1;
+                    """
+                let chartTab = controller.newQueryTab(connectionID: config.id, sql: chartSQL)
+                if let query = controller.queryController(for: chartTab) {
+                    await query.loadSessionChoices()
+                    if !config.dialect.hasSchemaLayer, let name = demoSchemaRef(schema, dialect: config.dialect)?.schema
+                    {
+                        await query.selectDatabase(name)
+                    }
+                    try? await Task.sleep(for: .milliseconds(400))
+                    query.run(all: true)
+                }
             case "editquery":
                 let tab = controller.newQueryTab(connectionID: config.id, sql: "SELECT * FROM customers ORDER BY id;")
                 if let query = controller.queryController(for: tab) {

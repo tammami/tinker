@@ -13,6 +13,10 @@ public struct QueryTabView: View {
     @Bindable var settings: AppSettings
 
     @State private var resultPane: ResultPane = .result
+    /// `--ui-demo chart` asked for the Chart pane. Read once when the tab appears and
+    /// cleared there, so a scene whose statement failed cannot leave the flag behind for
+    /// the next ordinary launch to pick up.
+    @State private var wantsChartDemo = false
     @State private var chartKind: ChartKind = .bar
     @State private var chartCategory = -1
     @State private var chartValue = -1
@@ -53,6 +57,10 @@ public struct QueryTabView: View {
             }
         }
         .task(id: tab.id) {
+            if UserDefaults.standard.bool(forKey: "uiDemo.chart") {
+                UserDefaults.standard.removeObject(forKey: "uiDemo.chart")
+                wantsChartDemo = true
+            }
             controller.sql = tab.sql
             controller.autoCommit = tab.autoCommit
             await controller.loadSessionChoices()
@@ -62,7 +70,13 @@ public struct QueryTabView: View {
         // The rows on the map belong to one result: another result, or a re-run, puts
         // every row back.
         .onChange(of: controller.selectedResultID) { _, _ in resetPaneChoices() }
-        .onChange(of: controller.results.map(\.id)) { _, _ in resetPaneChoices() }
+        .onChange(of: controller.results.map(\.id)) { _, _ in
+            resetPaneChoices()
+            showChartPaneIfDemoAsked()
+        }
+        // The rows arrive after the result tab does, and the Chart pane is offered only
+        // once there is something in them to measure.
+        .onChange(of: controller.revision) { _, _ in showChartPaneIfDemoAsked() }
         // "Show on Map" from a result cell: that one row, from that column.
         .onChange(of: controller.mapRequest) { _, request in
             guard let request else { return }
@@ -256,6 +270,14 @@ public struct QueryTabView: View {
         // The new result may not offer the pane the old one was showing; a segmented
         // control with no matching tag draws with nothing selected.
         if !visiblePanes.contains(resultPane) { resultPane = .result }
+    }
+
+    /// `--ui-demo chart` opens on the Chart pane rather than on Rows. It waits for a
+    /// result the pane is offered for, and then does what a click on Chart would do.
+    private func showChartPaneIfDemoAsked() {
+        guard wantsChartDemo, visiblePanes.contains(.chart) else { return }
+        wantsChartDemo = false
+        resultPane = .chart
     }
 
     /// The panes this result can actually fill. Chart and Map are offered only where there

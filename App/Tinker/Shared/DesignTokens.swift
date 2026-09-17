@@ -131,7 +131,8 @@ public enum DesignTokens {
 public enum Icon {
     // Objects
     public static let connection = "server.rack"
-    public static let database = "cylinder"
+    /// A cylinder with its bands: the database glyph, not a drive.
+    public static let database = "cylinder.split.1x2"
     public static let schema = "square.stack.3d.up"
     public static let table = "tablecells"
     public static let view = "eye"
@@ -146,6 +147,8 @@ public enum Icon {
     public static let foreignKey = "arrow.triangle.branch"
     public static let check = "checkmark.seal"
     public static let trigger = "bolt"
+    /// A statement the server runs on a schedule of its own.
+    public static let event = "calendar.badge.clock"
     public static let group = "folder"
     public static let user = "person"
     public static let variable = "slider.horizontal.3"
@@ -164,6 +167,11 @@ public enum Icon {
     public static let structure = "square.grid.3x3"
     public static let data = "tablecells"
     public static let inspector = "sidebar.trailing"
+    /// A result drawn rather than listed.
+    public static let chart = "chart.bar"
+    /// Which way a query tab is split: results below the editor, or beside it.
+    public static let splitStacked = "rectangle.split.1x2"
+    public static let splitSideBySide = "rectangle.split.2x1"
     public static let sidebar = "sidebar.leading"
     public static let message = "text.bubble"
     public static let profile = "timer"

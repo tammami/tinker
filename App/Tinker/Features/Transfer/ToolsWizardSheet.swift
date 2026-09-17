@@ -718,6 +718,25 @@ struct ToolsWizardSheet: View {
                 RoundedRectangle(cornerRadius: DesignTokens.Metrics.cornerRadius).strokeBorder(
                     Color.primary.opacity(0.1)))
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                // Crossing engines loses things the script cannot show: a default the
+                // target will not take, a type with no equal. They are said here.
+                if !result.notes.isEmpty {
+                    Text("Not carried across").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    ScrollView {
+                        Text(result.notes.joined(separator: "\n"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(DesignTokens.Spacing.sm)
+                    }
+                    .frame(maxHeight: 90)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius).strokeBorder(
+                            Color.primary.opacity(0.1)))
+                }
                 Text("Script").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 ScrollView {
                     Text(result.script(includingDestructive: includeDestructive, droppingExtraTables: dropExtraTables))

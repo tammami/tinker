@@ -125,7 +125,14 @@ final class SchemaTranslatorTests: XCTestCase {
         XCTAssertTrue(result.checks.isEmpty)
         XCTAssertTrue(result.triggers.isEmpty)
         XCTAssertEqual(result.options, TableOptions())
-        XCTAssertEqual(translation.notes.count, 4, translation.notes.joined(separator: "\n"))
+        XCTAssertEqual(translation.notes.count, 5, translation.notes.joined(separator: "\n"))
+        // Said once for the table, not once per text column: a fifty-table sync would
+        // otherwise bury the notes that matter under three hundred identical sentences.
+        XCTAssertEqual(
+            translation.notes.filter { $0.contains("character set and collation") }.count, 1,
+            translation.notes.joined(separator: "\n"))
+        XCTAssertTrue(
+            translation.notes.contains { $0.contains("utf8mb4") }, "the dropped set is named")
 
         // What DDLGenerator makes of it must be PostgreSQL that creates the table.
         let sql = DDLGenerator(dialect: .postgresql).create(result).map(\.sql).joined(separator: ";\n")
@@ -138,6 +145,144 @@ final class SchemaTranslatorTests: XCTestCase {
         let same = SchemaTranslator.translate(definition, from: .mysql, to: .mysql)
         XCTAssertEqual(same.definition, definition, "the same engine changes nothing")
         XCTAssertTrue(same.notes.isEmpty)
+    }
+
+    // MARK: Character set and collation
+
+    private func collationNotes(
+        _ column: ColumnDefinition, from source: SQLDialect, to target: SQLDialect,
+        targetCollations: Set<String> = []
+    ) -> SchemaTranslator.Translation {
+        SchemaTranslator.translate(
+            TableDefinition(ref: TableRef(database: "d", schema: "s", name: "t"), columns: [column]),
+            from: source, to: target, targetCollations: targetCollations)
+    }
+
+    /// Same family — MySQL to MariaDB is this — so the collation travels as it is.
+    func testACollationTravelsWithinOneEngineFamily() {
+        let column = ColumnDefinition(
+            name: "name", type: "varchar(50)", characterSet: "utf8mb4", collation: "utf8mb4_bin")
+        let carried = collationNotes(column, from: .mysql, to: .mysql)
+        XCTAssertEqual(carried.definition.columns.first?.collation, "utf8mb4_bin")
+        XCTAssertEqual(carried.definition.columns.first?.characterSet, "utf8mb4")
+        XCTAssertEqual(carried.notes, [])
+    }
+
+    /// MariaDB reads MySQL's collations, but MySQL refuses MariaDB's `uca1400` names, so a
+    /// carried collation is checked against the server that will receive it.
+    func testACollationTheTargetDoesNotHaveIsDroppedAndNamed() {
+        let column = ColumnDefinition(
+            name: "name", type: "varchar(50)", characterSet: "utf8mb4",
+            collation: "utf8mb4_uca1400_ai_ci")
+        let pruned = collationNotes(
+            column, from: .mysql, to: .mysql,
+            targetCollations: ["utf8mb4_general_ci", "utf8mb4_0900_ai_ci"])
+        XCTAssertNil(pruned.definition.columns.first?.collation)
+        XCTAssertTrue(
+            pruned.notes.contains { $0.contains("utf8mb4_uca1400_ai_ci") && $0.contains("not on the target") },
+            "\(pruned.notes)")
+
+        let kept = collationNotes(
+            column, from: .mysql, to: .mysql, targetCollations: ["utf8mb4_uca1400_ai_ci"])
+        XCTAssertEqual(kept.definition.columns.first?.collation, "utf8mb4_uca1400_ai_ci")
+        XCTAssertEqual(kept.notes, [])
+    }
+
+    /// Across families the name means nothing, and it decides how the column compares, so
+    /// dropping it quietly is what must not happen.
+    func testACollationCrossingFamiliesIsDroppedAndNamed() {
+        let column = ColumnDefinition(
+            name: "name", type: "varchar(50)", characterSet: "utf8mb4", collation: "utf8mb4_bin")
+        let crossed = collationNotes(column, from: .mysql, to: .postgresql)
+        XCTAssertNil(crossed.definition.columns.first?.collation)
+        XCTAssertNil(crossed.definition.columns.first?.characterSet)
+        XCTAssertTrue(crossed.notes.contains { $0.contains("utf8mb4") }, "\(crossed.notes)")
+    }
+
+    // MARK: What a translation loses
+
+    private func notes(_ columns: [(String, String)], from source: SQLDialect, to target: SQLDialect) -> [String] {
+        let definition = TableDefinition(
+            ref: TableRef(database: "d", schema: "s", name: "t"),
+            columns: columns.map { ColumnDefinition(name: $0.0, type: $0.1) })
+        return SchemaTranslator.translate(definition, from: source, to: target).notes
+    }
+
+    /// A type the target has no equal for is carried as its nearest neighbour and named,
+    /// so a lost zone or a flattened array is not discovered from the data afterwards.
+    func testATypeTheTargetCannotHoldIsNamedInTheNotes() {
+        let lost = notes(
+            [
+                ("c_tstz", "timestamp with time zone"),
+                ("c_arr", "integer[]"),
+                ("c_int", "interval"),
+                ("c_inet", "inet"),
+            ], from: .postgresql, to: .mysql)
+        XCTAssertTrue(lost.contains { $0.contains("c_tstz") && $0.contains("time zone is not kept") }, "\(lost)")
+        XCTAssertTrue(lost.contains { $0.contains("c_arr") && $0.contains("no array type") }, "\(lost)")
+        XCTAssertTrue(lost.contains { $0.contains("c_int") }, "\(lost)")
+        XCTAssertTrue(lost.contains { $0.contains("c_inet") }, "\(lost)")
+    }
+
+    /// Narrowing inside one kind is deliberate, and saying so every time would bury the
+    /// notes that matter.
+    func testATypeTheTargetHoldsTheSameWayIsNotReported() {
+        XCTAssertEqual(
+            notes(
+                [("a", "integer"), ("b", "varchar(255)"), ("c", "text"), ("d", "numeric(10,2)"), ("e", "date")],
+                from: .postgresql, to: .mysql),
+            [])
+    }
+
+    /// Real MySQL introspection puts a character set on every text column, so the fixture
+    /// above is the quiet case; this is what a real table produces.
+    func testTextColumnsWithCharacterSetsProduceOneNoteBetweenThem() {
+        let definition = TableDefinition(
+            ref: TableRef(database: "d", schema: "s", name: "t"),
+            columns: [
+                ColumnDefinition(name: "a", type: "varchar(50)", characterSet: "utf8mb4", collation: "utf8mb4_bin"),
+                ColumnDefinition(name: "b", type: "text", characterSet: "utf8mb4", collation: "utf8mb4_general_ci"),
+                ColumnDefinition(name: "c", type: "int"),
+            ])
+        let notes = SchemaTranslator.translate(definition, from: .mysql, to: .postgresql).notes
+        XCTAssertEqual(notes.count, 1, notes.joined(separator: "\n"))
+        // Both halves are named: the collation is the part that decided the sort order.
+        XCTAssertTrue(notes[0].contains("utf8mb4_bin"), notes[0])
+        XCTAssertTrue(notes[0].contains("utf8mb4_general_ci"), notes[0])
+    }
+
+    /// PostgreSQL's collation list deliberately leaves out `pg_catalog`, where every libc
+    /// and ICU collation lives, so pruning against it would strip a real one.
+    func testAPostgresCollationIsNeverPrunedAgainstAnIncompleteList() {
+        let definition = TableDefinition(
+            ref: TableRef(database: "d", schema: "s", name: "t"),
+            columns: [ColumnDefinition(name: "surname", type: "text", collation: "en_US.utf8")])
+        let result = SchemaTranslator.translate(
+            definition, from: .postgresql, to: .postgresql, targetCollations: ["default", "C", "POSIX"])
+        XCTAssertEqual(result.definition.columns.first?.collation, "en_US.utf8")
+        XCTAssertEqual(result.notes, [])
+    }
+
+    func testSQLiteLosesItsEnumAndSaysSo() {
+        let lost = notes([("c_mood", "enum('sad','ok')")], from: .mysql, to: .sqlite)
+        XCTAssertTrue(lost.contains { $0.contains("c_mood") }, "\(lost)")
+    }
+
+    /// MySQL writes a boolean default as `1`; PostgreSQL refuses `boolean DEFAULT 1`, so
+    /// the column's own type is what decides whether the `1` is a number or a truth.
+    func testABooleanDefaultCrossesAsABoolean() {
+        XCTAssertEqual(
+            SchemaTranslator.translateDefault("1", columnType: "tinyint(1)", from: .mysql, to: .postgresql),
+            "true")
+        XCTAssertEqual(
+            SchemaTranslator.translateDefault("0", columnType: "tinyint(1)", from: .mysql, to: .postgresql),
+            "false")
+        XCTAssertEqual(
+            SchemaTranslator.translateDefault("1", columnType: "int", from: .mysql, to: .postgresql),
+            "1", "an integer's default is still a number")
+        XCTAssertEqual(
+            SchemaTranslator.translateDefault("true", columnType: "boolean", from: .postgresql, to: .mysql),
+            "1")
     }
 }
 
@@ -163,4 +308,5 @@ final class CrossEngineLiteralTests: XCTestCase {
             DBTimestamp(date: DBDate(year: 2026, month: 1, day: 2), time: DBTime(hour: 3, minute: 4, second: 5), hasTimeZone: false))
         XCTAssertEqual(plain.sqlLiteral(dialect: .mysql), "TIMESTAMP '2026-01-02 03:04:05'")
     }
+
 }

@@ -19,8 +19,12 @@ public enum SchemaTranslator {
 
     /// `definition` as the target engine would declare it. `schema` moves the table and
     /// its foreign-key targets into another schema; nil keeps them where they are.
+    /// `targetCollations` are the collations the target server actually has. Pass them and
+    /// a collation the target does not know is dropped and named rather than written into
+    /// DDL the server will refuse; leave it empty to skip the check.
     public static func translate(
-        _ definition: TableDefinition, from source: SQLDialect, to target: SQLDialect, into schema: SchemaRef? = nil
+        _ definition: TableDefinition, from source: SQLDialect, to target: SQLDialect,
+        into schema: SchemaRef? = nil, targetCollations: Set<String> = []
     ) -> Translation {
         var result = definition
         var notes: [String] = []
@@ -32,13 +36,29 @@ public enum SchemaTranslator {
                 return moved
             }
         }
-        guard source != target else { return Translation(definition: result, notes: []) }
         let table = definition.ref.name
+        // Same engine family — MySQL to MariaDB is this — so the character set and
+        // collation travel as they are. They still have to exist on the other side:
+        // MariaDB reads MySQL's `utf8mb4_0900_ai_ci`, but MySQL refuses MariaDB's
+        // `utf8mb4_uca1400_ai_ci` outright.
+        guard source != target else {
+            let pruned = pruneUnknownCollations(
+                result, known: targetCollations, dialect: target, table: table)
+            return Translation(definition: pruned.definition, notes: pruned.notes)
+        }
 
+        var dropped: Set<String> = []
         result.columns = definition.columns.map { column in
             var translated = column
             translated.type = translateType(column.type, enumLabels: column.enumLabels, from: source, to: target)
-            var translatedDefault = translateDefault(column.defaultExpression, from: source, to: target)
+            // A type the target has no equal for still gets its nearest neighbour, but the
+            // person is told which ones those are: a zone, an array or a geometry that
+            // becomes text is not something to discover from the data afterwards.
+            if let lost = lostInTranslation(column.type, rendered: translated.type, from: source, to: target) {
+                notes.append("\(table).\(column.name): \(lost)")
+            }
+            var translatedDefault = translateDefault(
+                column.defaultExpression, columnType: column.type, from: source, to: target)
             // MySQL takes a default on a TEXT, BLOB or JSON column only as an expression.
             if target == .mysql, let literal = translatedDefault, literal.uppercased() != "NULL", !literal.hasPrefix("("),
                 ["text", "longtext", "longblob", "json"].contains(where: { translated.type.lowercased().hasPrefix($0) })
@@ -49,6 +69,12 @@ public enum SchemaTranslator {
                 notes.append("\(table).\(column.name): the default \(column.defaultExpression ?? "") was not carried")
             }
             translated.defaultExpression = translatedDefault
+            // Across engine families a collation name means nothing on the other side:
+            // MySQL names a character set and a collation together, PostgreSQL takes its
+            // collations from the operating system, and SQLite has three. The columns get
+            // the target's default. Collected and said once per table below, because a
+            // note on every text column would bury the ones that matter.
+            dropped.formUnion([column.characterSet, column.collation].compactMap { $0 })
             translated.characterSet = nil
             translated.collation = nil
             if column.generatedExpression != nil {
@@ -58,6 +84,13 @@ public enum SchemaTranslator {
             if target == .sqlite { translated.comment = nil }
             if target != .mysql { translated.enumLabels = nil }
             return translated
+        }
+
+        if !dropped.isEmpty {
+            notes.append(
+                "\(table): the character set and collation (\(dropped.sorted().joined(separator: ", ")))"
+                    + " were not carried; the columns take \(target.displayName)'s own, which decides"
+                    + " how they compare, sort and enforce uniqueness")
         }
 
         result.indexes = definition.indexes.compactMap { index in
@@ -219,6 +252,122 @@ public enum SchemaTranslator {
         }
     }
 
+    /// Drops a collation the target server does not have, naming each one.
+    ///
+    /// Only checks when `known` is non-empty: a caller that cannot reach the target — a
+    /// dump writes a script for a server it never opens — passes nothing and keeps what
+    /// the source said.
+    static func pruneUnknownCollations(
+        _ definition: TableDefinition, known: Set<String>, dialect: SQLDialect, table: String
+    ) -> (definition: TableDefinition, notes: [String]) {
+        // MySQL and MariaDB only. Their names diverge — MySQL refuses MariaDB's `uca1400`
+        // spellings — and `information_schema.COLLATIONS` lists every one of them, so an
+        // absent name really is absent. PostgreSQL's catalogue read deliberately leaves out
+        // `pg_catalog`, where every libc and ICU collation lives, so pruning against it
+        // would strip `en_US.utf8` from a PostgreSQL-to-PostgreSQL sync and quietly change
+        // how the column sorts. SQLite has three collations and no way to add one in DDL.
+        guard dialect == .mysql, !known.isEmpty else { return (definition, []) }
+        // MySQL collation names are case-insensitive; PostgreSQL's are not, and this path
+        // no longer reaches it.
+        let folded = Set(known.map { $0.lowercased() })
+        var result = definition
+        var notes: [String] = []
+        if let collation = definition.options.collation, !folded.contains(collation.lowercased()) {
+            notes.append("\(table): the table collation \(collation) is not on the target; its default is used")
+            result.options.collation = nil
+            result.options.characterSet = nil
+        }
+        result.columns = definition.columns.map { column in
+            guard let collation = column.collation, !folded.contains(collation.lowercased()) else { return column }
+            notes.append(
+                "\(table).\(column.name): the collation \(collation) is not on the target; its default is used")
+            var plain = column
+            plain.collation = nil
+            plain.characterSet = nil
+            return plain
+        }
+        return (result, notes)
+    }
+
+    /// What a column loses when the target has no equal for its type, or nil when the
+    /// target's type holds the same thing.
+    ///
+    /// The test is the round trip: read the rendered type back as a canonical type and see
+    /// whether it is still the same kind. Narrowing within a kind — a shorter `varchar`, a
+    /// smaller `decimal` — is deliberate and not reported here.
+    static func lostInTranslation(
+        _ type: String, rendered: String, from source: SQLDialect, to target: SQLDialect
+    ) -> String? {
+        let before = canonicalType(type, from: source)
+        let after = canonicalType(rendered, from: target)
+        guard !sameKind(before, after), !widensExactly(before, after) else { return nil }
+        let detail: String
+        switch before {
+        case let .timestamp(_, zoned) where zoned:
+            detail = "the time zone is not kept; the value crosses as the server's own text"
+        case let .time(_, zoned) where zoned:
+            detail = "the offset is not kept; the value crosses as the server's own text"
+        case .array:
+            detail = "\(target.displayName) has no array type"
+        case .geometry:
+            detail = "\(target.displayName) has no geometry type here; the shape crosses as text"
+        default:
+            detail = "\(target.displayName) has no equal for it"
+        }
+        return "\(type) became \(rendered) — \(detail)"
+    }
+
+    /// A whole number carried into something that holds every one of its values.
+    ///
+    /// PostgreSQL has no unsigned types and SQLite has one integer, so `int unsigned`
+    /// becomes `bigint` and `smallint` becomes `INTEGER`. Nothing is lost, and saying so
+    /// every time would bury the notes that matter.
+    static func widensExactly(_ before: Canonical, _ after: Canonical) -> Bool {
+        guard let width = integerWidth(before) else { return false }
+        if case .decimal = after { return true }
+        guard let target = integerWidth(after) else { return false }
+        return target >= width
+    }
+
+    /// How many bits a whole-number type needs, signed values included. Nil for the rest.
+    private static func integerWidth(_ canonical: Canonical) -> Int? {
+        switch canonical {
+        case .int8: 8
+        case .int16: 16
+        case .int32: 32
+        case .uint32: 33
+        case .int64: 64
+        case .uint64: 65
+        case .year: 16
+        case let .bit(length): (length ?? 1) + 1
+        default: nil
+        }
+    }
+
+    /// Two canonical types describing the same thing, ignoring length and precision.
+    static func sameKind(_ lhs: Canonical, _ rhs: Canonical) -> Bool {
+        switch (lhs, rhs) {
+        case (.bool, .bool), (.date, .date), (.year, .year), (.uuid, .uuid), (.json, .json),
+            (.xml, .xml), (.interval, .interval), (.inet, .inet), (.money, .money),
+            (.geometry, .geometry), (.text, .text), (.blob, .blob):
+            return true
+        case (.int8, .int8), (.int16, .int16), (.int32, .int32), (.int64, .int64),
+            (.uint32, .uint32), (.uint64, .uint64), (.float32, .float32), (.float64, .float64):
+            return true
+        case (.decimal, .decimal), (.char, .char), (.varchar, .varchar), (.binary, .binary),
+            (.bit, .bit), (.enumeration, .enumeration), (.set, .set):
+            return true
+        case let (.time(_, left), .time(_, right)), let (.timestamp(_, left), .timestamp(_, right)):
+            return left == right
+        case let (.array(left), .array(right)):
+            return sameKind(left, right)
+        case let (.other(left), .other(right)):
+            return left == right
+        default:
+            return false
+        }
+    }
+
     static func render(_ canonical: Canonical, for target: SQLDialect) -> String {
         switch target {
         case .postgresql: return renderPostgres(canonical)
@@ -280,7 +429,11 @@ public enum SchemaTranslator {
         case .float32: return "float"
         case .float64: return "double"
         case let .decimal(precision, scale):
-            let width = min(precision ?? 10, 65)
+            // An unconstrained `numeric` holds any precision; `decimal(10,0)` would throw
+            // every fractional digit away and overflow past ten digits, so it takes
+            // MySQL's widest instead.
+            guard let precision else { return "decimal(65,30)" }
+            let width = min(precision, 65)
             return "decimal(\(width),\(min(scale ?? 0, min(30, width))))"
         case let .char(length): return "char(\(min(length ?? 1, 255)))"
         case let .varchar(length):
@@ -344,7 +497,11 @@ public enum SchemaTranslator {
     // MARK: - Defaults
 
     /// A default expression the target can read, or nil when there is none it could.
-    public static func translateDefault(_ expression: String?, from source: SQLDialect, to target: SQLDialect) -> String? {
+    /// `columnType` is what tells a boolean's `1` from an integer's: MySQL writes both as
+    /// `1`, and PostgreSQL refuses `boolean DEFAULT 1`.
+    public static func translateDefault(
+        _ expression: String?, columnType: String? = nil, from source: SQLDialect, to target: SQLDialect
+    ) -> String? {
         guard let expression else { return nil }
         guard source != target else { return expression }
         var text = expression.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -362,11 +519,13 @@ public enum SchemaTranslator {
         }
         if ["current_date", "curdate()"].contains(lowered) { return "CURRENT_DATE" }
         if ["current_time", "curtime()"].contains(lowered) { return "CURRENT_TIME" }
-        if ["true", "b'1'", "1"].contains(lowered), lowered != "1" || target != .postgresql {
-            if lowered == "1" { return "1" }
+        let isBoolean = columnType.map { canonicalType($0, from: source) == .bool } ?? false
+        if ["true", "b'1'"].contains(lowered) || (isBoolean && lowered == "1") {
             return boolLiteral(true, for: target)
         }
-        if ["false", "b'0'"].contains(lowered) { return boolLiteral(false, for: target) }
+        if ["false", "b'0'"].contains(lowered) || (isBoolean && lowered == "0") {
+            return boolLiteral(false, for: target)
+        }
         if lowered == "0000-00-00" || lowered == "'0000-00-00'" || lowered.hasPrefix("'0000-00-00") { return nil }
         if ["gen_random_uuid()", "uuid_generate_v4()", "uuid()"].contains(lowered) {
             switch target {

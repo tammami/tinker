@@ -332,8 +332,12 @@ public struct DatabaseDumper: Sendable {
             // transfer's review, failed — ends it, so the connection is usable for the
             // next dump without a trip through the pool (SQLite refuses a BEGIN inside
             // an open transaction).
-            _ = try await connection.executeCollecting(Self.snapshotBegin(dialect))
+            // The BEGIN is inside the `do`: a cancellation can land while it is in flight,
+            // after the server has opened the transaction but before the loop starts, and
+            // an error thrown from outside the `do` would leave it open on a connection the
+            // caller goes on using. SQLite then refuses the next BEGIN outright.
             do {
+                _ = try await connection.executeCollecting(Self.snapshotBegin(dialect))
                 for table in ordered where table.kind != .foreignTable {
                     try Task.checkCancellation()
                     state.currentTable = table.name
@@ -359,13 +363,13 @@ public struct DatabaseDumper: Sendable {
                     state.tablesDone += 1
                     outcome.tables += 1
                 }
+                _ = try await connection.executeCollecting("COMMIT")
             } catch {
-                // Through the driver's own `rollback`, not the event stream: a cancelled
+                // Through the driver's own rollback, not the event stream: a cancelled
                 // task cannot read a stream, and this must still run.
-                try? await connection.rollback()
+                await connection.rollbackForCleanup()
                 throw error
             }
-            _ = try await connection.executeCollecting("COMMIT")
         } else {
             outcome.tables = ordered.count
             state.tablesDone = ordered.count
@@ -540,6 +544,11 @@ public struct DatabaseDumper: Sendable {
             if let text { return escapeCopy(text) }
             if let bytes { return "\\\\x" + bytes.map { String(format: "%02x", $0) }.joined() }
             return "\\N"
+        case let .array(items):
+            // Through the array rule, not the display rendering: an element holding a
+            // comma, a brace or a space has to be quoted or COPY splits it in the wrong
+            // place and the row lands mangled.
+            return escapeCopy(SQLLiteral.postgresArray(items) { ClipboardFormatter.cellText($0) })
         default:
             return escapeCopy(ClipboardFormatter.cellText(value))
         }

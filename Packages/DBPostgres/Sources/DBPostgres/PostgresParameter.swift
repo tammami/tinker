@@ -1,4 +1,5 @@
 import DBCore
+import DBSQL
 import Foundation
 import NIOCore
 import PostgresNIO
@@ -58,24 +59,8 @@ enum PostgresParameterEncoder {
         }
     }
 
-    /// `{a,b,NULL}` with each element quoted when it could otherwise be misread.
+    /// `{a,b,NULL}`, through the one implementation of the quoting rule.
     static func arrayLiteral(_ items: [DBValue]) -> String {
-        let rendered = items.map { item -> String in
-            if case .null = item { return "NULL" }
-            if case let .array(nested) = item { return arrayLiteral(nested) }
-            let text = text(for: item)
-            let needsQuotes =
-                text.isEmpty || text.uppercased() == "NULL"
-                || text.contains(where: {
-                    $0 == "," || $0 == "{" || $0 == "}" || $0 == "\"" || $0 == "\\" || $0.isWhitespace
-                })
-            guard needsQuotes else { return text }
-            let escaped =
-                text
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
-            return "\"\(escaped)\""
-        }
-        return "{\(rendered.joined(separator: ","))}"
+        SQLLiteral.postgresArray(items, elementText: text(for:))
     }
 }

@@ -106,6 +106,33 @@ extension DBValue {
 
 /// Escaping rules for SQL string and byte literals.
 public enum SQLLiteral {
+    /// A PostgreSQL array literal — `{a,b,NULL}` — with each element quoted when it could
+    /// otherwise be misread.
+    ///
+    /// An element that is empty, reads as `NULL`, or holds a comma, a brace, a quote, a
+    /// backslash or whitespace has to be quoted; unquoted, `COPY` and the array parser
+    /// split it in the wrong places. `elementText` renders one element, so the caller
+    /// decides how a non-array value becomes text.
+    public static func postgresArray(_ items: [DBValue], elementText: (DBValue) -> String) -> String {
+        let rendered = items.map { item -> String in
+            if case .null = item { return "NULL" }
+            if case let .array(nested) = item { return postgresArray(nested, elementText: elementText) }
+            let text = elementText(item)
+            let needsQuotes =
+                text.isEmpty || text.uppercased() == "NULL"
+                || text.contains(where: {
+                    $0 == "," || $0 == "{" || $0 == "}" || $0 == "\"" || $0 == "\\" || $0.isWhitespace
+                })
+            guard needsQuotes else { return text }
+            let escaped =
+                text
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            return "\"\(escaped)\""
+        }
+        return "{\(rendered.joined(separator: ","))}"
+    }
+
     /// A single-quoted string literal.
     ///
     /// PostgreSQL runs with `standard_conforming_strings = on`, so a backslash is an

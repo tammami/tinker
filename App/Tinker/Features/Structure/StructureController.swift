@@ -30,6 +30,9 @@ public final class StructureController {
     public var isEditing = false
     /// The collations the column editor offers. Read only when the detail panel asks.
     public private(set) var collations: [CollationInfo] = []
+    /// Types this schema's own users declared — a PostgreSQL enum, say. The built-in list
+    /// cannot know them, so a new column could not be given one until they were read.
+    public private(set) var userTypes: [UserTypeInfo] = []
     /// The column the detail panel shows and the arrow keys move between.
     public var selectedColumnID: UUID?
     /// The enum member editor, opened from the detail panel's "…" button.
@@ -224,6 +227,16 @@ public final class StructureController {
         collations =
             (try? await session.introspection(.collations(database: table.database)) {
                 try await $0.collations(in: table.database)
+            }) ?? []
+    }
+
+    /// The schema's own types, for the type pop-up. Read once, beside the collations.
+    public func loadUserTypesIfNeeded() async {
+        guard userTypes.isEmpty, let session else { return }
+        let schema = table.schemaRef
+        userTypes =
+            (try? await session.introspection(.userTypes(schema)) {
+                try await $0.userTypes(in: schema)
             }) ?? []
     }
 

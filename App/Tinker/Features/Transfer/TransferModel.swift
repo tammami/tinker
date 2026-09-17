@@ -230,8 +230,9 @@ public final class TransferController {
                     let selection = DumpSelection(schema: request.schema, tables: tables, routines: routines)
                     let channel = ScriptChannel()
                     let dumper = DatabaseDumper(dialect: dialect, options: options)
-                    async let dumped = dumper.run(selection, on: connection, into: channel) { progress in
-                        Task { @MainActor [weak self] in self?.show(progress, bytes: nil) }
+                    async let dumped = dumper.run(selection, on: connection, into: channel) {
+                        [weak self] progress in
+                        Task { @MainActor in self?.show(progress, bytes: nil) }
                     }
                     do {
                         while let chunk = try await channel.next() {
@@ -292,8 +293,8 @@ public final class TransferController {
                 let started = ContinuousClock.now
                 let outcome = try await ScriptImportRunner.run(
                     url: url, dialect: dialect, options: options, on: connection
-                ) { progress in
-                    Task { @MainActor [weak self] in self?.show(progress, since: started) }
+                ) { [weak self] progress in
+                    Task { @MainActor in self?.show(progress, since: started) }
                 }
                 failures = outcome.failures
                 summary = Self.summary(of: outcome, prefix: "Imported")
@@ -388,8 +389,8 @@ public final class TransferController {
                             review: { statements in
                                 await self.reviewStructure(statements, target: targetName, source: request.source.connectionName)
                             }
-                        ) { progress in
-                            Task { @MainActor [weak self] in self?.show(progress) }
+                        ) { [weak self] progress in
+                            Task { @MainActor in self?.show(progress) }
                         }
                     }
                 }
@@ -532,8 +533,8 @@ public final class TransferController {
                 let synchronizer = DataSynchronizer(dialect: dialect, sourceDialect: sourceDialect, options: options)
                 let reports = try await synchronizer.run(
                     pairs, source: source, target: target, writer: writerLease?.1
-                ) { progress in
-                    Task { @MainActor [weak self] in self?.show(progress) }
+                ) { [weak self] progress in
+                    Task { @MainActor in self?.show(progress) }
                 }
                 syncReports = reports
                 let differences = reports.reduce(0) { $0 + $1.differences }
@@ -598,8 +599,8 @@ public final class TransferController {
                 let result = try await SchemaSynchronizer(dialect: dialect, sourceDialect: sourceDialect).compare(
                     sourceSchema: sourceSchema, targetSchema: targetSchema, tables: tables,
                     source: source.introspector, target: target.introspector
-                ) { table in
-                    Task { @MainActor [weak self] in self?.status = "Comparing \(table)…" }
+                ) { [weak self] table in
+                    Task { @MainActor in self?.status = "Comparing \(table)…" }
                 }
                 schemaResult = result
                 let differing = result.differing.count

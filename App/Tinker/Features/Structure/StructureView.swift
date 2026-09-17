@@ -75,6 +75,9 @@ public struct StructureView: View {
         // loaded" forever.
         // Collations are read by the column detail panel when it appears, not here.
         .task(id: controller.table.id) { await controller.load() }
+        // The type pop-up is on every row, so the schema's own types are read with the
+        // table rather than when a column is selected.
+        .task(id: controller.table.id) { await controller.loadUserTypesIfNeeded() }
         // A refresh reads the server again but never throws away what the user has typed.
         .refreshable { await controller.load(force: true, keepingEdits: true) }
         .sheet(isPresented: isPreviewPresented) {
@@ -448,10 +451,14 @@ struct ColumnsPane: View {
     @ViewBuilder
     private func typePicker(_ index: Int, spec: ColumnTypeSpec) -> some View {
         let choices = ColumnTypeCatalog.choices(for: controller.dialect)
+        // The schema's own types sit above the built-in list: an enum the database
+        // declares is as real a choice as `text`, and the catalogue cannot know it.
+        let declared = controller.userTypes.map(\.name)
         let base = spec.base.lowercased()
-        let known = choices.contains { $0.name == base }
+        let known = choices.contains { $0.name == base } || declared.contains { $0.lowercased() == base }
         BarPopUp(
             items: (known ? [] : [BarPopUp.Item(id: spec.base, title: spec.base)])
+                + declared.map { BarPopUp.Item(id: $0, title: $0) }
                 + choices.map { BarPopUp.Item(id: $0.name, title: $0.name) },
             selection: Binding(
                 get: { known ? base : spec.base },

@@ -47,6 +47,10 @@ public struct SchemaSyncItem: Sendable, Hashable, Identifiable {
 /// What comparing two schemas found, and the script that would make the target match.
 public struct SchemaSyncResult: Sendable, Hashable {
     public var items: [SchemaSyncItem] = []
+    /// What crossing engines could not carry — a dropped default, a generated expression,
+    /// an index method the target has no equal for, a type that lost its zone. Empty when
+    /// both sides are the same engine.
+    public var notes: [String] = []
 
     public var differing: [SchemaSyncItem] { items.filter { $0.kind != .identical } }
 
@@ -119,13 +123,24 @@ public struct SchemaSynchronizer: Sendable {
         let targetByName = Dictionary(targetTables.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
         let sync = StructureSync(dialect: dialect)
         var result = SchemaSyncResult()
+        // What the target can actually collate by. MySQL and MariaDB share a dialect but
+        // not their collation names, so a carried collation has to be checked against the
+        // server that will receive it.
+        let targetCollations = Set(
+            ((try? await target.collations(in: targetSchema.database)) ?? []).map(\.name))
 
         for info in sourceTables {
             try Task.checkCancellation()
             progress(info.name)
             let loaded = try await TableDefinitionLoader.load(info, introspector: source)
             let crossing = sourceDialect != dialect
-            var definition = SchemaTranslator.translate(loaded, from: sourceDialect, to: dialect, into: targetSchema).definition
+            let translation = SchemaTranslator.translate(
+                loaded, from: sourceDialect, to: dialect, into: targetSchema,
+                targetCollations: targetCollations)
+            // The translation's notes are the only record of what the target cannot hold;
+            // dropping them here would make a lossy sync look like a clean one.
+            result.notes.append(contentsOf: translation.notes)
+            var definition = translation.definition
             if crossing { definition = SchemaTranslator.comparable(definition) }
             if let match = targetByName[info.name] {
                 var targetDefinition = try await TableDefinitionLoader.load(match, introspector: target)

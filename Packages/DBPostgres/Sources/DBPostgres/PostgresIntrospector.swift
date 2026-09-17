@@ -629,6 +629,34 @@ extension PostgresIntrospector {
         )
     }
 
+    public func userTypes(in schema: SchemaRef) async throws -> [UserTypeInfo] {
+        // Enums, domains and composites this schema declares. The labels come back in the
+        // server's own order (`enumsortorder`), which is the order the type compares in.
+        let result = try await query(
+            """
+            SELECT t.typname,
+                   CASE t.typtype WHEN 'e' THEN 'enumeration' WHEN 'd' THEN 'domain' ELSE 'composite' END,
+                   COALESCE(
+                       (SELECT array_to_string(array_agg(e.enumlabel ORDER BY e.enumsortorder), E'\\x1f')
+                        FROM pg_catalog.pg_enum e WHERE e.enumtypid = t.oid), '')
+            FROM pg_catalog.pg_type t
+            JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+            WHERE n.nspname = $1
+              AND t.typtype IN ('e', 'd', 'c')
+              AND (t.typrelid = 0 OR (SELECT c.relkind FROM pg_catalog.pg_class c WHERE c.oid = t.typrelid) = 'c')
+              AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_type el WHERE el.oid = t.typelem AND el.typarray = t.oid)
+            ORDER BY t.typname
+            """, [.string(schema.schema)])
+        return result.rows.compactMap { row in
+            guard row.count >= 3, let name = row[0].text,
+                let kind = UserTypeInfo.Kind(rawValue: row[1].text ?? "")
+            else { return nil }
+            let joined = row[2].text ?? ""
+            let labels = joined.isEmpty ? [] : joined.components(separatedBy: "\u{1f}")
+            return UserTypeInfo(name: name, kind: kind, labels: labels)
+        }
+    }
+
     public func collations(in database: String) async throws -> [CollationInfo] {
         // A PostgreSQL collation belongs to a schema, not to a character set, and the same
         // name appears in several encodings; the designer only needs the names.

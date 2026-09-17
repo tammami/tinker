@@ -512,8 +512,16 @@ public actor ConnectionSession {
         else { return }
         pool[index].occupancy = .resetting
         let connection = pool[index].connection
-        // ROLLBACK outside a transaction is a warning on every engine, never an error.
-        try? await connection.rollback()
+        // A connection is never handed back inside a transaction, even when whoever held
+        // it was cancelled. One that will not leave its transaction is dropped rather than
+        // pooled: the next lease's BEGIN would implicitly commit the work that was
+        // abandoned.
+        guard await connection.rollbackForCleanup() else {
+            logger.debug("connection would not leave its transaction; dropping it")
+            if let current = poolIndex(of: lease.connectionID) { pool.remove(at: current) }
+            await connection.close()
+            return
+        }
         do {
             try await connection.resetSessionState()
         } catch {
@@ -785,8 +793,11 @@ public struct IntrospectionCache: Sendable {
         case triggers(TableRef)
         case partitioning(TableRef)
         case collations(database: String)
+        case userTypes(SchemaRef)
         case viewDefinition(TableRef)
         case routineDefinition(SchemaRef, name: String, signature: String)
+        case events(SchemaRef)
+        case eventDefinition(SchemaRef, name: String)
         case users
         case variables
 

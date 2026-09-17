@@ -209,6 +209,17 @@ public enum TransferRunner {
                 await dumped.close()
                 await channel.close()
                 group.cancelAll()
+                // Wait for the cancelled tasks before returning. The dumper rolls its
+                // snapshot transaction back on the way out, and until that has happened the
+                // source connection is still inside it — the next dump's BEGIN would fail,
+                // which on SQLite it does rather than silently committing.
+                while true {
+                    do {
+                        if try await group.next() == nil { break }
+                    } catch {
+                        continue
+                    }
+                }
                 throw error
             }
             return result

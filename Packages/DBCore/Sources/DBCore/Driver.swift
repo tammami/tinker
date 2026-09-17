@@ -108,6 +108,20 @@ public protocol BulkLoadWriter: Sendable {
     func write(_ data: Data) async throws
 }
 
+/// Lets exactly one of two racing tasks resume a continuation.
+private final class CleanupOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tripped = false
+
+    func trip() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if tripped { return false }
+        tripped = true
+        return true
+    }
+}
+
 extension SQLConnection {
     /// A driver that cannot tell reports plaintext, which is the honest default.
     public var transport: TransportInfo { .plaintext }
@@ -133,6 +147,42 @@ extension SQLConnection {
     }
 
     /// Runs `body` inside a transaction, committing on success and rolling back on any error.
+    /// Ends a transaction while cleaning up, even when the task doing the cleaning has
+    /// already been cancelled. False when the transaction is still open afterwards.
+    ///
+    /// A plain `try? await rollback()` on that path can silently do nothing: cancelling a
+    /// statement interrupts the connection, and the rollback that follows is refused and
+    /// swallowed — leaving the transaction open on a connection the caller goes on using.
+    /// SQLite then refuses its next `BEGIN` outright. The statement runs in an unstructured
+    /// task, which does not inherit cancellation, and the result is checked rather than
+    /// assumed. A caller that is handing the connection back must not keep it when this
+    /// returns false: the next lease's `BEGIN` would implicitly commit the abandoned work
+    /// on MySQL, or join it on PostgreSQL.
+    @discardableResult
+    public func rollbackForCleanup(within timeout: Duration = .seconds(5)) async -> Bool {
+        let connection = self
+        for _ in 0 ..< 2 {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let once = CleanupOnce()
+                // Unstructured, so a cancelled caller does not cancel the cleanup, and
+                // raced against a clock so a connection that never answers cannot hold the
+                // pool slot open for ever.
+                let work = Task {
+                    try? await connection.rollback()
+                    if once.trip() { continuation.resume() }
+                }
+                Task {
+                    try? await Task.sleep(for: timeout)
+                    guard once.trip() else { return }
+                    work.cancel()
+                    continuation.resume()
+                }
+            }
+            if await !isInTransaction { return true }
+        }
+        return false
+    }
+
     public func withTransaction<T>(_ body: () async throws -> T) async throws -> T {
         try await beginTransaction()
         do {

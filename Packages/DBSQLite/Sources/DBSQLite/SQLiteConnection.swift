@@ -536,6 +536,10 @@ public actor SQLiteConnection: SQLConnection {
     /// changed them. `query_only` belongs to the session's read-only guard, which
     /// re-applies it on every lease.
     public func resetSessionState() async throws {
+        // A connection handed back mid-transaction poisons the next lease: SQLite answers
+        // its `BEGIN` with "cannot start a transaction within a transaction". Ending it
+        // here is what `RESET ALL` does for PostgreSQL.
+        if isInTransaction { try? runIsolated("ROLLBACK") }
         guard sessionMutated, !closed else { return }
         sessionMutated = false
         try runIsolated(Self.foreignKeysPragma(config))

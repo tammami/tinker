@@ -228,7 +228,7 @@ public struct ScriptExecutor: Sendable {
 
         func rollbackQuietly() async {
             guard inTransaction else { return }
-            try? await connection.rollback()
+            await connection.rollbackForCleanup()
             inTransaction = false
             batchCount = 0
         }
@@ -370,6 +370,9 @@ public struct ScriptExecutor: Sendable {
             report(force: true)
             throw ScriptExecutionError.cancelled(finished(cancelled: true))
         } catch let error as ScriptExecutionError {
+            // `fail` rolls back before it throws `stopped`/`tooManyErrors`, but an error
+            // raised anywhere else in the run reaches here with a batch still open.
+            await rollbackQuietly()
             await restoreSession()
             report(force: true)
             throw error

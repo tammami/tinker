@@ -95,6 +95,31 @@ final class DBStoreTests: XCTestCase {
         await reopened.close()
     }
 
+    /// MySQL and MariaDB share a dialect, so the badge can only tell them apart by what a
+    /// server once said. That answer has to survive a quit, and a connection saved before
+    /// the field existed has to keep loading.
+    func testTheFlavourAServerReportedSurvivesAReopenAndAnOlderRowStillLoads() async throws {
+        let store = try await makeStore()
+        var config = makeConfig()
+        config.knownFlavor = .mariadb
+        try await store.save(config)
+        await store.close()
+
+        let reopened = try await makeStore()
+        let loaded = try await reopened.connections().first
+        XCTAssertEqual(loaded?.knownFlavor, .mariadb)
+        await reopened.close()
+
+        // A row written before the field existed: its JSON simply has no such key.
+        let json = """
+            {"id":"\(UUID().uuidString)","name":"old","groupPath":[],"dialect":"mysql",
+            "host":"127.0.0.1","port":3306,"user":"root","tls":{"mode":"prefer"},
+            "options":{},"readOnly":false,"isProduction":false}
+            """.replacingOccurrences(of: "\n", with: "")
+        let older = try JSONDecoder().decode(ConnectionConfig.self, from: Data(json.utf8))
+        XCTAssertNil(older.knownFlavor)
+    }
+
     func testUpdatingAConnectionKeepsItsPlace() async throws {
         let store = try await makeStore()
         let first = makeConfig(name: "a")

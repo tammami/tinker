@@ -148,6 +148,13 @@ public struct ConnectionConfig: Sendable, Hashable, Codable, Identifiable {
     public var passwordRef: SecretRef?
     /// Database to open on connect.
     public var database: String?
+    /// What the server said it was the last time this connection was open.
+    ///
+    /// MySQL and MariaDB share a dialect, a wire protocol and often a port, so nothing
+    /// about a saved connection tells them apart until a server answers. Remembering the
+    /// answer keeps the badge right while the connection is closed, without guessing from
+    /// a port or from whatever the connection was named.
+    public var knownFlavor: ServerFlavor?
     public var tls: TLSConfig
     public var ssh: SSHConfig?
     /// Driver-specific extras, e.g. `application_name` or `tinyint1IsBool`.
@@ -169,6 +176,7 @@ public struct ConnectionConfig: Sendable, Hashable, Codable, Identifiable {
         user: String,
         passwordRef: SecretRef? = nil,
         database: String? = nil,
+        knownFlavor: ServerFlavor? = nil,
         tls: TLSConfig = .default,
         ssh: SSHConfig? = nil,
         options: [String: String] = [:],
@@ -186,6 +194,7 @@ public struct ConnectionConfig: Sendable, Hashable, Codable, Identifiable {
         self.user = user
         self.passwordRef = passwordRef
         self.database = database
+        self.knownFlavor = knownFlavor
         self.tls = tls
         self.ssh = ssh
         self.options = options

@@ -170,12 +170,27 @@ public final class SidebarModel {
                     let version = try? await session.connect()
                 {
                     flavors[connectionID] = version.flavor
+                    await rememberFlavor(version.flavor, of: connectionID)
                 }
             }
         }
     }
 
-    public func flavor(of connectionID: UUID) -> ServerFlavor? { flavors[connectionID] }
+    /// Writes the flavour onto the saved connection so the badge is still right the next
+    /// time the app opens, before anything has connected.
+    private func rememberFlavor(_ flavor: ServerFlavor, of connectionID: UUID) async {
+        guard var config = environment.connections.first(where: { $0.id == connectionID }),
+            config.knownFlavor != flavor
+        else { return }
+        config.knownFlavor = flavor
+        await environment.save(config)
+    }
+
+    /// What the live server said, or failing that what it said last time.
+    public func flavor(of connectionID: UUID) -> ServerFlavor? {
+        flavors[connectionID]
+            ?? environment.connections.first { $0.id == connectionID }?.knownFlavor
+    }
 
     /// The main session's own state, kept apart so a database session's failure can
     /// colour the dot without losing what the main session last said.

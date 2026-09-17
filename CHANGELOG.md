@@ -4,6 +4,49 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.6] - 2026-09-17
+
+### Added
+- **Events, for MySQL and MariaDB.** Every database on a MySQL-family connection has an
+  Events branch listing what the server has scheduled, with an editor for creating,
+  altering, enabling and dropping them, and the server's own `SHOW CREATE EVENT` behind
+  Source. Before saving, the editor reads the server's scheduler and says whether anything
+  will actually run: off, which an account with the privilege can turn on from here, or
+  DISABLED, which was fixed at server start and needs a restart. Turning it on uses `SET
+  PERSIST` on MySQL 8.0 and later so it survives one, and says so plainly when the server
+  will forget it instead. An edit that did not touch the schedule does not re-state it, so
+  an event written in another time zone cannot be moved by a change to its comment, and a
+  schedule already in the past is pointed out rather than saved in silence.
+- **A Chart tab after Rows.** Any result with something to measure can be drawn as a bar,
+  line, pie, scatter or area chart, with a category, an aggregate, and hovering that reads
+  out the point under the pointer. A key is not a measurement: a primary key, a uuid, or a
+  column named `id` or ending in `_id` is offered as a label and never as a value. When a
+  chart is drawn from a page of a larger result it says "N of M rows", so a partial sum
+  cannot read as the total.
+- **The editor can sit beside its results** instead of above them, from a setting.
+- **Collation travels between MySQL servers.** A structure sync or transfer between two
+  MySQL-family servers keeps each column's character set and collation instead of dropping
+  them. The names are checked against the receiving server first, because MariaDB accepts
+  MySQL's `utf8mb4_0900_ai_ci` while MySQL refuses MariaDB's `utf8mb4_uca1400_ai_ci`.
+  Across engines it cannot come along at all, and that is now noted once per table naming
+  both halves rather than once per text column.
+- **The structure designer offers the types the server has**, including a PostgreSQL enum
+  someone defined, read from the server rather than from a built-in list.
+- **A new app icon**, and engine marks drawn to look like their engines — an elephant, a
+  dolphin, a seal for MariaDB, a feather for SQLite — with MariaDB told apart from MySQL by
+  the server's own flavour rather than by its port.
+
+### Fixed
+- **A row added by hand is editable in every column at once.** Each cell used to need its
+  own double-click, and Tab moved the selection without opening anything.
+- **A connection that will not leave its transaction is dropped rather than pooled.**
+  Cancelling a run interrupts the statement, so the cleanup rollback failed and the
+  connection went back into the pool still inside its transaction — where the next use of
+  it would implicitly commit the abandoned work on MySQL, or join it on PostgreSQL.
+- **Reformatting a selection leaves the selection over the new text**, so running it
+  straight afterwards runs the statement that is there rather than a truncated one.
+- **The selected tab no longer bleeds into the title bar.**
+
 ## [0.1.5] - 2026-09-14
 
 ### Added

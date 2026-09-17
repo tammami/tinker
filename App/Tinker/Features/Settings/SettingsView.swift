@@ -11,6 +11,8 @@ public final class AppSettings {
     }
     public var confirmOnProduction = true
     public var showSystemSchemas = false
+    /// Whether a query tab puts its results beside the editor rather than below it.
+    public var splitQuerySideBySide = false
 
     private let environment: AppEnvironment
 
@@ -24,6 +26,7 @@ public final class AppSettings {
         nullDisplayText = await environment.setting("grid.nullText", default: "")
         confirmOnProduction = await environment.setting("safety.confirmOnProduction", default: true)
         showSystemSchemas = await environment.setting("sidebar.showSystemSchemas", default: false)
+        splitQuerySideBySide = await environment.setting("editor.splitSideBySide", default: false)
     }
 
     public func save() async {
@@ -32,6 +35,7 @@ public final class AppSettings {
         await environment.setSetting(nullDisplayText, for: "grid.nullText")
         await environment.setSetting(confirmOnProduction, for: "safety.confirmOnProduction")
         await environment.setSetting(showSystemSchemas, for: "sidebar.showSystemSchemas")
+        await environment.setSetting(splitQuerySideBySide, for: "editor.splitSideBySide")
     }
 }
 

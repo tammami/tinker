@@ -10,8 +10,13 @@ public struct QueryTabView: View {
     @Bindable var tab: WorkspaceTab
     let fontName: String
     let fontSize: Double
+    @Bindable var settings: AppSettings
 
     @State private var resultPane: ResultPane = .result
+    @State private var chartKind: ChartKind = .bar
+    @State private var chartCategory = -1
+    @State private var chartValue = -1
+    @State private var chartAggregate: ChartAggregate = .none
 
     /// The connection pop-up's items: folder-qualified titles, so two connections called
     /// the same — one per folder — read apart.
@@ -32,44 +37,20 @@ public struct QueryTabView: View {
     }
 
     public var body: some View {
-        VSplitView {
-            VStack(spacing: 0) {
-                editorToolbar
-                Divider()
-                SQLEditorView(
-                    text: $controller.sql,
-                    dialect: controller.dialect,
-                    fontName: fontName,
-                    fontSize: fontSize,
-                    errorPosition: controller.errorBanner?.position,
-                    isFront: workspace.selectedTabID == tab.id,
-                    delegate: controller
-                )
-            }
-            // The editor pane fills the split view's width. Without this it is laid out at
-            // the ideal width of what is beside it and sits centred in a narrow column.
-            .frame(maxWidth: .infinity, minHeight: 120, idealHeight: 260)
-
-            VStack(spacing: 0) {
-                if let banner = controller.errorBanner {
-                    InlineBanner(
-                        kind: .error,
-                        message: banner.sqlState.map { "[\($0)] \(banner.message)" } ?? banner.message,
-                        detail: banner.detail,
-                        hint: banner.hint,
-                        onCopy: {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(banner.copyText, forType: .string)
-                        },
-                        onDismiss: { controller.errorBanner = nil }
-                    )
-                    Divider()
+        // Results below the editor, or beside it. The same two panes either way; only the
+        // splitter's axis and which dimension carries the minimum change.
+        Group {
+            if settings.splitQuerySideBySide {
+                HSplitView {
+                    editorPane
+                    resultsPane
                 }
-                resultHeader
-                Divider()
-                resultContent
+            } else {
+                VSplitView {
+                    editorPane
+                    resultsPane
+                }
             }
-            .frame(maxWidth: .infinity, minHeight: 140)
         }
         .task(id: tab.id) {
             controller.sql = tab.sql
@@ -80,8 +61,8 @@ public struct QueryTabView: View {
         .onChange(of: controller.sql) { _, new in tab.sql = new }
         // The rows on the map belong to one result: another result, or a re-run, puts
         // every row back.
-        .onChange(of: controller.selectedResultID) { _, _ in mapRows = nil }
-        .onChange(of: controller.results.map(\.id)) { _, _ in mapRows = nil }
+        .onChange(of: controller.selectedResultID) { _, _ in resetPaneChoices() }
+        .onChange(of: controller.results.map(\.id)) { _, _ in resetPaneChoices() }
         // "Show on Map" from a result cell: that one row, from that column.
         .onChange(of: controller.mapRequest) { _, request in
             guard let request else { return }
@@ -152,7 +133,19 @@ public struct QueryTabView: View {
             } label: {
                 Label("Beautify", systemImage: Icon.format)
             }
-            .help("Lay the SQL out one clause per line (⌘⇧I)")
+            .help("Lay the SQL out one clause per line, or just the selection (⌘⇧I)")
+
+            Button {
+                settings.splitQuerySideBySide.toggle()
+                Task { await settings.save() }
+            } label: {
+                Label(
+                    "Split",
+                    systemImage: settings.splitQuerySideBySide ? Icon.splitSideBySide : Icon.splitStacked)
+            }
+            .help(
+                settings.splitQuerySideBySide
+                    ? "Put the results back below the editor" : "Put the results beside the editor")
 
             if controller.isRunning {
                 Button {
@@ -254,9 +247,106 @@ public struct QueryTabView: View {
 
     // MARK: - Results
 
+    /// Another result's columns are not this one's, so the pane's column choices go back to
+    /// being unset and the chart picks its own again.
+    private func resetPaneChoices() {
+        mapRows = nil
+        chartCategory = -1
+        chartValue = -1
+        // The new result may not offer the pane the old one was showing; a segmented
+        // control with no matching tag draws with nothing selected.
+        if !visiblePanes.contains(resultPane) { resultPane = .result }
+    }
+
+    /// The panes this result can actually fill. Chart and Map are offered only where there
+    /// is something to draw.
+    private var visiblePanes: [ResultPane] {
+        ResultPane.allCases.filter { pane in
+            switch pane {
+            case .map: !resultGeometryColumns.isEmpty
+            case .chart: !resultChartKinds.isEmpty
+            default: true
+            }
+        }
+    }
+
+    /// The shapes the shown result supports; empty hides the Chart tab entirely.
+    private var resultChartKinds: [ChartKind] {
+        guard let grid = controller.selectedResult?.grid else { return [] }
+        return ChartSpec.kinds(columns: grid.columns)
+    }
+
+    @ViewBuilder
+    private func chartPane(_ result: QueryResultTab) -> some View {
+        if let grid = result.grid {
+            ChartPaneView(
+                grid: grid,
+                revision: controller.revision,
+                kind: $chartKind,
+                categoryColumn: $chartCategory,
+                valueColumn: $chartValue,
+                aggregate: $chartAggregate
+            )
+        } else {
+            EmptyStateView(
+                icon: Icon.chart, title: "No rows", message: "This statement returned nothing to draw.")
+        }
+    }
+
+    private var editorPane: some View {
+        VStack(spacing: 0) {
+            editorToolbar
+            Divider()
+            SQLEditorView(
+                text: $controller.sql,
+                dialect: controller.dialect,
+                fontName: fontName,
+                fontSize: fontSize,
+                errorPosition: controller.errorBanner?.position,
+                isFront: workspace.selectedTabID == tab.id,
+                delegate: controller
+            )
+        }
+        // The pane fills the split view's other axis. Without this it is laid out at the
+        // ideal size of what is beside it and sits centred in a narrow column.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(
+            minWidth: settings.splitQuerySideBySide ? 320 : nil,
+            idealWidth: settings.splitQuerySideBySide ? 520 : nil,
+            minHeight: settings.splitQuerySideBySide ? nil : 120,
+            idealHeight: settings.splitQuerySideBySide ? nil : 260)
+    }
+
+    private var resultsPane: some View {
+        VStack(spacing: 0) {
+            if let banner = controller.errorBanner {
+                InlineBanner(
+                    kind: .error,
+                    message: banner.sqlState.map { "[\($0)] \(banner.message)" } ?? banner.message,
+                    detail: banner.detail,
+                    hint: banner.hint,
+                    onCopy: {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(banner.copyText, forType: .string)
+                    },
+                    onDismiss: { controller.errorBanner = nil }
+                )
+                Divider()
+            }
+            resultHeader
+            Divider()
+            resultContent
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(
+            minWidth: settings.splitQuerySideBySide ? 360 : nil,
+            minHeight: settings.splitQuerySideBySide ? nil : 140)
+    }
+
     /// Which pane of a result is showing.
     enum ResultPane: String, CaseIterable, Identifiable {
         case result = "Rows"
+        case chart = "Chart"
         case map = "Map"
         case message = "Message"
         case profile = "Profile"
@@ -267,6 +357,7 @@ public struct QueryTabView: View {
         var icon: String {
             switch self {
             case .result: Icon.data
+            case .chart: Icon.chart
             case .map: Icon.map
             case .message: Icon.message
             case .profile: Icon.profile
@@ -298,7 +389,7 @@ public struct QueryTabView: View {
             }
             Spacer(minLength: DesignTokens.Spacing.sm)
             Picker("Pane", selection: $resultPane) {
-                ForEach(ResultPane.allCases.filter { $0 != .map || !resultGeometryColumns.isEmpty }) { pane in
+                ForEach(visiblePanes) { pane in
                     Label(pane.rawValue, systemImage: pane.icon).tag(pane)
                 }
             }
@@ -342,6 +433,7 @@ public struct QueryTabView: View {
             switch resultPane {
             case .message: messagePane(result)
             case .result: rowsPane(result)
+            case .chart: chartPane(result)
             case .map: mapPane(result)
             case .profile:
                 tablePane(

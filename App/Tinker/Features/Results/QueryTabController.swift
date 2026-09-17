@@ -1155,8 +1155,24 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
 
     // MARK: - Editor support
 
+    /// Beautifies the selection when there is one, the whole document otherwise — the way
+    /// every other editor treats a formatting command.
     public func formatSQL() {
-        sql = SQLFormatter.format(sql, dialect: dialect)
+        guard let range = selectedRange, range.lowerBound < range.upperBound else {
+            sql = SQLFormatter.format(sql, dialect: dialect)
+            return
+        }
+        let text = sql as NSString
+        let selected = NSRange(location: range.lowerBound, length: range.upperBound - range.lowerBound)
+        guard selected.location >= 0, NSMaxRange(selected) <= text.length else {
+            sql = SQLFormatter.format(sql, dialect: dialect)
+            return
+        }
+        let formatted = SQLFormatter.format(text.substring(with: selected), dialect: dialect)
+        sql = text.replacingCharacters(in: selected, with: formatted)
+        // The selection has to follow the text it named. Left stale, ⌘⏎ would run the old
+        // span of the new document — a statement cut off mid-word.
+        selectedRange = selected.location ..< (selected.location + (formatted as NSString).length)
     }
 
     /// The range of the statement under the cursor, for the gutter marker.

@@ -181,6 +181,9 @@ public struct DataGridView: NSViewRepresentable {
             coordinator.renderedSelection = selection
             coordinator.redrawVisibleCells()
         }
+        // Add Row moves the selection onto the new row from the controller's side, which
+        // never goes through `setSelection`.
+        coordinator.beginEditingIfInsertRow()
     }
 
     public func makeCoordinator() -> GridCoordinator {
@@ -606,6 +609,30 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         delegate?.gridDidChangeSelection(new)
         redrawVisibleCells()
         scrollToFocus()
+        beginEditingIfInsertRow()
+    }
+
+    /// A row the user is adding has nothing in it yet, so every cell it lands on opens for
+    /// typing: no double-click, and Tab carries on to the next column. Only that row —
+    /// browsing an existing one still opens an editor deliberately, with Return or a
+    /// double-click.
+    func beginEditingIfInsertRow() {
+        guard selection.focusRow < model.displayRowCount,
+            Self.opensForTyping(
+                selection: selection, isEditable: model.isEditable, hasEditor: inlineEditor != nil,
+                isPendingInsertRow: model.isPendingInsertRow(selection.focusRow))
+        else { return }
+        beginEditingFocusedCell()
+    }
+
+    /// The rule, apart from the table view so it can be tested: one cell of a row being
+    /// added, on an editable grid, with nothing already open.
+    static func opensForTyping(
+        selection: GridSelection, isEditable: Bool, hasEditor: Bool, isPendingInsertRow: Bool
+    ) -> Bool {
+        guard isEditable, !hasEditor, isPendingInsertRow, selection.mode == .cells else { return false }
+        return selection.anchorRow == selection.focusRow
+            && selection.anchorColumn == selection.focusColumn
     }
 
     func scrollToFocus() {
@@ -721,12 +748,17 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         editor.onCommit = { [weak self] text in
             self?.delegate?.gridDidCommitEdit(row: row, column: column, text: text)
         }
-        editor.onFinish = { [weak self] in
+        editor.onFinish = { [weak self] movement in
             guard let self else { return }
             inlineEditor = nil
             if reloadWaitsForEditor {
                 reloadWaitsForEditor = false
                 reloadAfterRevision()
+            }
+            switch movement {
+            case .tab: moveFocus(byColumns: 1)
+            case .backtab: moveFocus(byColumns: -1)
+            default: break
             }
         }
         inlineEditor = editor
@@ -734,6 +766,28 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         editor.frame = cell.bounds
         editor.autoresizingMask = [.width, .height]
         tableView.window?.makeFirstResponder(editor)
+    }
+
+    /// Moves the focus one column after an edit ended with Tab, wrapping to the next row
+    /// at the end of this one.
+    func moveFocus(byColumns delta: Int) {
+        let rowCount = model.displayRowCount
+        let columnCount = model.columns.count
+        guard rowCount > 0, columnCount > 0 else { return }
+        var new = selection
+        let step = visibleStep(from: selection.focusColumn, direction: delta > 0 ? 1 : -1)
+        if step == 0 {
+            let wrap = delta > 0 ? 1 : -1
+            guard selection.focusRow + wrap >= 0, selection.focusRow + wrap < rowCount else { return }
+            new.move(
+                rowDelta: wrap, columnDelta: delta > 0 ? -(columnCount - 1) : (columnCount - 1),
+                rowCount: rowCount, columnCount: columnCount, extending: false)
+        } else {
+            new.move(
+                rowDelta: 0, columnDelta: delta > 0 ? step : -step, rowCount: rowCount,
+                columnCount: columnCount, extending: false)
+        }
+        setSelection(new)
     }
 
     /// How far to move to land on the next column that is shown, skipping hidden ones.
@@ -1205,8 +1259,9 @@ public final class GridTableView: NSTableView {
 /// The text field shown while a cell is being edited.
 final class GridInlineEditor: NSTextField {
     var onCommit: ((String) -> Void)?
-    /// Called after the editor is gone, committed or not.
-    var onFinish: (() -> Void)?
+    /// Called after the editor is gone, committed or not, with the key that ended it so
+    /// the grid can carry on where Tab points.
+    var onFinish: ((NSTextMovement) -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1224,21 +1279,25 @@ final class GridInlineEditor: NSTextField {
     required init?(coder: NSCoder) { nil }
 
     override func textDidEndEditing(_ notification: Notification) {
+        let raw = notification.userInfo?["NSTextMovement"] as? Int
+        let movement = raw.flatMap(NSTextMovement.init(rawValue:)) ?? .other
         super.textDidEndEditing(notification)
-        finish(committing: true)
+        finish(committing: true, movement: movement)
     }
 
     override func cancelOperation(_ sender: Any?) {
-        finish(committing: false)
+        finish(committing: false, movement: .cancel)
     }
 
-    private func finish(committing: Bool) {
+    private func finish(committing: Bool, movement: NSTextMovement) {
         let text = stringValue
         let window = window
         removeFromSuperview()
         if committing { onCommit?(text) }
-        onFinish?()
+        // The table takes focus back before the grid moves on, or the move would land on a
+        // view that is no longer in the responder chain.
         window?.makeFirstResponder(window?.contentView)
+        onFinish?(movement)
     }
 }
 

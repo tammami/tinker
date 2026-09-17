@@ -196,6 +196,17 @@ public struct WorkspaceView: View {
                 Task { await sidebar.refresh(connectionID: request.targetConnectionID) }
             }
         }
+        .sheet(item: boundWorkspace.pendingEventEditor) { request in
+            EventEditorSheet(
+                controller: EventEditorController(request: request, environment: environment),
+                fontName: settings.editorFontName,
+                fontSize: settings.editorFontSize,
+                onDismiss: {
+                    workspace.pendingEventEditor = nil
+                    Task { await sidebar.refresh(connectionID: request.connectionID) }
+                }
+            )
+        }
         .sheet(isPresented: boundWorkspace.isNewTablePresented) {
             if let context = designerContext {
                 NewTableSheet(
@@ -443,7 +454,8 @@ public struct WorkspaceView: View {
                     workspace: workspace,
                     tab: tab,
                     fontName: settings.editorFontName,
-                    fontSize: settings.editorFontSize
+                    fontSize: settings.editorFontSize,
+                    settings: settings
                 )
                 .id(tab.id)
             }
@@ -584,11 +596,13 @@ public struct WorkspaceView: View {
                                 ? "Encrypted, unverified"
                                 : (transport.isProtected ? "Encrypted" : "Not encrypted"),
                             systemImage: transport.isProtected
-                                ? (transport.isEncryptedButUnverified ? "lock.trianglebadge.exclamationmark" : Icon.lock)
+                                ? (transport.isEncryptedButUnverified
+                                    ? "lock.trianglebadge.exclamationmark" : Icon.lock)
                                 : Icon.unlock
                         )
                         .foregroundStyle(
-                            transport.isProtected && !transport.isEncryptedButUnverified ? Color.secondary : Color.orange
+                            transport.isProtected && !transport.isEncryptedButUnverified
+                                ? Color.secondary : Color.orange
                         )
                         .help(transport.summary)
                     }

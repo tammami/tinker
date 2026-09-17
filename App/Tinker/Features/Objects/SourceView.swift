@@ -36,6 +36,7 @@ public final class SourceController {
             switch object.kind {
             case let .view(ref): ref.database
             case let .routine(schema, _, _, _): schema.database
+            case let .event(schema, _): schema.database
             }
         guard let session = environment.session(for: connectionID, database: database) else {
             errorText = "No session for this connection"
@@ -66,6 +67,15 @@ public final class SourceController {
                         in: schema, name: name, signature: signature, kind: kind
                     )
                 }
+            case let .event(schema, name):
+                let key = IntrospectionCache.Key.eventDefinition(schema, name: name)
+                if force { await session.invalidateIntrospection(key) }
+                source = try await session.introspection(key) { introspector in
+                    guard let server = introspector.server else {
+                        throw DBError.protocolError("This driver cannot read event definitions")
+                    }
+                    return try await server.eventDefinition(in: schema, name: name)
+                }
             }
             errorText = nil
         } catch {
@@ -79,6 +89,7 @@ public final class SourceController {
         switch object.kind {
         case let .view(ref): "\(ref.schema).\(ref.name)"
         case let .routine(schema, name, signature, _): "\(schema.schema).\(name)(\(signature))"
+        case let .event(schema, name): "\(schema.database).\(name)"
         }
     }
 
@@ -86,6 +97,7 @@ public final class SourceController {
         switch object.kind {
         case .view: Icon.view
         case let .routine(_, _, _, kind): kind.symbolName
+        case .event: Icon.event
         }
     }
 }
@@ -108,7 +120,8 @@ public struct SourceView: View {
             PaneBar {
                 HStack(spacing: DesignTokens.Spacing.xs + 2) {
                     Image(systemName: controller.icon).foregroundStyle(.purple)
-                    Text(controller.title).font(.system(size: DesignTokens.Typography.body, weight: .semibold)).lineLimit(1)
+                    Text(controller.title).font(.system(size: DesignTokens.Typography.body, weight: .semibold))
+                        .lineLimit(1)
                 }
                 Badge(text: "READ-ONLY")
                 Spacer()

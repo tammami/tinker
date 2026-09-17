@@ -176,6 +176,7 @@ public actor MySQLSQLConnection: SQLConnection {
             // can only run over the text protocol. It reports no affected-row count, which
             // none of those statements has anyway. A statement with parameters cannot take
             // this path: the text protocol would run it with the placeholders unbound.
+            // The same route rescues a prepare *response* that will not decode.
             collected.withLockedValue { $0 = ([], []) }
             try await connection.simpleQuery(sql, onRow: collect).get()
         }
@@ -194,9 +195,23 @@ public actor MySQLSQLConnection: SQLConnection {
         )
     }
 
-    /// True for MySQL's "not supported in the prepared statement protocol yet" (1295),
-    /// which several `SHOW` and administrative statements still raise.
+    /// True for the two ways the prepared protocol can refuse a statement.
+    ///
+    /// MySQL's own 1295, and the short `COM_STMT_PREPARE` response MySQL 9.x returns for
+    /// some administrative statements — `SET GLOBAL` and `SET PERSIST` among them — which
+    /// mysql-nio reports as `missingNumParams`. Nothing has run at that point, so a
+    /// text-protocol retry repeats no work; without it the caller is shown a protocol error
+    /// instead of the server's own refusal.
+    ///
+    /// Only that one case. The other `COM_STMT_PREPARE_OK` errors mean the server answered
+    /// with something else entirely — `missingStatus` is what an ERR packet looks like —
+    /// and those belong to the caller, not to a retry that would hide them.
     static func isUnsupportedByPreparedProtocol(_ error: any Error) -> Bool {
+        if let decode = error as? MySQLProtocol.COM_STMT_PREPARE_OK.Error,
+            case .missingNumParams = decode
+        {
+            return true
+        }
         guard let mysql = error as? MySQLError, case let .server(packet) = mysql else { return false }
         return packet.errorCode.rawValue == 1_295
     }

@@ -649,6 +649,63 @@ extension MySQLIntrospector: ServerIntrospector {
         return ddl + ";\n"
     }
 
+    public func events(in schema: SchemaRef) async throws -> [EventInfo] {
+        // `mysql.event` is off limits to most accounts; this view self-filters.
+        let result = try await query(
+            """
+            SELECT EVENT_NAME, EVENT_TYPE, EXECUTE_AT, INTERVAL_VALUE, INTERVAL_FIELD,
+                   STARTS, ENDS, STATUS, ON_COMPLETION, LAST_EXECUTED, TIME_ZONE,
+                   DEFINER, EVENT_COMMENT, EVENT_DEFINITION
+            FROM information_schema.EVENTS
+            WHERE EVENT_SCHEMA = ?
+            ORDER BY EVENT_NAME
+            """, [.string(schema.database)])
+        return result.rows.compactMap { row in
+            guard let name = row[0].text else { return nil }
+            // Timestamps stay the server's own text.
+            let comment = row[12].text
+            return EventInfo(
+                name: name,
+                scheduleKind: EventScheduleKind(rawValue: row[1].text ?? "") ?? .recurring,
+                executeAt: row[2].text,
+                intervalValue: row[3].text,
+                intervalField: row[4].text,
+                starts: row[5].text,
+                ends: row[6].text,
+                status: row[7].text ?? "",
+                onCompletion: row[8].text ?? "",
+                lastExecuted: row[9].text,
+                timeZone: row[10].text ?? "",
+                definer: row[11].text ?? "",
+                comment: (comment?.isEmpty ?? true) ? nil : comment,
+                definition: row[13].text ?? "")
+        }
+    }
+
+    public func eventDefinition(in schema: SchemaRef, name: String) async throws -> String {
+        let qualified = Identifier.qualify([schema.database, name], dialect: .mysql)
+        let result = try await query("SHOW CREATE EVENT \(qualified)")
+        // Columns: Event, sql_mode, time_zone, Create Event, … — one further along than
+        // `SHOW CREATE PROCEDURE`; index 2 would quietly return the time zone.
+        guard let row = result.rows.first, row.count >= 4, let ddl = row[3].text, !ddl.isEmpty else {
+            throw DBError.server(
+                ServerError(message: "\(name) was not found, or it is not visible to this account"))
+        }
+        return ddl + ";\n"
+    }
+
+    public func schedulerState() async throws -> SchedulerState {
+        let result = try await query("SELECT @@global.event_scheduler")
+        guard let text = result.rows.first?.first?.text else { return .unsupported }
+        // ON / OFF / DISABLED; some builds report the first two as 1 / 0.
+        switch text.uppercased() {
+        case "ON", "1": return .on
+        case "OFF", "0": return .off
+        case "DISABLED": return .disabled
+        default: return .unsupported
+        }
+    }
+
     static func duration(_ seconds: Int64) -> String {
         let hours = seconds / 3_600
         let minutes = (seconds % 3_600) / 60

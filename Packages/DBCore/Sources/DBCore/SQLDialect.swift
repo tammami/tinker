@@ -29,6 +29,10 @@ public enum SQLDialect: String, Sendable, Hashable, Codable, CaseIterable {
     /// True when the server has login accounts to list and manage.
     public var hasUserAccounts: Bool { self != .sqlite }
 
+    /// Whether the server itself can run statements on a schedule. MySQL and MariaDB have
+    /// the event scheduler; PostgreSQL needs an extension and SQLite has no server at all.
+    public var hasScheduledEvents: Bool { self == .mysql }
+
     /// The name of the one schema every table lives in for a dialect without a schema
     /// layer of its own, or nil when the schema comes from the catalog.
     public var fixedSchemaName: String? { self == .sqlite ? SchemaRef.sqliteMainSchema : nil }

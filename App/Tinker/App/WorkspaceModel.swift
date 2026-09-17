@@ -68,6 +68,8 @@ public struct SourceObject: Sendable, Hashable {
     public enum Kind: Sendable, Hashable {
         case view(TableRef)
         case routine(schema: SchemaRef, name: String, signature: String, kind: RoutineKind)
+        /// A MySQL scheduled event.
+        case event(schema: SchemaRef, name: String)
     }
 
     public let kind: Kind
@@ -78,6 +80,7 @@ public struct SourceObject: Sendable, Hashable {
         switch kind {
         case let .view(ref): ref.name
         case let .routine(_, name, _, _): name
+        case let .event(_, name): name
         }
     }
 
@@ -85,6 +88,7 @@ public struct SourceObject: Sendable, Hashable {
         switch kind {
         case let .view(ref): ref.schemaRef
         case let .routine(schema, _, _, _): schema
+        case let .event(schema, _): schema
         }
     }
 }
@@ -201,6 +205,8 @@ public final class WorkspaceModel {
     public var isQuickOpenPresented = false
     /// The table designer's two entry points.
     public var isNewTablePresented = false
+    /// The event editor's request, when one is open. MySQL and MariaDB only.
+    public var pendingEventEditor: EventEditorRequest?
     /// Where a new table goes when the request came from the sidebar rather than a tab.
     public var newTableContext: (connectionID: UUID, schema: SchemaRef)?
     public var isStructureSyncPresented = false

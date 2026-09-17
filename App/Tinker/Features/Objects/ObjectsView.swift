@@ -12,6 +12,14 @@ public final class ObjectsController {
 
     public private(set) var objects: [TableInfo] = []
     public private(set) var routines: [RoutineInfo] = []
+    /// MySQL and MariaDB only; empty everywhere else.
+    public private(set) var events: [EventInfo] = []
+    /// Whether the server would actually run any of them.
+    public private(set) var schedulerState: SchedulerState = .unsupported
+    /// What the server said when the events could not be read.
+    public private(set) var eventsNote: String?
+    /// What the server said when the scheduler's state could not be read.
+    public private(set) var schedulerNote: String?
     public private(set) var isLoading = false
     public private(set) var errorText: String?
     public var search = ""
@@ -36,6 +44,7 @@ public final class ObjectsController {
         case tables = "Tables"
         case views = "Views"
         case routines = "Functions"
+        case events = "Events"
 
         public var id: String { rawValue }
     }
@@ -65,6 +74,31 @@ public final class ObjectsController {
             async let routinesRead = session.introspection(.routines(schema)) { try await $0.routines(in: schema) }
             objects = try await tablesRead
             routines = (try? await routinesRead) ?? []
+            if dialect.hasScheduledEvents {
+                // A refused read is said, not swallowed: an account without the EVENT
+                // privilege would otherwise see the section simply vanish.
+                do {
+                    events = try await session.introspection(.events(schema)) {
+                        guard let server = $0.server else { return [EventInfo]() }
+                        return try await server.events(in: schema)
+                    }
+                    eventsNote = nil
+                } catch {
+                    events = []
+                    eventsNote = (error as? DBError)?.errorDescription ?? String(describing: error)
+                }
+                do {
+                    schedulerState = try await session.withLease { connection in
+                        guard let server = connection.introspector.server else {
+                            return SchedulerState.unsupported
+                        }
+                        return try await server.schedulerState()
+                    }
+                } catch {
+                    schedulerState = .unsupported
+                    schedulerNote = (error as? DBError)?.errorDescription ?? String(describing: error)
+                }
+            }
             errorText = nil
         } catch {
             errorText = (error as? DBError)?.errorDescription ?? String(describing: error)
@@ -78,7 +112,7 @@ public final class ObjectsController {
             case .all: objects
             case .tables: objects.filter { $0.kind.isEditable }
             case .views: objects.filter { $0.kind == .view || $0.kind == .materializedView }
-            case .routines: []
+            case .routines, .events: []
             }
         let filtered =
             search.isEmpty
@@ -106,6 +140,33 @@ public final class ObjectsController {
             ? routines
             : routines.filter { FuzzyMatch.matches(search, in: $0.name) }
         return filtered.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    public var visibleEvents: [EventInfo] {
+        guard kindFilter == .events || kindFilter == .all else { return [] }
+        let filtered =
+            search.isEmpty ? events : events.filter { FuzzyMatch.matches(search, in: $0.name) }
+        return filtered.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// Events is not offered where it could only ever be empty.
+    public var kindFilters: [KindFilter] {
+        dialect.hasScheduledEvents ? KindFilter.allCases : KindFilter.allCases.filter { $0 != .events }
+    }
+
+    /// Said once above the list, for the reason the editor says it.
+    public var schedulerWarning: String? {
+        if let eventsNote { return "The events could not be read: \(eventsNote)" }
+        if let schedulerNote { return "The scheduler's state could not be read: \(schedulerNote)" }
+        guard !events.isEmpty else { return nil }
+        switch schedulerState {
+        case .on, .unsupported: return nil
+        case .off:
+            return "The server's event scheduler is off. None of these events will run until it is turned on."
+        case .disabled:
+            return
+                "The server was started with the event scheduler disabled. None of these events will run until it is restarted with it enabled."
+        }
     }
 
     public func sort(by column: Column) {
@@ -147,7 +208,7 @@ public struct ObjectsView: View {
                 }
                 BarDivider()
                 Picker("Kind", selection: $controller.kindFilter) {
-                    ForEach(ObjectsController.KindFilter.allCases) { Text($0.rawValue).tag($0) }
+                    ForEach(controller.kindFilters) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -194,9 +255,11 @@ public struct ObjectsView: View {
             StatusBarView {
                 let tables = controller.visible.count
                 let routines = controller.visibleRoutines.count
+                let events = controller.visibleEvents.count
                 Text(
                     "\(tables) object\(tables == 1 ? "" : "s")"
                         + (routines > 0 ? ", \(routines) function\(routines == 1 ? "" : "s")" : "")
+                        + (events > 0 ? ", \(events) event\(events == 1 ? "" : "s")" : "")
                 )
                 .monospacedDigit()
                 Spacer()
@@ -230,7 +293,66 @@ public struct ObjectsView: View {
                         .background(.bar)
                 }
             }
+            if !controller.visibleEvents.isEmpty || controller.schedulerWarning != nil {
+                Section {
+                    ForEach(Array(controller.visibleEvents.enumerated()), id: \.element.id) {
+                        index, event in
+                        eventRow(event, index: index)
+                    }
+                } header: {
+                    VStack(alignment: .leading, spacing: 0) {
+                        SectionHeading(text: "Scheduled events")
+                        if let warning = controller.schedulerWarning {
+                            Label(warning, systemImage: Icon.warning)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, DesignTokens.Spacing.md)
+                                .padding(.bottom, DesignTokens.Spacing.xs)
+                        }
+                    }
+                    .background(.bar)
+                }
+            }
         }
+    }
+
+    private func eventRow(_ event: EventInfo, index: Int) -> some View {
+        HStack(spacing: 0) {
+            cell(widths[0]) {
+                HStack(spacing: DesignTokens.Spacing.xs + 2) {
+                    Image(systemName: Icon.event)
+                        .foregroundStyle(event.isEnabled ? .orange : Color.secondary)
+                        .frame(width: DesignTokens.Metrics.iconWidth)
+                    Text(event.name)
+                }
+            }
+            cell(widths[1]) { Text(event.scheduleSummary).foregroundStyle(.secondary) }
+            cell(nil) {
+                // The server's own words, and its own text for the time.
+                Text(
+                    event.status.capitalized
+                        + (event.lastExecuted.map { " · last ran \($0)" } ?? " · never run")
+                )
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+            }
+        }
+        .font(.callout)
+        .frame(height: 26)
+        .background(index.isMultiple(of: 2) ? Color.clear : Color(nsColor: .alternatingContentBackgroundColors[1]))
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { openEvent(event) }
+        .contextMenu {
+            Button {
+                openEvent(event)
+            } label: {
+                Label("Open Definition", systemImage: Icon.source)
+            }
+        }
+    }
+
+    private func openEvent(_ event: EventInfo) {
+        onOpenSource(SourceObject(kind: .event(schema: controller.schema, name: event.name)))
     }
 
     private var header: some View {

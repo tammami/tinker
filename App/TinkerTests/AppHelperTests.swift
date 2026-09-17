@@ -202,6 +202,160 @@ struct ThreeColumnLoader: GridDataLoader {
     func exactCount(filter: [FilterRule]) async throws -> Int64 { 1 }
 }
 
+/// When the grid opens a cell for typing on its own.
+@MainActor
+final class GridInsertTypingTests: XCTestCase {
+    private func rule(
+        _ selection: GridSelection, editable: Bool = true, editor: Bool = false, insert: Bool = true
+    ) -> Bool {
+        GridCoordinator.opensForTyping(
+            selection: selection, isEditable: editable, hasEditor: editor, isPendingInsertRow: insert)
+    }
+
+    /// A row being added has nothing in it, so landing on a cell means typing in it.
+    func testACellOfARowBeingAddedOpensForTyping() {
+        XCTAssertTrue(rule(GridSelection(row: 3, column: 0)))
+        XCTAssertTrue(rule(GridSelection(row: 3, column: 2)))
+    }
+
+    func testAnExistingRowStillWaitsToBeAsked() {
+        XCTAssertFalse(rule(GridSelection(row: 1, column: 0), insert: false))
+    }
+
+    func testNothingOpensOverAnEditorOrOnAReadOnlyGrid() {
+        XCTAssertFalse(rule(GridSelection(row: 3, column: 0), editor: true))
+        XCTAssertFalse(rule(GridSelection(row: 3, column: 0), editable: false))
+    }
+
+    /// Shift-extending a span, or selecting whole rows or columns, is not typing.
+    func testASpanOrAWholeRowIsNotTyping() {
+        var acrossColumns = GridSelection(row: 3, column: 0)
+        acrossColumns.focusColumn = 2
+        XCTAssertFalse(rule(acrossColumns))
+
+        var acrossRows = GridSelection(row: 3, column: 0)
+        acrossRows.focusRow = 5
+        XCTAssertFalse(rule(acrossRows), "a span down the rows is not typing either")
+
+        var rows = GridSelection(row: 3, column: 0)
+        rows.mode = .rows
+        XCTAssertFalse(rule(rows))
+
+        var columns = GridSelection(row: 3, column: 0)
+        columns.mode = .columns
+        XCTAssertFalse(rule(columns))
+    }
+}
+
+/// The event editor's own state machine, without a server.
+@MainActor
+final class EventEditorControllerTests: XCTestCase {
+    private func controller(_ mode: EventEditorRequest.Mode = .create) -> EventEditorController {
+        EventEditorController(
+            request: EventEditorRequest(
+                mode: mode, connectionID: UUID(), schema: SchemaRef.mysql("shop")),
+            environment: AppEnvironment(secrets: EphemeralSecretStore()))
+    }
+
+    func testTheFormBuildsTheStatementItPreviews() {
+        let editor = controller()
+        editor.name = "nightly_clear"
+        editor.intervalValue = "1"
+        editor.intervalField = .day
+        editor.starts = "2099-01-01 00:00:00"
+        editor.body = "TRUNCATE TABLE staging"
+        let sql = try? XCTUnwrap(editor.statement)
+        XCTAssertEqual(
+            sql,
+            """
+            CREATE EVENT `shop`.`nightly_clear`
+            ON SCHEDULE EVERY 1 DAY
+            STARTS '2099-01-01 00:00:00'
+            ON COMPLETION PRESERVE
+            ENABLE
+            DO TRUNCATE TABLE staging
+            """)
+        XCTAssertNil(editor.problem)
+    }
+
+    func testAnIncompleteFormReportsWhyRatherThanOfferingAStatement() {
+        let editor = controller()
+        XCTAssertNil(editor.statement)
+        XCTAssertEqual(editor.problem, EventOperationsError.emptyName.description)
+        editor.name = "nightly"
+        XCTAssertEqual(editor.problem, EventOperationsError.emptyBody.description)
+        editor.body = "SELECT 1"
+        XCTAssertNil(editor.problem)
+        editor.intervalValue = "0"
+        XCTAssertNotNil(editor.problem, "a zero interval is refused before it is sent")
+    }
+
+    func testEditingAltersInPlaceAndCanRename() {
+        let editor = controller(.edit(name: "old_name"))
+        editor.name = "new_name"
+        editor.body = "SELECT 1"
+        let sql = editor.statement ?? ""
+        XCTAssertTrue(sql.hasPrefix("ALTER EVENT `shop`.`old_name`"), sql)
+        XCTAssertTrue(sql.contains("RENAME TO `shop`.`new_name`"), sql)
+        XCTAssertTrue(editor.isEditing)
+    }
+
+    /// Each server state gets its own words.
+    func testEachSchedulerStateGetsItsOwnWarning() {
+        XCTAssertNil(EventEditorController.schedulerWarning(for: .on, persists: true))
+        XCTAssertNil(EventEditorController.schedulerWarning(for: .unsupported, persists: true))
+
+        let off = EventEditorController.schedulerWarning(for: .off, persists: true)
+        XCTAssertTrue(off?.message.contains("is off") == true)
+        XCTAssertTrue(off?.hint.contains("stays on after a restart") == true)
+
+        let notPersisted = EventEditorController.schedulerWarning(for: .off, persists: false)
+        XCTAssertTrue(
+            notPersisted?.hint.contains("my.cnf") == true,
+            "a server without SET PERSIST is told so")
+
+        let disabled = EventEditorController.schedulerWarning(for: .disabled, persists: true)
+        XCTAssertTrue(disabled?.hint.contains("restarted") == true)
+        XCTAssertFalse(
+            disabled?.hint.contains("privilege") == true,
+            "no privilege moves a disabled scheduler")
+    }
+
+    func testATimeAlreadyPastIsPointedOut() {
+        // Two days either side, not decades: far enough that no time zone flips the answer,
+        // near enough that the comparison is actually being exercised.
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        let past = formatter.string(from: now.addingTimeInterval(-48 * 3600))
+        let future = formatter.string(from: now.addingTimeInterval(48 * 3600))
+        XCTAssertNotNil(EventEditorController.pastScheduleHint(past, repeats: false, now: now))
+        XCTAssertNil(EventEditorController.pastScheduleHint(future, repeats: false, now: now))
+        XCTAssertNil(EventEditorController.pastScheduleHint("", repeats: true, now: now))
+        XCTAssertNil(
+            EventEditorController.pastScheduleHint("not a time", repeats: true, now: now),
+            "unparseable text is left to the server")
+    }
+
+    /// Only MySQL gets the folder, the segment and the menu item.
+    func testOnlyMySQLOffersEvents() {
+        XCTAssertTrue(SQLDialect.mysql.hasScheduledEvents)
+        XCTAssertFalse(SQLDialect.postgresql.hasScheduledEvents)
+        XCTAssertFalse(SQLDialect.sqlite.hasScheduledEvents)
+        XCTAssertTrue(SidebarRow.newObjectOrder(for: .mysql).contains(.event))
+        XCTAssertFalse(SidebarRow.newObjectOrder(for: .postgresql).contains(.event))
+        XCTAssertFalse(SidebarRow.newObjectOrder(for: .sqlite).contains(.event))
+    }
+
+    func testTheEventsFolderSaysWhenTheSchedulerIsNotRunning() {
+        XCTAssertNil(SidebarModel.schedulerNote(.on))
+        XCTAssertNil(SidebarModel.schedulerNote(.unsupported))
+        XCTAssertEqual(SidebarModel.schedulerNote(.off), "scheduler off")
+        XCTAssertEqual(SidebarModel.schedulerNote(.disabled), "scheduler disabled")
+    }
+}
+
 struct EmptyLoader: GridDataLoader {
     func loadPage(_ request: PageRequest) async throws -> LoadedPage { LoadedPage(columns: [], rows: []) }
     func exactCount(filter: [FilterRule]) async throws -> Int64 { 0 }

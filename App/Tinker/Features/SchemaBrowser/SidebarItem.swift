@@ -12,6 +12,9 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
         case table(connection: UUID, info: TableInfo)
         case routineFolder(connection: UUID, schema: SchemaRef)
         case routine(connection: UUID, schema: SchemaRef, name: String, signature: String)
+        /// MySQL and MariaDB only: the database's scheduled events.
+        case eventFolder(connection: UUID, schema: SchemaRef)
+        case event(connection: UUID, schema: SchemaRef, name: String, isEnabled: Bool)
         /// Shown while a node's children are being read.
         case loading(parent: String)
         /// Shown when reading a node's children failed, carrying the server's words.
@@ -47,7 +50,8 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
         switch kind {
         case let .connection(id), let .database(id, _), let .schema(id, _),
             let .tableFolder(id, _, _), let .table(id, _),
-            let .routineFolder(id, _), let .routine(id, _, _, _):
+            let .routineFolder(id, _), let .routine(id, _, _, _),
+            let .eventFolder(id, _), let .event(id, _, _, _):
             id
         case .group, .loading, .failure:
             nil

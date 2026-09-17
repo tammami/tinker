@@ -417,6 +417,31 @@ public struct CollationInfo: Sendable, Hashable, Codable, Identifiable {
     public var id: String { characterSet.map { "\($0).\(name)" } ?? name }
 }
 
+/// A type the database's own users declared, for the designer's type list.
+///
+/// PostgreSQL enums are the case that matters: a column can be declared `mood`, and the
+/// built-in list has no such name. MySQL and SQLite have no user-defined types.
+public struct UserTypeInfo: Sendable, Hashable, Codable, Identifiable {
+    public enum Kind: String, Sendable, Hashable, Codable {
+        case enumeration
+        case domain
+        case composite
+    }
+
+    public let name: String
+    public let kind: Kind
+    /// The labels of an enum, in the order the server keeps them. Empty for other kinds.
+    public let labels: [String]
+
+    public init(name: String, kind: Kind, labels: [String] = []) {
+        self.name = name
+        self.kind = kind
+        self.labels = labels
+    }
+
+    public var id: String { name }
+}
+
 public enum RoutineKind: String, Sendable, Hashable, Codable, CaseIterable {
     case function, procedure, aggregate, window, trigger
 }
@@ -447,6 +472,106 @@ public struct RoutineInfo: Sendable, Hashable, Codable, Identifiable {
     }
 
     public var id: String { "\(name)(\(signature))" }
+}
+
+/// Whether a scheduled event runs once or repeats.
+public enum EventScheduleKind: String, Sendable, Hashable, Codable, CaseIterable {
+    /// `ON SCHEDULE AT <timestamp>`.
+    case oneTime = "ONE TIME"
+    /// `ON SCHEDULE EVERY <value> <field>`.
+    case recurring = "RECURRING"
+}
+
+/// Whether the server's event-scheduler thread is running. An event stored while this is
+/// `off` or `disabled` never fires, and the server says nothing about it.
+public enum SchedulerState: String, Sendable, Hashable, Codable {
+    case on = "ON"
+    /// Off, but it can be switched on at runtime by an account with the privilege.
+    case off = "OFF"
+    /// Fixed at server start; no statement can change it, only a restart.
+    case disabled = "DISABLED"
+    /// The engine has no event scheduler at all.
+    case unsupported = "UNSUPPORTED"
+}
+
+/// One scheduled event, as `information_schema.EVENTS` reports it. Timestamps stay the
+/// server's own text: a `Date` here would reinterpret them in the Mac's zone.
+public struct EventInfo: Sendable, Hashable, Codable, Identifiable {
+    public let name: String
+    public let scheduleKind: EventScheduleKind
+    /// The `AT` timestamp of a one-time event. Nil for a recurring one.
+    public let executeAt: String?
+    /// The count in `EVERY <value> <field>`. Nil for a one-time event.
+    public let intervalValue: String?
+    /// The unit in `EVERY <value> <field>`, e.g. `DAY`. Nil for a one-time event.
+    public let intervalField: String?
+    public let starts: String?
+    public let ends: String?
+    /// `ENABLED`, `DISABLED` or `SLAVESIDE_DISABLED`, in the server's own words.
+    public let status: String
+    /// `PRESERVE` or `NOT PRESERVE`; the latter deletes itself after its last run.
+    public let onCompletion: String
+    /// When the server last ran it, or nil if it never has.
+    public let lastExecuted: String?
+    /// The zone the schedule is read in: the session's zone when the event was made.
+    public let timeZone: String
+    /// The account the body runs as.
+    public let definer: String
+    public let comment: String?
+    /// The statement after `DO`, as stored.
+    public let definition: String
+
+    public init(
+        name: String,
+        scheduleKind: EventScheduleKind,
+        executeAt: String? = nil,
+        intervalValue: String? = nil,
+        intervalField: String? = nil,
+        starts: String? = nil,
+        ends: String? = nil,
+        status: String,
+        onCompletion: String,
+        lastExecuted: String? = nil,
+        timeZone: String,
+        definer: String,
+        comment: String? = nil,
+        definition: String
+    ) {
+        self.name = name
+        self.scheduleKind = scheduleKind
+        self.executeAt = executeAt
+        self.intervalValue = intervalValue
+        self.intervalField = intervalField
+        self.starts = starts
+        self.ends = ends
+        self.status = status
+        self.onCompletion = onCompletion
+        self.lastExecuted = lastExecuted
+        self.timeZone = timeZone
+        self.definer = definer
+        self.comment = comment
+        self.definition = definition
+    }
+
+    public var id: String { name }
+
+    /// True only for `ENABLED`; `SLAVESIDE_DISABLED` is not.
+    public var isEnabled: Bool { status == "ENABLED" }
+
+    /// True when the event removes itself after its last run.
+    public var deletesItself: Bool { onCompletion.uppercased().contains("NOT PRESERVE") }
+
+    /// The schedule in one line, the way the list column shows it.
+    public var scheduleSummary: String {
+        switch scheduleKind {
+        case .oneTime:
+            return executeAt.map { "AT \($0)" } ?? "AT ?"
+        case .recurring:
+            let value = intervalValue ?? "?"
+            let field = intervalField ?? "?"
+            return "EVERY \(value) \(field)"
+        }
+    }
 }
 
 /// Reads a server's catalogs.
@@ -481,6 +606,14 @@ public protocol SchemaIntrospector: Sendable {
     func partitioning(of table: TableRef) async throws -> PartitioningInfo?
     /// Collations the server offers, for the column editor's picker.
     func collations(in database: String) async throws -> [CollationInfo]
+    /// Types this schema's own users declared, for the designer's type list. Empty on an
+    /// engine that has none.
+    func userTypes(in schema: SchemaRef) async throws -> [UserTypeInfo]
+}
+
+extension SchemaIntrospector {
+    /// Most engines have no user-defined types, so they need not say so.
+    public func userTypes(in schema: SchemaRef) async throws -> [UserTypeInfo] { [] }
 }
 
 extension SchemaIntrospector {
@@ -614,6 +747,24 @@ public protocol ServerIntrospector: Sendable {
     ) async throws -> String
     /// What a user may do, one line per grant, as the server reports it.
     func grants(for user: ServerUserInfo) async throws -> [String]
+    /// The scheduled events in one schema. Empty where the engine has no scheduler.
+    func events(in schema: SchemaRef) async throws -> [EventInfo]
+    /// The `CREATE EVENT` statement for one event, in the engine's own rendering.
+    func eventDefinition(in schema: SchemaRef, name: String) async throws -> String
+    /// Whether the server would actually run a schedule.
+    func schedulerState() async throws -> SchedulerState
+}
+
+/// Defaults for the engines with no scheduler. These back *declared* requirements, so a
+/// driver that implements them is still reached through the existential.
+extension ServerIntrospector {
+    public func events(in schema: SchemaRef) async throws -> [EventInfo] { [] }
+
+    public func eventDefinition(in schema: SchemaRef, name: String) async throws -> String {
+        throw DBError.protocolError("This engine has no scheduled events")
+    }
+
+    public func schedulerState() async throws -> SchedulerState { .unsupported }
 }
 
 extension SchemaIntrospector {

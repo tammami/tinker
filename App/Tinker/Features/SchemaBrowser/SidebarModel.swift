@@ -14,6 +14,8 @@ public final class SidebarModel {
     public private(set) var roots: [SidebarItem] = []
     public private(set) var expanded: Set<SidebarItem.ID> = []
     public private(set) var states: [UUID: ConnectionState] = [:]
+    /// MySQL and MariaDB share a dialect, so only a live server says which one this is.
+    public private(set) var flavors: [UUID: ServerFlavor] = [:]
     /// The tables of every open branch, for Quick Open and the command palette.
     ///
     /// Derived from the tree rather than remembered: a table is offered while its
@@ -164,9 +166,16 @@ public final class SidebarModel {
                     continue
                 }
                 states[connectionID] = state
+                if case .connected = state, flavors[connectionID] == nil,
+                    let version = try? await session.connect()
+                {
+                    flavors[connectionID] = version.flavor
+                }
             }
         }
     }
+
+    public func flavor(of connectionID: UUID) -> ServerFlavor? { flavors[connectionID] }
 
     /// The main session's own state, kept apart so a database session's failure can
     /// colour the dot without losing what the main session last said.
@@ -297,7 +306,7 @@ public final class SidebarModel {
                     id: "\(item.id)/error",
                     kind: .failure(parent: item.id, message: message),
                     title: message,
-                    symbolName: "exclamationmark.triangle"
+                    symbolName: Icon.warning
                 )
             ]
         }
@@ -337,7 +346,7 @@ public final class SidebarModel {
                     kind: .database(connection: id, name: database.name),
                     title: database.name,
                     subtitle: database.isCurrent ? "current" : nil,
-                    symbolName: "internaldrive",
+                    symbolName: Icon.database,
                     children: []
                 )
             }
@@ -369,7 +378,7 @@ public final class SidebarModel {
                     id: "\(id.uuidString)/db/\(name)/schema/\(schema.name)",
                     kind: .schema(connection: id, ref: schema.ref),
                     title: schema.name,
-                    symbolName: "square.stack.3d.up",
+                    symbolName: Icon.schema,
                     children: []
                 )
             }
@@ -404,9 +413,23 @@ public final class SidebarModel {
                     id: "\(item.id)/routines",
                     kind: .routineFolder(connection: id, schema: ref),
                     title: "Functions",
-                    symbolName: "function",
+                    symbolName: Icon.function,
                     children: []
                 ))
+            // MySQL and MariaDB only. The row carries the scheduler's state: an event
+            // stored while it is off never fires, and the server says nothing.
+            if session.config.dialect.hasScheduledEvents {
+                let state = await schedulerState(of: session)
+                folders.append(
+                    SidebarItem(
+                        id: "\(item.id)/events",
+                        kind: .eventFolder(connection: id, schema: ref),
+                        title: "Events",
+                        subtitle: Self.schedulerNote(state),
+                        symbolName: Icon.event,
+                        children: []
+                    ))
+            }
             return folders
 
         case let .routineFolder(id, ref):
@@ -420,7 +443,25 @@ public final class SidebarModel {
                     ),
                     title: routine.name,
                     subtitle: routine.signature.isEmpty ? nil : "(\(routine.signature))",
-                    symbolName: routine.kind == .procedure ? "gearshape.2" : "function"
+                    symbolName: routine.kind.symbolName
+                )
+            }
+
+        case let .eventFolder(id, ref):
+            guard let session = environment.session(for: id, schema: ref) else { return [] }
+            let events = try await session.introspection(.events(ref)) {
+                guard let server = $0.server else { return [EventInfo]() }
+                return try await server.events(in: ref)
+            }
+            return Self.byName(events, \.name).map { event in
+                SidebarItem(
+                    id: "\(item.id)/\(event.name)",
+                    kind: .event(
+                        connection: id, schema: ref, name: event.name, isEnabled: event.isEnabled),
+                    title: event.name,
+                    subtitle: event.isEnabled
+                        ? event.scheduleSummary : "\(event.scheduleSummary) · disabled",
+                    symbolName: Icon.event
                 )
             }
 
@@ -431,8 +472,29 @@ public final class SidebarModel {
             // draw as open and empty while its badge still counted them.
             return item.children ?? []
 
-        case .table, .routine, .loading, .failure:
+        case .table, .routine, .event, .loading, .failure:
             return []
+        }
+    }
+
+    /// A failure here must not hide the folder, so it answers `.unsupported`.
+    private func schedulerState(of session: ConnectionSession) async -> SchedulerState {
+        do {
+            return try await session.withLease { connection in
+                guard let server = connection.introspector.server else { return .unsupported }
+                return try await server.schedulerState()
+            }
+        } catch {
+            return .unsupported
+        }
+    }
+
+    /// Nothing when the scheduler is running: a badge always there stops being read.
+    static func schedulerNote(_ state: SchedulerState) -> String? {
+        switch state {
+        case .on, .unsupported: nil
+        case .off: "scheduler off"
+        case .disabled: "scheduler disabled"
         }
     }
 

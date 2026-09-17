@@ -172,7 +172,7 @@ enum HelpContent {
                 HelpSection(
                     heading: "Results",
                     paragraphs: [
-                        "Each statement gets a result tab: Message, Result, Profile and Status. A SELECT pages on the server like a table. ⌘⌥← and ⌘⌥→ move between results."
+                        "Each statement gets a result tab: Rows, Chart, Message, Profile and Status, plus Map when there is a geometry column. Chart draws the rows as a bar, line, area, pie or scatter, and never offers a key such as id as a value. A SELECT pages on the server like a table. ⌘⌥← and ⌘⌥→ move between results."
                     ]),
                 HelpSection(
                     heading: "Snippets and history",

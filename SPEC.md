@@ -326,6 +326,24 @@ public protocol SchemaIntrospector: Sendable {
 }
 ```
 
+Scheduled events (§11.5) are read through `ServerIntrospector`, beside the other
+server-level reads, because only MySQL and MariaDB have them:
+
+```swift
+    func events(in schema: SchemaRef) async throws -> [EventInfo]
+    func eventDefinition(in schema: SchemaRef, name: String) async throws -> String
+    func schedulerState() async throws -> SchedulerState   // on / off / disabled / unsupported
+```
+
+All three are protocol requirements with defaults in an extension, so an engine without a
+scheduler answers `[]`, throws, and reports `.unsupported` without every driver having to
+spell them out. They must be requirements and not extension-only methods: an extension-only
+method is dispatched statically through the existential, so the driver's own implementation
+would never run.
+
+`EventInfo` keeps every timestamp as the server's own text. A schedule means what the
+server's time zone says it means, and parsing it into a `Date` reinterprets it in the Mac's.
+
 Model types (`TableInfo`, `ColumnInfo` etc.) carry: name, kind, comment, and for columns: ordinal, nativeType, nullable, default expression text, isPrimaryKey, isAutoIncrement/identity, isGenerated, character set/collation (MySQL). Keep them plain structs, `Sendable`, `Hashable`, `Identifiable` by fully-qualified name.
 
 Introspection results are cached per session with explicit invalidation (user "Refresh", or after the app itself executes DDL). Never auto-refresh on a timer.
@@ -495,6 +513,39 @@ it holds, so a database can be surveyed without expanding a tree node at a time.
 
 ---
 
+### 11.5 Scheduled events (MySQL and MariaDB only)
+
+The server's own scheduler, listed beside Tables, Views and Functions. A schedule set here
+keeps running with the app closed and the Mac off, because the server is what runs it.
+
+- Gated on `SQLDialect.hasScheduledEvents`, never on a dialect comparison at the call site.
+  PostgreSQL needs an extension for this and SQLite has no server, so neither shows the
+  folder, the Objects segment, or the "New Event…" item.
+- An **Events** folder in the sidebar per database, an **Events** segment in the Objects
+  tab, and a definition tab for one event's `CREATE EVENT`.
+- The editor is a sheet: name, `AT` or `EVERY <n> <unit>`, `STARTS`/`ENDS`, `ON COMPLETION`,
+  enabled, comment, and the statement to run. It edits in place rather than handing the
+  work to a query tab as view and routine definitions do, because an event body may contain
+  semicolons and the MySQL splitter does not track `BEGIN … END`. For the same reason the
+  generated statement is sent whole on a leased connection, never through the splitter.
+- An edit is an `ALTER EVENT`, rename included — not a drop and a recreate, so a failure
+  half way cannot lose the event. `DEFINER` is never written: setting one needs `SUPER`.
+- **The scheduler's state is reported before anything is saved.** MySQL stores an event
+  whose scheduler is off without a word of complaint and then never fires it. The state has
+  three values, not two: `ON`, `OFF`, and `DISABLED` — the last is fixed at server start and
+  no statement can change it, so that case offers no Enable button and says the server must
+  be restarted. It is shown on the Events folder row, above the Objects tab's event section,
+  and as a banner in the editor.
+- Enabling uses `SET PERSIST` on MySQL 8.0 and later so it survives a restart, and
+  `SET GLOBAL` elsewhere, where the person is told it will not. It is a whole-server write
+  and goes through the production gate. A refusal is shown verbatim: that message names the
+  privilege to ask a DBA for.
+- The editor shows the server's time zone beside the schedule fields, and says so when a
+  start time has already passed. Those are the second and third reasons an event looks like
+  it did nothing.
+
+---
+
 ## 12. Data grid feature (Table tab and results)
 
 This is the highest-risk component. It is an `NSTableView` (view-based, `usesAutomaticRowHeights = false`, fixed row height 22pt) inside an `NSScrollView`, wrapped for SwiftUI. One implementation serves both Table tabs and query results; Table tabs add editing and paging controls.
@@ -585,6 +636,12 @@ Right-side panel (`⌘⌥I`) showing the focused cell: column name, native type,
 - Error position from `ServerError.position` maps to a red squiggle until the text changes.
 - Format SQL (`⌘⇧I`): a conservative formatter (uppercase keywords, one clause per line, indent sub-selects). Ship a small in-house implementation; do not pull a large dependency.
 
+The editor and the results share a splitter. It runs across by default — editor above,
+results below — and a control in the editor's bar turns it side by side, which is the
+better use of a wide screen. The choice is a setting and survives a relaunch.
+
+Beautify formats the selection when there is one and the whole document otherwise.
+
 ### 13.1a The tab's session
 
 A query tab carries its own connection and database, chosen from two pickers in its
@@ -611,10 +668,19 @@ toolbar. Statements run in that session, so a query reads `SELECT * FROM t` rath
 
 ### 13.2a Result panes
 
-Each executed statement produces a result with four panes, chosen by a segmented control:
+Each executed statement produces a result whose panes are chosen by a segmented control.
+Two of them appear only when the result can carry them, so the control never offers a pane
+that would be empty:
 
 - **Message** — the statement and what the server said, with its elapsed time.
 - **Result N** — the rows. One pane per result set the statement produced.
+- **Chart** — the rows drawn: bar, line, area, pie, or scatter when there are two measures.
+  Shown only when the result has a column that measures something. **A key is not a
+  measure**: a column the server calls a primary key, one named `id` or `…_id`, or a UUID is
+  offered as a label and never as a value, because drawing or summing a key says nothing.
+  Rows sharing a label can be summed, averaged or counted, or drawn one bar each. Hovering
+  reads out the point under the pointer. Capped at the first 5,000 rows.
+- **Map** — a geometry column drawn on a real map. Shown only when the result has one.
 - **Profile** — per-stage timings, where the engine offers them. MySQL's `SHOW PROFILE`,
   which needs `profiling` on for the session. PostgreSQL has no equivalent that does not
   re-run the statement, and re-running a write to time it is not something a client may do

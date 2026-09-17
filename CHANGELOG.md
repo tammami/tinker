@@ -4,6 +4,22 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.7] - 2026-09-17
+
+### Changed
+- **A new app icon:** the origami penguin, facing right, on an ice-blue plate. It carries
+  all four macOS appearances — light, dark, clear and tinted — from the one piece of
+  artwork.
+
+### Fixed
+- **MariaDB keeps its own badge when the connection is closed.** MySQL and MariaDB share a
+  dialect and often a port, so the sidebar only knew which engine it was drawing once a
+  session had connected — and it forgot again on quit. A closed MariaDB connection
+  therefore showed MySQL's dolphin, which on a sidebar of closed connections means always.
+  The connection now remembers what the server said it was. It is still the server's own
+  word: neither the port nor the connection's name is treated as evidence, so a connection
+  never yet opened shows the dolphin until it is opened once.
+
 ## [0.1.6] - 2026-09-17
 
 ### Added

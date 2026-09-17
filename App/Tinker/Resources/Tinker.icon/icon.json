@@ -1,20 +1,19 @@
 {
   "fill": {
-    "automatic-gradient": "srgb:0.95,0.96,0.95,1.00"
+    "automatic-gradient": "srgb:0.827,0.890,0.949,1.00"
   },
   "groups": [
     {
       "layers": [
         {
-          "image-name": "tinker.svg",
-          "name": "Tinker"
+          "image-name": "penguin.png",
+          "name": "Penguin"
         }
       ],
       "shadow": {
         "kind": "neutral",
-        "opacity": 0.5
+        "opacity": 0.4
       },
-      "specular": false,
       "translucency": {
         "enabled": false,
         "value": 0.5

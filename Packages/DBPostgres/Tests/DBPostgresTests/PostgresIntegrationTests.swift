@@ -971,4 +971,18 @@ extension PostgresIntegrationTests {
             }
         }
     }
+
+    /// The designer's type list cannot know a type the database declared itself, so it
+    /// reads them: the fixture's `mood` enum, with its labels in the server's own order.
+    func testUserDeclaredTypesAreReadFromTheCatalogue() async throws {
+        try await withEachServer { connection, server in
+            let types = try await connection.introspector.userTypes(in: server.fixtureSchema)
+            let mood = try XCTUnwrap(types.first { $0.name == "mood" }, "\(types.map(\.name))")
+            XCTAssertEqual(mood.kind, .enumeration)
+            XCTAssertEqual(mood.labels, ["sad", "ok", "happy"], "enumsortorder, not alphabetical")
+            // A table's own row type is a composite too; the designer must not offer those.
+            XCTAssertFalse(types.contains { $0.name == "customers" }, "\(types.map(\.name))")
+            XCTAssertFalse(types.contains { $0.name == "all_types" }, "\(types.map(\.name))")
+        }
+    }
 }

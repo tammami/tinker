@@ -183,17 +183,22 @@ if [[ $SKIP_APP == 0 ]]; then
     if [[ ! -x "$APP_BINARY" ]]; then
         warn "app binary not found — smoke test SKIPPED"
     else
+        # The pass brings its own connection in a throwaway store, so a CI run neither
+        # depends on nor touches the connections the developer keeps in the real app.
+        SMOKE_STORE="$(mktemp -t tinker-smoke-store)"
+        rm -f "$SMOKE_STORE"
         set +e
-        "$APP_BINARY" --smoke-test
+        TINKER_SMOKE_STORE="$SMOKE_STORE" "$APP_BINARY" --smoke-test
         SMOKE_STATUS=$?
         set -e
+        rm -f "$SMOKE_STORE" "$SMOKE_STORE-wal" "$SMOKE_STORE-shm"
         case $SMOKE_STATUS in
             0) echo "  ok" ;;
             2)
                 if [[ $STRICT == 1 ]]; then
-                    fail "strict: no tinker_test connection in the app store — smoke test did not run"
+                    fail "strict: no tinker_test connection for the smoke test — set TINKER_TEST_PG_URL"
                 else
-                    warn "no tinker_test connection configured in the app store — smoke test SKIPPED"
+                    warn "no tinker_test connection for the smoke test (set TINKER_TEST_PG_URL) — SKIPPED"
                 fi
                 ;;
             *) fail "app smoke test failed" ;;

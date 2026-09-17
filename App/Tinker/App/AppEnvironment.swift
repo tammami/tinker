@@ -34,12 +34,19 @@ public final class AppEnvironment {
     // records to Tinker's file only (ADR-0046).
     public let tunnelProvider: any TunnelProvider = SSHTunnelProvider(trust: HostKeyPrompt.trust)
 
+    private let storePath: String
     private var store: DBStore?
     private var sessions: [UUID: ConnectionSession] = [:]
     private let logger: Logger
 
-    public init(secrets: any SecretStore = KeychainSecretStore()) {
+    /// - Parameter storePath: where the store file lives. The smoke test points this at a
+    ///   throwaway file so a CI run never reads, writes or depends on the developer's own
+    ///   connections (ADR-0019).
+    public init(
+        secrets: any SecretStore = KeychainSecretStore(), storePath: String = DBStore.defaultPath
+    ) {
         self.secrets = secrets
+        self.storePath = storePath
         var logger = Logger(label: "tinker.app")
         logger.logLevel = .info
         self.logger = logger
@@ -48,7 +55,7 @@ public final class AppEnvironment {
     /// Opens the store and loads the saved connections. Called once at launch.
     public func load() async {
         do {
-            let store = try await DBStore()
+            let store = try await DBStore(path: storePath)
             self.store = store
             connections = try await store.connections()
             groups = try await store.groups()

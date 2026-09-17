@@ -2,9 +2,11 @@
 # testenv/prepare.sh — create the isolated `tinker_test` database and user on the
 # developer's EXISTING local PostgreSQL and/or MySQL servers, then load fixtures.
 #
-#   Reads:  TINKER_TEST_PG_ADMIN_URL     e.g. postgresql://me@localhost:5432/postgres
-#           TINKER_TEST_MYSQL_ADMIN_URL  e.g. mysql://root:secret@127.0.0.1:3306/
-#   Prints: the non-admin URLs to export as TINKER_TEST_PG_URL / TINKER_TEST_MYSQL_URL
+#   Reads:  TINKER_TEST_PG_ADMIN_URL       e.g. postgresql://me@localhost:5432/postgres
+#           TINKER_TEST_MYSQL_ADMIN_URL    e.g. mysql://root:secret@127.0.0.1:3306/
+#           TINKER_TEST_MARIADB_ADMIN_URL  e.g. mariadb://root@127.0.0.1:3316/ (optional)
+#   Prints: the non-admin URLs to export as TINKER_TEST_PG_URL / TINKER_TEST_MYSQL_URL,
+#           and TINKER_TEST_MYSQL_URLS for the second MySQL-family server
 #
 # Guarantees (SPEC §16 Phase 0, §17.1):
 #   - idempotent: safe to re-run at any time
@@ -18,6 +20,7 @@ set -euo pipefail
 TEST_DB="tinker_test"
 TEST_USER="tinker_test"
 TEST_PASSWORD="tinker_test"   # local-only, fixed so re-runs are idempotent (DECISIONS.md ADR-0004)
+LAST_MYSQL_URL=""
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURES="$HERE/fixtures"
@@ -119,43 +122,71 @@ SQL
 # ---------------------------------------------------------------------------
 prepare_mysql() {
     local admin="$1"
-    command -v mysql >/dev/null || die "mysql client not found on PATH (needed for MySQL preparation)"
     parse_url "$admin"
     local host="$URL_HOST" port="${URL_PORT:-3306}" user="$URL_USER" pass="$URL_PASS"
-    case "$URL_SCHEME" in mysql|mariadb) ;; *) die "TINKER_TEST_MYSQL_ADMIN_URL must use mysql://";; esac
+    case "$URL_SCHEME" in mysql|mariadb) ;; *) die "TINKER_TEST_MYSQL_ADMIN_URL must use mysql:// or mariadb://";; esac
+
+    # A `mariadb://` URL uses the MariaDB client: MySQL 9's client cannot load
+    # mysql_native_password, which is what a MariaDB server still offers.
+    local client="mysql"
+    [[ "$URL_SCHEME" == "mariadb" ]] && client="mariadb"
+    command -v "$client" >/dev/null || die "$client client not found on PATH (needed for $URL_SCHEME preparation)"
 
     # MYSQL_PWD keeps the password off the process list and silences the CLI warning.
-    admin_mysql() { MYSQL_PWD="$pass" mysql --protocol=tcp -h "$host" -P "$port" -u "$user" "$@"; }
-    test_mysql()  { MYSQL_PWD="$TEST_PASSWORD" mysql --protocol=tcp -h "$host" -P "$port" -u "$TEST_USER" "$@"; }
+    admin_mysql() { MYSQL_PWD="$pass" "$client" --protocol=tcp -h "$host" -P "$port" -u "$user" "$@"; }
+    test_mysql()  { MYSQL_PWD="$TEST_PASSWORD" "$client" --protocol=tcp -h "$host" -P "$port" -u "$TEST_USER" "$@"; }
 
     log "MySQL: connecting as admin to $host:$port"
     local version
-    version="$(admin_mysql -Nse 'SELECT VERSION()' 2>&1)" || die "MySQL admin connection failed: $version"
+    version="$(admin_mysql -Nse 'SELECT VERSION()' 2>&1 | grep -v '^WARNING:')" \
+        || die "MySQL admin connection failed: $version"
     log "MySQL: server version $version"
 
+    # A MariaDB install keeps anonymous ''@'localhost' rows, and the server matches the
+    # most specific host first — so a '%' account alone is never reached from localhost.
+    # The 'localhost' account is the same user, scoped to the same one database.
     admin_mysql <<SQL
 CREATE DATABASE IF NOT EXISTS \`$TEST_DB\` CHARACTER SET utf8mb4;
 CREATE USER IF NOT EXISTS '$TEST_USER'@'%' IDENTIFIED BY '$TEST_PASSWORD';
 ALTER USER '$TEST_USER'@'%' IDENTIFIED BY '$TEST_PASSWORD';
 REVOKE ALL PRIVILEGES, GRANT OPTION FROM '$TEST_USER'@'%';
 GRANT ALL PRIVILEGES ON \`$TEST_DB\`.* TO '$TEST_USER'@'%';
+CREATE USER IF NOT EXISTS '$TEST_USER'@'localhost' IDENTIFIED BY '$TEST_PASSWORD';
+ALTER USER '$TEST_USER'@'localhost' IDENTIFIED BY '$TEST_PASSWORD';
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM '$TEST_USER'@'localhost';
+GRANT ALL PRIVILEGES ON \`$TEST_DB\`.* TO '$TEST_USER'@'localhost';
 FLUSH PRIVILEGES;
 SQL
+
+    # MySQL and MariaDB spell the recursion cap differently and neither knows the other's
+    # name, so the fixture keeps MySQL's and MariaDB gets its own here.
+    local prelude=""
+    if [[ "$version" == *MariaDB* ]]; then
+        prelude="SET SESSION max_recursive_iterations = 1000000;"
+    fi
 
     local f
     for f in "$FIXTURES"/mysql/*.sql; do
         [[ -e "$f" ]] || continue
         log "MySQL: loading $(basename "$f")"
-        test_mysql "$TEST_DB" < "$f"
+        if [[ -n "$prelude" ]]; then
+            # MariaDB has no column-level `SRID n`; the geometry values carry their own.
+            { printf '%s\n' "$prelude"
+              sed -e 's/^SET SESSION cte_max_recursion_depth.*$//' \
+                  -e 's/GEOMETRY SRID [0-9]*/GEOMETRY/' "$f"
+            } | test_mysql "$TEST_DB"
+        else
+            test_mysql "$TEST_DB" < "$f"
+        fi
     done
 
     # Prove there are no global grants: every grant line must be USAGE on *.* or scoped to the test db.
     local grants bad
-    grants="$(test_mysql -Nse "SHOW GRANTS FOR CURRENT_USER()")"
+    grants="$(test_mysql -Nse "SHOW GRANTS FOR CURRENT_USER()" 2>/dev/null)"
     bad="$(printf '%s\n' "$grants" | grep -v -E "^GRANT USAGE ON \*\.\* TO" | grep -v -E "ON \`?$TEST_DB\`?\.\* TO" || true)"
     [[ -z "$bad" ]] || die "MySQL: $TEST_USER has grants beyond $TEST_DB:\n$bad"
 
-    exports+=("export TINKER_TEST_MYSQL_URL='mysql://$TEST_USER:$TEST_PASSWORD@$host:$port/$TEST_DB'")
+    LAST_MYSQL_URL="$URL_SCHEME://$TEST_USER:$TEST_PASSWORD@$host:$port/$TEST_DB"
     did_anything=1
 }
 
@@ -168,8 +199,16 @@ fi
 
 if [[ -n "${TINKER_TEST_MYSQL_ADMIN_URL:-}" ]]; then
     prepare_mysql "$TINKER_TEST_MYSQL_ADMIN_URL"
+    exports+=("export TINKER_TEST_MYSQL_URL='$LAST_MYSQL_URL'")
 else
     warn "TINKER_TEST_MYSQL_ADMIN_URL not set — skipping MySQL"
+fi
+
+# A second MySQL-family server, so the suite runs against MariaDB as well as MySQL. Its
+# URL goes to TINKER_TEST_MYSQL_URLS, which the tests read as extra servers.
+if [[ -n "${TINKER_TEST_MARIADB_ADMIN_URL:-}" ]]; then
+    prepare_mysql "$TINKER_TEST_MARIADB_ADMIN_URL"
+    exports+=("export TINKER_TEST_MYSQL_URLS='$LAST_MYSQL_URL'")
 fi
 
 [[ "$did_anything" == 1 ]] || die "nothing to do: set TINKER_TEST_PG_ADMIN_URL and/or TINKER_TEST_MYSQL_ADMIN_URL (see testenv/README.md)"

@@ -69,10 +69,11 @@ INSERT INTO all_types (
     UNHEX(REPEAT('00', 1)), '1000-01-01', '9999-12-31 23:59:59.999999'
 );
 
--- Row 4: a one-megabyte string and JSON nested 50 deep.
+-- Row 4: a one-megabyte string and deeply nested JSON. Depth 30 and no CAST(… AS JSON):
+-- MariaDB's JSON is LONGTEXT under a json_valid() check that stops at 31 levels.
 INSERT INTO all_types (c_text, c_json) VALUES (
     REPEAT('x', 1048576),
-    CAST(CONCAT(REPEAT('{"n":', 50), '1', REPEAT('}', 50)) AS JSON)
+    CONCAT(REPEAT('{"n":', 30), '1', REPEAT('}', 30))
 );
 
 -- Every byte value, written in one go so nothing is lost in escaping.

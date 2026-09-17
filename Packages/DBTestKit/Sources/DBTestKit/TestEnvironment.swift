@@ -158,14 +158,49 @@ public enum TestEnvironment {
         return servers
     }
 
+    /// Just the first server of an engine.
+    ///
+    /// The driver suites run against every server configured for their engine, which is how
+    /// MariaDB earns its coverage. The cross-engine suites pair one server per engine
+    /// instead: a second MySQL-family server there multiplies the pairings without testing
+    /// anything the driver suites have not already covered.
+    public static func primaryServer(
+        for engine: TestEngine,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> [TestServer] {
+        Array(try servers(for: engine, environment: environment).prefix(1))
+    }
+
     /// The SQLite database every suite in this process shares, under the temporary
     /// directory. Created empty on first use; the suites load the fixtures into it.
     public static let sqliteDatabaseURL: URL = {
-        let directory = FileManager.default.temporaryDirectory
+        let manager = FileManager.default
+        removeStaleSQLiteDirectories()
+        let directory = manager.temporaryDirectory
             .appendingPathComponent("tinker-tests-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? manager.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory.appendingPathComponent("tinker_test.sqlite")
     }()
+
+    /// Removes the directories left by test processes that have since exited.
+    ///
+    /// The directory is named for the process so concurrent runs cannot share a database,
+    /// which means nothing deletes it when the process ends — and the fixtures include a
+    /// million-row table, so a few weeks of running the suite had left 5 GB of them under
+    /// the temporary directory. Each run sweeps the ones whose process is gone; a run that
+    /// is still going keeps its own.
+    private static func removeStaleSQLiteDirectories() {
+        let manager = FileManager.default
+        let temporary = manager.temporaryDirectory
+        guard let entries = try? manager.contentsOfDirectory(atPath: temporary.path) else { return }
+        for entry in entries where entry.hasPrefix("tinker-tests-") {
+            guard let pid = pid_t(entry.dropFirst("tinker-tests-".count)) else { continue }
+            // ESRCH means no such process. EPERM means it exists but belongs to someone
+            // else, which is reason to leave it alone.
+            guard kill(pid, 0) != 0, errno == ESRCH else { continue }
+            try? manager.removeItem(at: temporary.appendingPathComponent(entry, isDirectory: true))
+        }
+    }
 
     /// The fixture scripts for an engine, in load order, from `testenv/fixtures/<engine>`
     /// next to this source tree.

@@ -26,8 +26,8 @@ final class ScriptTransferIntegrationTests: XCTestCase {
         let sqlite = try TestEnvironment.servers(for: .sqlite)
         if !sqlite.isEmpty { try await SQLiteFixtures.prepare() }
         let all =
-            (try TestEnvironment.servers(for: .postgresql))
-            + (try TestEnvironment.servers(for: .mysql)) + sqlite
+            (try TestEnvironment.primaryServer(for: .postgresql))
+            + (try TestEnvironment.primaryServer(for: .mysql)) + sqlite
         if all.isEmpty { throw XCTSkip("no test server is configured and SQLite is disabled") }
         return all
     }
@@ -514,6 +514,7 @@ final class ScriptTransferIntegrationTests: XCTestCase {
                 try await run(
                     [
                         "CREATE TABLE xfer_big (id int PRIMARY KEY, label varchar(40), amount decimal(10,2))",
+                        // MariaDB spells this one `max_recursive_iterations`.
                         "SET SESSION cte_max_recursion_depth = \(rows + 10)",
                         "INSERT INTO xfer_big WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < \(rows)) SELECT n, CONCAT('row ', n), n * 1.5 FROM s",
                     ], on: connection)

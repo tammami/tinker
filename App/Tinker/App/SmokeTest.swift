@@ -19,6 +19,44 @@ enum SmokeTest {
     /// The only database the pass will write to (SPEC §17.1).
     static let testDatabaseName = "tinker_test"
 
+    /// The connection a CI run supplies through `TINKER_TEST_PG_URL`, in a store of its
+    /// own under the system temporary directory.
+    ///
+    /// Nil when the variable is unset — a developer running `--smoke-test` by hand still
+    /// gets the old behaviour, their own store. The URL is checked the way the integration
+    /// suite checks it: the database has to be `tinker_test`, so a mistyped variable
+    /// cannot point this pass, which creates and drops tables, at anything real.
+    static func seededEnvironment() -> (
+        environment: AppEnvironment, config: ConnectionConfig, password: String?
+    )? {
+        guard let value = ProcessInfo.processInfo.environment["TINKER_TEST_PG_URL"],
+            let url = URL(string: value),
+            let host = url.host, let user = url.user,
+            ["postgres", "postgresql"].contains(url.scheme ?? "")
+        else { return nil }
+        let database = String(url.path.dropFirst())
+        guard database == Self.testDatabaseName else {
+            FileHandle.standardError.write(
+                Data(
+                    "TINKER_TEST_PG_URL points at database '\(database)'; the smoke test only runs against '\(Self.testDatabaseName)'. Refusing.\n"
+                        .utf8))
+            exit(1)
+        }
+        let id = UUID()
+        let secrets = EphemeralSecretStore()
+        let passwordRef: SecretRef? = url.password.map { _ in .forConnection(id, field: "password") }
+        let config = ConnectionConfig(
+            id: id, name: "smoke-test", dialect: .postgresql, host: host,
+            port: url.port ?? 5_432, user: user, passwordRef: passwordRef, database: database)
+        // `Scripts/ci.sh` owns the file so its trap can delete it; a hand run falls back
+        // to a uniquely named one under the system temporary directory.
+        let fallback = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tinker-smoke-\(id.uuidString).sqlite").path
+        let store = ProcessInfo.processInfo.environment["TINKER_SMOKE_STORE"] ?? fallback
+        let environment = AppEnvironment(secrets: secrets, storePath: store)
+        return (environment, config, url.password)
+    }
+
     /// Runs the checks and exits the process with 0 on success, 1 on the first failure.
     static func run() async -> Never {
         var failures: [String] = []
@@ -29,21 +67,32 @@ enum SmokeTest {
             if !condition { failures.append(description) }
         }
 
-        let environment = AppEnvironment()
+        // A CI run brings its own connection, in its own throwaway store, with the
+        // password in memory rather than the Keychain: the pass writes tables, so it must
+        // neither depend on nor touch whatever the developer keeps in the real app.
+        let seeded = Self.seededEnvironment()
+        let environment = seeded?.environment ?? AppEnvironment()
         await environment.load()
         check("store opens", environment.startupError == nil)
+        if let seeded {
+            if let password = seeded.password, let reference = seeded.config.passwordRef {
+                try? await environment.secrets.setSecret(password, for: reference)
+            }
+            await environment.save(seeded.config)
+        }
         // The pass is written against PostgreSQL (pg_sleep, the public schema), and it
         // creates, edits and drops tables, so it only ever takes a connection to the
         // isolated `tinker_test` database (SPEC §17.1) — never whatever happens to be
         // first in the store, which could be staging.
         guard
-            let config = environment.connections.first(where: {
-                $0.dialect == .postgresql && $0.database == Self.testDatabaseName
-            })
+            let config = seeded?.config
+                ?? environment.connections.first(where: {
+                    $0.dialect == .postgresql && $0.database == Self.testDatabaseName
+                })
         else {
             FileHandle.standardError.write(
                 Data(
-                    "no PostgreSQL connection to the “\(Self.testDatabaseName)” database is configured; add one in the app first (see testenv/README.md)\n"
+                    "no PostgreSQL connection to the “\(Self.testDatabaseName)” database is configured; set TINKER_TEST_PG_URL or add one in the app (see testenv/README.md)\n"
                         .utf8
                 ))
             exit(2)

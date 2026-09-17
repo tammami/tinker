@@ -279,4 +279,26 @@ final class ScriptStreamTests: XCTestCase {
         let sent = await producer.value
         XCTAssertLessThan(sent, 10, "closing the channel stops the producer")
     }
+
+    /// COPY splits on commas and braces, so an element holding one has to be quoted or the
+    /// row lands mangled — on a same-engine PostgreSQL dump as much as a crossing one.
+    func testACopiedArrayQuotesElementsThatWouldBeMisread() {
+        let value = DBValue.array([
+            .string("plain"),
+            .string("has, comma"),
+            .string("has \"quote\""),
+            .string("has {brace}"),
+            .string("back\\slash"),
+            .string(""),
+            .string("NULL"),
+            .null,
+        ])
+        XCTAssertEqual(
+            DatabaseDumper.copyText(value),
+            #"{plain,"has, comma","has \\"quote\\"","has {brace}","back\\\\slash","","NULL",NULL}"#)
+    }
+
+    func testACopiedArrayLeavesPlainElementsAlone() {
+        XCTAssertEqual(DatabaseDumper.copyText(.array([.int(1), .int(2), .int(3)])), "{1,2,3}")
+    }
 }

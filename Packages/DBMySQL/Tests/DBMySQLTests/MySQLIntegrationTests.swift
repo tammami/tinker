@@ -16,7 +16,12 @@ final class MySQLIntegrationTests: XCTestCase {
         return logger
     }
 
+    /// - Parameter dropping: scratch tables to remove once `body` has run, whether it
+    ///   succeeded or threw. Cleanup has to finish before the connection closes, so it
+    ///   cannot be left to a `defer` that only starts a task: the close would win the race
+    ///   and the tables would pile up in the developer's test database.
     func withEachServer(
+        dropping scratch: [String] = [],
         _ body: (any SQLConnection, TestServer) async throws -> Void,
         file: StaticString = #filePath,
         line: UInt = #line
@@ -41,10 +46,19 @@ final class MySQLIntegrationTests: XCTestCase {
                     "server version: \(version.flavor.rawValue) \(version.rawString) — \(server.redactedDescription)")
                 try await body(connection, server)
             } catch {
+                await Self.drop(scratch, on: connection)
                 await connection.close()
                 throw error
             }
+            await Self.drop(scratch, on: connection)
             await connection.close()
+        }
+    }
+
+    private static func drop(_ tables: [String], on connection: any SQLConnection) async {
+        for table in tables {
+            _ = try? await connection.executeCollecting(
+                "DROP TABLE IF EXISTS \(Identifier.quote(table, dialect: .mysql))")
         }
     }
 
@@ -83,10 +97,9 @@ final class MySQLIntegrationTests: XCTestCase {
     /// read by the server as the number one thousand and ten. FLOAT widens through its
     /// shortest decimal text so 0.1 stays 0.1.
     func testBitValuesRoundTripThroughParametersAndFloatKeepsItsText() async throws {
-        try await withEachServer { connection, _ in
+        try await withEachServer(dropping: ["tinker_bits"]) { connection, _ in
             _ = try await connection.executeCollecting("DROP TABLE IF EXISTS tinker_bits")
             _ = try await connection.executeCollecting("CREATE TABLE tinker_bits (b BIT(8), f FLOAT)")
-            defer { Task { _ = try? await connection.executeCollecting("DROP TABLE IF EXISTS tinker_bits") } }
             _ = try await connection.executeCollecting("INSERT INTO tinker_bits VALUES (b'00001010', 0.1)")
 
             let read = try await connection.executeCollecting("SELECT b, f FROM tinker_bits")
@@ -112,11 +125,10 @@ final class MySQLIntegrationTests: XCTestCase {
     /// `tinyint(1)` is a boolean by convention, and a number by declaration: 0 and 1 read as
     /// false and true, anything else keeps its value rather than becoming `true`.
     func testTinyint1KeepsValuesOtherThanZeroAndOne() async throws {
-        try await withEachServer { connection, _ in
+        try await withEachServer(dropping: ["tinker_tiny"]) { connection, _ in
             _ = try await connection.executeCollecting("DROP TABLE IF EXISTS tinker_tiny")
             _ = try await connection.executeCollecting(
                 "CREATE TABLE tinker_tiny (id int PRIMARY KEY, status tinyint(1))")
-            defer { Task { _ = try? await connection.executeCollecting("DROP TABLE IF EXISTS tinker_tiny") } }
             _ = try await connection.executeCollecting("INSERT INTO tinker_tiny VALUES (1, 0), (2, 1), (3, 2), (4, -5)")
             let result = try await connection.executeCollecting("SELECT status FROM tinker_tiny ORDER BY id")
             XCTAssertEqual(result.columns.first?.kind, .bool)
@@ -338,7 +350,15 @@ final class MySQLIntegrationTests: XCTestCase {
             XCTAssertEqual(try value("c_datetime").text, "2024-03-10 02:30:00.123456")
             XCTAssertEqual(try value("c_timestamp").text, "2024-03-10 02:30:00.123456")
             XCTAssertEqual(try value("c_year"), .int(2_024))
-            XCTAssertEqual(try value("c_json"), .json("{\"b\": [1, 2, 3]}"))
+            // MariaDB's JSON is LONGTEXT under a json_valid() check, so the wire type is
+            // text and the driver reports it as such. MySQL has a real JSON type.
+            let jsonValue = try value("c_json")
+            XCTAssertEqual(jsonValue.text, "{\"b\": [1, 2, 3]}")
+            if await connection.serverVersion.flavor == .mariadb {
+                XCTAssertEqual(jsonValue, .string("{\"b\": [1, 2, 3]}"))
+            } else {
+                XCTAssertEqual(jsonValue, .json("{\"b\": [1, 2, 3]}"))
+            }
             XCTAssertEqual(try value("c_enum"), .string("happy"))
             XCTAssertEqual(try value("c_set"), .string("a,c"))
             XCTAssertEqual(try value("c_bit").text, "10110001")
@@ -406,7 +426,7 @@ final class MySQLIntegrationTests: XCTestCase {
             )
             XCTAssertEqual(try XCTUnwrap(result.value(0, "c_text")?.text).count, 1_048_576)
             let json = try XCTUnwrap(result.value(0, "c_json")?.text)
-            XCTAssertEqual(json.filter { $0 == "{" }.count, 50)
+            XCTAssertEqual(json.filter { $0 == "{" }.count, 30)
         }
     }
 
@@ -624,27 +644,27 @@ final class MySQLIntegrationTests: XCTestCase {
             throw XCTSkip("mysql-nio asserts in Debug when a connection is killed mid-statement")
         #else
             try await withEachServer { connection, server in
-            let killer = try await MySQLDriver.connect(server.resolvedConfig(), logger: logger)
-            defer { Task { await killer.close() } }
-            let victim = Int(connection.backendID) ?? -1
-            async let kill: Void = {
-                try? await Task.sleep(for: .milliseconds(400))
-                _ = try? await killer.executeCollecting("KILL CONNECTION \(victim)")
-            }()
-            do {
-                _ = try await connection.executeCollecting("SELECT SLEEP(30)")
-                XCTFail("expected the killed connection to fail")
-            } catch let error as DBError {
-                XCTAssertTrue(error.indicatesLostConnection, "expected a lost-connection error, got \(error)")
+                let killer = try await MySQLDriver.connect(server.resolvedConfig(), logger: logger)
+                defer { Task { await killer.close() } }
+                let victim = Int(connection.backendID) ?? -1
+                async let kill: Void = {
+                    try? await Task.sleep(for: .milliseconds(400))
+                    _ = try? await killer.executeCollecting("KILL CONNECTION \(victim)")
+                }()
+                do {
+                    _ = try await connection.executeCollecting("SELECT SLEEP(30)")
+                    XCTFail("expected the killed connection to fail")
+                } catch let error as DBError {
+                    XCTAssertTrue(error.indicatesLostConnection, "expected a lost-connection error, got \(error)")
+                }
+                await kill
+                do {
+                    _ = try await connection.executeCollecting("SELECT 1")
+                    XCTFail("a killed connection must not answer")
+                } catch let error as DBError {
+                    XCTAssertTrue(error.indicatesLostConnection, "got \(error)")
+                }
             }
-            await kill
-            do {
-                _ = try await connection.executeCollecting("SELECT 1")
-                XCTFail("a killed connection must not answer")
-            } catch let error as DBError {
-                XCTAssertTrue(error.indicatesLostConnection, "got \(error)")
-            }
-        }
         #endif
     }
 
@@ -1025,19 +1045,142 @@ extension MySQLIntegrationTests {
             XCTAssertTrue(
                 GeometryParser.isGeometryType(result.columns[geomColumn].nativeTypeName),
                 result.columns[geomColumn].nativeTypeName)
+            // Both keep the SRID, but MySQL reorders the axes of a geographic one, so its
+            // bytes are longitude-first however the WKT was written. MariaDB stores the
+            // order it was given — the fixture's WKT is latitude-first — so the same bytes
+            // read back the other way round, and nothing in them says which it is.
+            let isMariaDB = await connection.serverVersion.flavor == .mariadb
             let monas = try XCTUnwrap(GeometryParser.parse(result.rows[0][geomColumn], dialect: .mysql))
-            XCTAssertEqual(monas.srid, 4326)
+            XCTAssertEqual(monas.srid, 4326, "both keep the SRID; only the axis order differs")
             guard case let .point(point) = monas.shape else { return XCTFail("Monas is a point") }
-            XCTAssertEqual(point.longitude, 106.8272, accuracy: 1e-6)
-            XCTAssertEqual(point.latitude, -6.1754, accuracy: 1e-6)
+            XCTAssertEqual(point.longitude, isMariaDB ? -6.1754 : 106.8272, accuracy: 1e-6)
+            XCTAssertEqual(point.latitude, isMariaDB ? 106.8272 : -6.1754, accuracy: 1e-6)
             let avenue = try XCTUnwrap(GeometryParser.parse(result.rows[4][geomColumn], dialect: .mysql))
             guard case let .line(points) = avenue.shape else { return XCTFail("the avenue is a line") }
             XCTAssertEqual(points.count, 3)
-            XCTAssertEqual(points[0].longitude, 106.8230, accuracy: 1e-6)
+            XCTAssertEqual(points[0].longitude, isMariaDB ? -6.1950 : 106.8230, accuracy: 1e-6)
             let park = try XCTUnwrap(GeometryParser.parse(result.rows[5][geomColumn], dialect: .mysql))
             guard case let .polygon(rings) = park.shape else { return XCTFail("the park is a polygon") }
             XCTAssertEqual(rings.first?.count, 5)
             XCTAssertFalse(park.isUnplaceable)
+        }
+    }
+}
+
+extension MySQLIntegrationTests {
+    /// Every event this suite makes is `DISABLE`d, starts far in the future and preserves
+    /// itself on completion, so the developer's own running scheduler never fires it, and
+    /// it is dropped again whatever the assertions do.
+    func testAnEventIsCreatedListedAndDroppedThroughTheCatalog() async throws {
+        try await withEachServer { connection, server in
+            let introspector = try XCTUnwrap(connection.introspector.server)
+            let schema = SchemaRef.mysql(server.database)
+            let request = EventRequest(
+                database: server.database,
+                name: "tinker_test_event",
+                schedule: .every(value: "1", field: .day),
+                starts: "2099-01-01 00:00:00",
+                preserveOnCompletion: true,
+                isEnabled: false,
+                comment: "created by the test suite",
+                body: "SELECT 1")
+            _ = try? await connection.executeCollecting(
+                try EventOperations.drop(
+                    database: server.database, name: request.name, dialect: .mysql))
+            _ = try await connection.executeCollecting(
+                try EventOperations.create(request, dialect: .mysql))
+            defer {
+                let drop = try? EventOperations.drop(
+                    database: server.database, name: request.name, dialect: .mysql)
+                if let drop {
+                    Task { _ = try? await connection.executeCollecting(drop) }
+                }
+            }
+
+            let events = try await introspector.events(in: schema)
+            let event = try XCTUnwrap(
+                events.first { $0.name == "tinker_test_event" }, "\(events.map(\.name))")
+            XCTAssertEqual(event.scheduleKind, .recurring)
+            XCTAssertEqual(event.intervalValue, "1")
+            XCTAssertEqual(event.intervalField, "DAY")
+            XCTAssertEqual(event.status, "DISABLED")
+            XCTAssertFalse(event.isEnabled)
+            XCTAssertEqual(event.onCompletion, "PRESERVE")
+            XCTAssertFalse(event.deletesItself)
+            XCTAssertEqual(event.comment, "created by the test suite")
+            XCTAssertEqual(event.scheduleSummary, "EVERY 1 DAY")
+            XCTAssertNil(event.lastExecuted)
+            // Kept as the server's own text, never parsed into a Date.
+            XCTAssertEqual(event.starts, "2099-01-01 00:00:00")
+            XCTAssertTrue(event.definition.contains("SELECT 1"), event.definition)
+            XCTAssertFalse(event.definer.isEmpty)
+
+            // `SHOW CREATE EVENT` puts the DDL one column further along than
+            // `SHOW CREATE PROCEDURE` does; reading the wrong index returns the time zone.
+            let ddl = try await introspector.eventDefinition(in: schema, name: request.name)
+            XCTAssertTrue(ddl.uppercased().hasPrefix("CREATE"), ddl)
+            XCTAssertTrue(ddl.uppercased().contains("EVENT"), ddl)
+            XCTAssertTrue(ddl.contains("tinker_test_event"), ddl)
+
+            _ = try await connection.executeCollecting(
+                try EventOperations.setEnabled(
+                    true, database: server.database, name: request.name, dialect: .mysql))
+            let enabled = try await introspector.events(in: schema)
+            XCTAssertTrue(enabled.first { $0.name == request.name }?.isEnabled == true)
+
+            _ = try await connection.executeCollecting(
+                try EventOperations.drop(
+                    database: server.database, name: request.name, dialect: .mysql))
+            let remaining = try await introspector.events(in: schema)
+            XCTAssertFalse(remaining.contains { $0.name == request.name })
+
+            do {
+                _ = try await introspector.eventDefinition(in: schema, name: request.name)
+                XCTFail("expected the dropped event to be reported as missing")
+            } catch {}
+        }
+    }
+
+    /// The state is whatever the developer's server is set to — the test asserts it was
+    /// read, not which way it is set, so it passes on a server with the scheduler off.
+    func testTheSchedulerStateIsReadFromTheServer() async throws {
+        try await withEachServer { connection, _ in
+            let introspector = try XCTUnwrap(connection.introspector.server)
+            let state = try await introspector.schedulerState()
+            XCTAssertTrue(
+                [.on, .off, .disabled].contains(state), "unexpected scheduler state \(state)")
+            TestLog.note("event scheduler: \(state.rawValue)")
+        }
+    }
+
+    /// Turning the scheduler on is a global server change the test account deliberately
+    /// cannot make. What matters is that the server's own refusal reaches the caller, since
+    /// that is the text the app puts in front of the person.
+    func testTurningTheSchedulerOnIsRefusedVerbatimWithoutThePrivilege() async throws {
+        try await withEachServer { connection, _ in
+            let version = await connection.serverVersion
+            let statement = try EventOperations.setScheduler(
+                on: true, dialect: .mysql,
+                persists: EventOperations.schedulerChangePersists(version))
+            // If the account turns out to be privileged the statement takes effect, and
+            // `SET PERSIST` survives a restart — so the previous value is read first and put
+            // back before failing.
+            let before = try await connection.executeCollecting("SELECT @@global.event_scheduler")
+            do {
+                _ = try await connection.executeCollecting(statement)
+                if let previous = before.rows.first?.first?.text {
+                    _ = try? await connection.executeCollecting(
+                        "SET PERSIST event_scheduler = \(previous.uppercased() == "ON" ? "ON" : "OFF")")
+                }
+                XCTFail("this account may change the scheduler; the refusal path is untested here")
+            } catch let error as DBError {
+                let message = try XCTUnwrap(error.errorDescription)
+                XCTAssertFalse(message.isEmpty)
+                XCTAssertTrue(
+                    message.lowercased().contains("access denied")
+                        || message.lowercased().contains("privilege"),
+                    "the server's own words should reach the caller, got: \(message)")
+            }
         }
     }
 }

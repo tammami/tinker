@@ -43,6 +43,15 @@ let package = Package(
         // Already in the graph through Citadel; named here so DBTunnel can use _CryptoExtras
         // (RSA signing with SHA-2, AES-CTR/CBC) directly. See DECISIONS.md ADR-0039.
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.12.3"),
+        // The drivers and the tunnel import NIO, NIOSSL and NIOSSH directly. They arrive in
+        // the graph through postgres-nio, mysql-nio and Citadel, but a target that only
+        // borrows a module through someone else's search path breaks silently the day that
+        // dependency changes. Declared so the imports stand on their own. See ADR-0049.
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
+        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.27.0"),
+        // Citadel pins this fork, and two URLs for one package identity cannot resolve, so
+        // the same one is named here.
+        .package(url: "https://github.com/Wellz26/swift-nio-ssh.git", "0.3.4" ..< "0.4.0"),
     ],
     targets: [
         // MARK: Libraries
@@ -65,6 +74,11 @@ let package = Package(
                 "DBCore",
                 "DBSQL",
                 .product(name: "PostgresNIO", package: "postgres-nio"),
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
             ],
             path: "Packages/DBPostgres/Sources/DBPostgres",
             swiftSettings: strict
@@ -75,6 +89,11 @@ let package = Package(
                 "DBCore",
                 "DBSQL",
                 .product(name: "MySQLNIO", package: "mysql-nio"),
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
             ],
             path: "Packages/DBMySQL/Sources/DBMySQL",
             swiftSettings: strict
@@ -82,7 +101,7 @@ let package = Package(
         .target(
             name: "DBSQLite",
             // The system's libsqlite3, through the SQLite3 module macOS ships; no package.
-            dependencies: ["DBCore", "DBSQL"],
+            dependencies: ["DBCore", "DBSQL", .product(name: "Logging", package: "swift-log")],
             path: "Packages/DBSQLite/Sources/DBSQLite",
             swiftSettings: strict
         ),
@@ -98,7 +117,12 @@ let package = Package(
                 "DBCore",
                 "CTinkerBcrypt",
                 .product(name: "Citadel", package: "Citadel"),
+                .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "_CryptoExtras", package: "swift-crypto"),
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOSSH", package: "swift-nio-ssh"),
             ],
             path: "Packages/DBTunnel/Sources/DBTunnel",
             swiftSettings: strict
@@ -111,13 +135,13 @@ let package = Package(
         ),
         .target(
             name: "DBGrid",
-            dependencies: ["DBCore", "DBSQL"],
+            dependencies: ["DBCore", "DBSQL", .product(name: "Logging", package: "swift-log")],
             path: "Packages/DBGrid/Sources/DBGrid",
             swiftSettings: strict
         ),
         .target(
             name: "DBTestKit",
-            dependencies: ["DBCore"],
+            dependencies: ["DBCore", .product(name: "Logging", package: "swift-log")],
             path: "Packages/DBTestKit/Sources/DBTestKit",
             swiftSettings: strict
         ),
@@ -126,7 +150,10 @@ let package = Package(
 
         .executableTarget(
             name: "dbcli",
-            dependencies: ["DBCore", "DBSQL", "DBPostgres", "DBMySQL", "DBSQLite", "DBTunnel", "DBStore"],
+            dependencies: [
+                "DBCore", "DBSQL", "DBPostgres", "DBMySQL", "DBSQLite", "DBTunnel", "DBStore",
+                .product(name: "Logging", package: "swift-log"),
+            ],
             path: "Tools/dbcli",
             swiftSettings: strict
         ),

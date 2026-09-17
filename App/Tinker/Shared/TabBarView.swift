@@ -45,6 +45,7 @@ public struct TabBarView: View {
         }
         .frame(height: DesignTokens.Metrics.tabHeight)
         .background(.bar)
+        .clipped()
     }
 
     func color(for tab: WorkspaceTab) -> Color? {
@@ -96,11 +97,15 @@ struct TabChip: View {
         .padding(.leading, DesignTokens.Spacing.md)
         .padding(.trailing, DesignTokens.Spacing.sm)
         .frame(height: DesignTokens.Metrics.tabHeight)
-        .background(
-            isSelected
-                ? Color(nsColor: .controlBackgroundColor)
-                : (isHovering ? Color.primary.opacity(0.04) : .clear)
-        )
+        // A bare `Color` here would spread into the window's safe area and paint the
+        // titlebar above the tab; a shape stays inside the chip.
+        .background {
+            Rectangle().fill(
+                isSelected
+                    ? Color(nsColor: .controlBackgroundColor)
+                    : (isHovering ? Color.primary.opacity(0.04) : .clear)
+            )
+        }
         .overlay(alignment: .top) {
             // The connection's colour sits on the top edge, where the eye lands first.
             Rectangle()

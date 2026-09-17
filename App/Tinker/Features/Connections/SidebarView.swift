@@ -240,9 +240,12 @@ struct SidebarRow: View {
                 .fill(config.color?.swiftUIColor ?? .clear)
                 .frame(width: 3, height: 14)
                 .help(config.color.map { "Connection colour: \($0.displayName)" } ?? "")
-            EngineMark(dialect: config.dialect, size: DesignTokens.Metrics.iconWidth)
-                .saturation(isLive ? 1 : 0)
-                .opacity(isLive ? 1 : 0.55)
+            EngineMark(
+                dialect: config.dialect, flavor: sidebar.flavor(of: config.id),
+                size: DesignTokens.Metrics.iconWidth
+            )
+            .saturation(isLive ? 1 : 0)
+            .opacity(isLive ? 1 : 0.55)
             Text(config.name)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -333,6 +336,8 @@ struct SidebarRow: View {
                     kind: .routine(
                         schema: schema, name: name, signature: signature, kind: .function
                     )), id)
+        case let .event(id, schema, name, _):
+            onOpenSource(SourceObject(kind: .event(schema: schema, name: name)), id)
         default:
             toggleExpansion()
         }
@@ -394,6 +399,48 @@ struct SidebarRow: View {
         case let .routineFolder(id, ref):
             newObjectItems(connectionID: id, schema: ref, first: .function)
             Divider()
+            collapseItem
+        case let .event(id, schema, name, isEnabled):
+            Button {
+                workspace.pendingEventEditor = EventEditorRequest(
+                    mode: .edit(name: name), connectionID: id, schema: schema)
+            } label: {
+                Label("Edit Event…", systemImage: Icon.edit)
+            }
+            Button {
+                onOpenSource(SourceObject(kind: .event(schema: schema, name: name)), id)
+            } label: {
+                Label("Open Definition", systemImage: Icon.source)
+            }
+            Divider()
+            Button {
+                Task {
+                    await setEventEnabled(!isEnabled, name: name, schema: schema, connectionID: id)
+                }
+            } label: {
+                Label(
+                    isEnabled ? "Disable" : "Enable",
+                    systemImage: isEnabled ? Icon.stop : Icon.run)
+            }
+            Divider()
+            Button {
+                copy(name)
+            } label: {
+                Label("Copy Name", systemImage: Icon.copy)
+            }
+            Button(role: .destructive) {
+                confirmDropEvent(name: name, schema: schema, connectionID: id)
+            } label: {
+                Label("Drop Event…", systemImage: Icon.delete)
+            }
+        case let .eventFolder(id, ref):
+            newObjectItems(connectionID: id, schema: ref, first: .event)
+            Divider()
+            Button {
+                Task { await sidebar.refresh(connectionID: id) }
+            } label: {
+                Label("Refresh", systemImage: Icon.refresh)
+            }
             collapseItem
         case let .database(id, name):
             Button {
@@ -504,16 +551,23 @@ struct SidebarRow: View {
         }
     }
 
-    enum NewObject { case table, view, function, procedure }
+    enum NewObject { case table, view, function, procedure, event }
 
-    /// New Table, New View, New Function, New Procedure: the same four everywhere a
-    /// schema or one of its folders is right-clicked, each exactly once. `first` is the
-    /// one the folder is about; it leads and the others follow below a rule.
+    /// Which of them an engine can actually make.
+    static func newObjectOrder(for dialect: SQLDialect) -> [NewObject] {
+        if dialect == .sqlite { return [.table, .view] }
+        var order: [NewObject] = [.table, .view, .function, .procedure]
+        if dialect.hasScheduledEvents { order.append(.event) }
+        return order
+    }
+
+    /// The same set everywhere a schema or one of its folders is right-clicked, each
+    /// exactly once. `first` leads and the others follow below a rule.
     @ViewBuilder
     func newObjectItems(connectionID id: UUID, schema ref: SchemaRef, first: NewObject? = nil) -> some View {
         // SQLite has no stored routines, so those two are not offered there.
-        let order: [NewObject] =
-            dialect(of: id) == .sqlite ? [.table, .view] : [.table, .view, .function, .procedure]
+        // SQLite has no routines; only MySQL has a scheduler.
+        let order: [NewObject] = Self.newObjectOrder(for: dialect(of: id))
         let ordered = first.map { lead in [lead] + order.filter { $0 != lead } } ?? order
         ForEach(Array(ordered.enumerated()), id: \.offset) { index, kind in
             if index == 1, first != nil { Divider() }
@@ -541,6 +595,13 @@ struct SidebarRow: View {
                     newRoutine(connectionID: id, schema: ref, procedure: true)
                 } label: {
                     Label("New Procedure…", systemImage: Icon.procedure)
+                }
+            case .event:
+                Button {
+                    workspace.pendingEventEditor = EventEditorRequest(
+                        mode: .create, connectionID: id, schema: ref)
+                } label: {
+                    Label("New Event…", systemImage: Icon.event)
                 }
             }
         }
@@ -837,6 +898,80 @@ struct SidebarRow: View {
         } label: {
             Label("Drop…", systemImage: Icon.delete)
         }
+    }
+
+    /// Turns one event on or off.
+    @MainActor
+    func setEventEnabled(
+        _ enabled: Bool, name: String, schema: SchemaRef, connectionID: UUID
+    ) async {
+        guard let session = workspace.environment.session(for: connectionID, schema: schema) else {
+            return
+        }
+        do {
+            let statement = try EventOperations.setEnabled(
+                enabled, database: schema.database, name: name, dialect: session.config.dialect)
+            try await runEventStatement(statement, on: session, schema: schema, verb: enabled ? "Enable" : "Disable")
+        } catch {
+            reportEventFailure(enabled ? "Enable" : "Disable", error)
+        }
+    }
+
+    @MainActor
+    func confirmDropEvent(name: String, schema: SchemaRef, connectionID: UUID) {
+        let isProduction =
+            workspace.environment.connections.first { $0.id == connectionID }?.isProduction ?? false
+        workspace.confirmation = DestructiveConfirmation(
+            title: "Drop \(name)?",
+            message: "The schedule is forgotten. Anything the event already did stays done.",
+            requiredTypedName: isProduction ? name : nil,
+            confirmTitle: "Drop Event",
+            action: {
+                Task { @MainActor in
+                    guard
+                        let session = workspace.environment.session(
+                            for: connectionID, schema: schema)
+                    else { return }
+                    do {
+                        let statement = try EventOperations.drop(
+                            database: schema.database, name: name, dialect: session.config.dialect)
+                        try await runEventStatement(
+                            statement, on: session, schema: schema, verb: "Drop")
+                    } catch {
+                        reportEventFailure("Drop", error)
+                    }
+                }
+            }
+        )
+    }
+
+    /// Sent whole: an event body can hold semicolons.
+    @MainActor
+    private func runEventStatement(
+        _ statement: String, on session: ConnectionSession, schema: SchemaRef, verb: String
+    ) async throws {
+        if await session.isReadOnly {
+            reportEventFailure(
+                verb, DBError.protocolError("This connection is read-only. Unlock it with ⌘⇧L to change objects."))
+            return
+        }
+        try await session.withLease { connection in
+            _ = try await connection.executeCollecting(statement)
+        }
+        await session.invalidateIntrospection(.events(schema))
+        await sidebar.refresh(connectionID: session.config.id)
+    }
+
+    @MainActor
+    private func reportEventFailure(_ verb: String, _ error: any Error) {
+        workspace.confirmation = DestructiveConfirmation(
+            title: "\(verb) failed",
+            message: (error as? DBError)?.errorDescription
+                ?? (error as? EventOperationsError)?.description
+                ?? String(describing: error),
+            confirmTitle: "OK",
+            action: {}
+        )
     }
 
     func copy(_ text: String) {

@@ -257,6 +257,31 @@ enum UIDemo {
                 }
             case "objects":
                 if let ref = demoSchemaRef(schema) { _ = workspace.openObjects(ref, connectionID: config.id) }
+            case "events", "events-off", "events-disabled":
+                UserDefaults.standard.removeObject(forKey: "uiDemo.schedulerState")
+                if item == "events-off" {
+                    UserDefaults.standard.set("OFF", forKey: "uiDemo.schedulerState")
+                } else if item == "events-disabled" {
+                    UserDefaults.standard.set("DISABLED", forKey: "uiDemo.schedulerState")
+                }
+                // The event editor, on the database the connection is pointed at. MySQL
+                // only; on any other engine the sheet has nothing to say.
+                if let ref = demoSchemaRef(schema, dialect: config.dialect) {
+                    workspace.pendingEventEditor = EventEditorRequest(
+                        mode: .create, connectionID: config.id, schema: ref)
+                }
+            case "events-tree":
+                // Narrow the tree so the Events folder is on screen, then open it.
+                workspace.sidebarFilter = database.title
+                if let schemaItem = sidebar.find(id: schema.id) {
+                    for folder in schemaItem.children ?? [] {
+                        if case .eventFolder = folder.kind {
+                            await sidebar.expand(folder)
+                        } else {
+                            sidebar.collapse(folder.id)
+                        }
+                    }
+                }
             case "server":
                 controller.openServerActivity(connectionID: config.id)
             case "newuser":

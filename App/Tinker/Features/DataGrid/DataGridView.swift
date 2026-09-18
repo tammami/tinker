@@ -246,6 +246,20 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
                 self.presentReferencePicker(row: row, column: column)
             }
         }
+        temporalObserver = NotificationCenter.default.addObserver(
+            forName: .tinkerPresentTemporalPicker, object: nil, queue: .main
+        ) { [weak self] note in
+            let row = note.userInfo?["row"] as? Int
+            let column = note.userInfo?["column"] as? Int
+            let demo = note.userInfo?["demo"] as? Bool ?? false
+            let target = (note.object as AnyObject?).map(ObjectIdentifier.init)
+            MainActor.assumeIsolated {
+                guard let self, let window = self.tableView?.window, demo || window.isKeyWindow, let row, let column,
+                    let delegate = self.delegate, target == ObjectIdentifier(delegate as AnyObject)
+                else { return }
+                self.presentTemporalPicker(row: row, column: column)
+            }
+        }
         choiceObserver = NotificationCenter.default.addObserver(
             forName: .tinkerPresentChoices, object: nil, queue: .main
         ) { [weak self] note in
@@ -262,6 +276,7 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
     }
     private var pickObserver: (any NSObjectProtocol)?
     private var choiceObserver: (any NSObjectProtocol)?
+    private var temporalObserver: (any NSObjectProtocol)?
 
     /// Removes the observer; the grid's view is going away.
     func stopObservingPeekRequests() {
@@ -271,6 +286,10 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         pickObserver = nil
         if let choiceObserver { NotificationCenter.default.removeObserver(choiceObserver) }
         choiceObserver = nil
+        if let temporalObserver { NotificationCenter.default.removeObserver(temporalObserver) }
+        temporalObserver = nil
+        temporalPopover?.close()
+        temporalPopover = nil
         choicesPopover?.close()
         choicesPopover = nil
         mapPopover?.close()
@@ -725,15 +744,36 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         )
     }
 
+    /// Which editor a cell opens: the type decides, so an enum is picked from its values,
+    /// a date or a timestamp gets a calendar, and everything else is typed (SPEC §12.2).
+    enum InlineEditorKind: Equatable {
+        case choices
+        case temporal
+        case text
+    }
+
+    /// The rule, apart from the table view so it can be tested.
+    static func inlineEditorKind(for kind: DBValueKind, hasChoices: Bool) -> InlineEditorKind {
+        if hasChoices { return .choices }
+        return TemporalText.isTemporal(kind) ? .temporal : .text
+    }
+
     func beginEditingFocusedCell() {
         guard model.isEditable, let tableView, inlineEditor == nil else { return }
         let row = selection.focusRow
         let column = selection.focusColumn
         guard model.columns.indices.contains(column), row < model.displayRowCount else { return }
-        // An enum or SET is picked, never typed.
-        if let choices = delegate?.gridChoices(column) {
-            presentChoices(choices, row: row, column: column)
+        let choices = delegate?.gridChoices(column)
+        switch Self.inlineEditorKind(for: model.columns[column].kind, hasChoices: choices != nil) {
+        case .choices:
+            // An enum or SET is picked, never typed.
+            if let choices { presentChoices(choices, row: row, column: column) }
             return
+        case .temporal:
+            presentTemporalPicker(row: row, column: column)
+            return
+        case .text:
+            break
         }
         guard let position = position(ofModelColumn: column),
             let cell = tableView.view(atColumn: position, row: row, makeIfNecessary: false) as? GridCellView
@@ -836,11 +876,14 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
                 choose.representedObject = [row, column]
                 menu.addItem(choose)
             }
-            if model.isEditable, [.date, .time, .timestamp].contains(model.columns[column].kind) {
+            if model.isEditable, TemporalText.isTemporal(model.columns[column].kind) {
+                let isTime = model.columns[column].kind == .time
                 let pick = NSMenuItem(
-                    title: "Pick Date and Time…", action: #selector(showInspector(_:)), keyEquivalent: "")
+                    title: isTime ? "Pick Time…" : "Pick Date and Time…",
+                    action: #selector(pickTemporal(_:)), keyEquivalent: "")
                 pick.target = self
-                pick.image = NSImage(systemSymbolName: "calendar", accessibilityDescription: nil)
+                pick.image = NSImage(systemSymbolName: isTime ? "clock" : "calendar", accessibilityDescription: nil)
+                pick.representedObject = [row, column]
                 menu.addItem(pick)
             }
             if GeometryColumns.detect(in: model, dialect: model.dialect).contains(column) {
@@ -1005,6 +1048,60 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
 
     private var choicesPopover: NSPopover?
 
+    @objc private func pickTemporal(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [Int], pair.count == 2 else { return }
+        presentTemporalPicker(row: pair[0], column: pair[1])
+    }
+
+    /// Opens the calendar or clock over the cell, so a date is picked where it is read
+    /// rather than in the inspector. What it writes goes through the delegate's ordinary
+    /// edit path, so validation, auto-commit and the production gate apply.
+    func presentTemporalPicker(row: Int, column: Int) {
+        guard let tableView, model.columns.indices.contains(column),
+            let position = position(ofModelColumn: column)
+        else { return }
+        // A row being added opens its cells as the focus lands on them, and every SwiftUI
+        // update asks again; one picker at a time is enough.
+        guard temporalPopover?.isShown != true else { return }
+        // ⌥↓ or the inspector can ask for a cell scrolled out of sight; the picker belongs over it.
+        tableView.scrollRowToVisible(row)
+        tableView.scrollColumnToVisible(position)
+        let rect = tableView.frameOfCell(atColumn: position, row: row)
+        let meta = model.columns[column]
+        let current = model.value(row: row, column: column)
+        let text = current.map { $0.isNull ? "" : ($0.text ?? "") } ?? ""
+        let popover = NSPopover()
+        popover.behavior = .transient
+        // Weakly captured, as the reference picker's closures are: the popover owns the
+        // hosting controller, which owns this view, which owns these closures.
+        let view = CellTemporalEditorView(
+            kind: meta.kind, columnName: meta.name, text: text,
+            onCommit: { [weak self, weak popover] picked in
+                popover?.close()
+                self?.delegate?.gridDidCommitEdit(row: row, column: column, text: picked)
+                self?.takeFocusBack()
+            },
+            onCancel: { [weak self, weak popover] in
+                popover?.close()
+                self?.takeFocusBack()
+            }
+        )
+        let hosting = NSHostingController(rootView: view)
+        hosting.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = hosting
+        temporalPopover = popover
+        popover.show(relativeTo: rect, of: tableView, preferredEdge: .maxY)
+    }
+
+    private var temporalPopover: NSPopover?
+
+    /// Returns the keyboard to the grid after a popover editor closes, so the arrow keys
+    /// move the selection again rather than landing on a view that has gone.
+    private func takeFocusBack() {
+        guard let tableView else { return }
+        tableView.window?.makeFirstResponder(tableView)
+    }
+
     @objc private func showInspector(_ sender: NSMenuItem) {
         delegate?.gridDidRequestInspector()
     }
@@ -1075,6 +1172,12 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
             }
             if delegate?.gridColumnReferences(selection.focusColumn) == true {
                 presentReferencePicker(row: selection.focusRow, column: selection.focusColumn)
+                return true
+            }
+            if model.columns.indices.contains(selection.focusColumn),
+                TemporalText.isTemporal(model.columns[selection.focusColumn].kind)
+            {
+                presentTemporalPicker(row: selection.focusRow, column: selection.focusColumn)
                 return true
             }
         }
@@ -1301,9 +1404,22 @@ final class GridInlineEditor: NSTextField {
     }
 }
 
-/// The header view, which offers Hide Column and Show All Columns on right-click.
+/// The header view: the right-click menu, and the column dividers as resize handles.
+///
+/// AppKit's own handle is a two-point band around a hairline, which is hard to hit and
+/// gives nothing back when the pointer is on it. This header widens the band to
+/// `resizeTolerance` either side, shows the divider under the pointer, and drags the
+/// column itself so the width lands inside the column's own limits.
 final class GridHeaderView: NSTableHeaderView {
     weak var controller: GridCoordinator?
+
+    /// How far either side of a divider still counts as grabbing it.
+    static let resizeTolerance: CGFloat = 6
+
+    /// The divider the pointer is on, as an index into `resizeEdges()`; nil when it is
+    /// not on one. Drawn thicker so the handle is visible before it is grabbed.
+    private var hoveredEdge: Int?
+    private var trackingArea: NSTrackingArea?
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
@@ -1313,6 +1429,125 @@ final class GridHeaderView: NSTableHeaderView {
             menu = controller?.headerMenu(forPosition: position >= 0 ? position : nil)
         }
         return menu
+    }
+
+    /// The divider nearest `x`, if `x` is within `tolerance` of one. Apart from the view
+    /// so the hit rule can be tested.
+    static func resizeBoundary(at x: CGFloat, edges: [CGFloat], tolerance: CGFloat) -> Int? {
+        var best: Int?
+        var bestDistance = CGFloat.infinity
+        for (index, edge) in edges.enumerated() {
+            // Two dividers can both be in range on a very narrow column; the nearer wins.
+            let distance = abs(x - edge)
+            guard distance <= tolerance, distance < bestDistance else { continue }
+            best = index
+            bestDistance = distance
+        }
+        return best
+    }
+
+    /// The trailing edge of every column that can be resized, in this view's coordinates.
+    /// The gutter has no resizing mask, so its edge is not a handle.
+    private func resizeEdges() -> [(x: CGFloat, column: NSTableColumn)] {
+        guard let tableView else { return [] }
+        return tableView.tableColumns.enumerated().compactMap { position, column in
+            guard column.resizingMask.contains(.userResizingMask) else { return nil }
+            return (headerRect(ofColumn: position).maxX, column)
+        }
+    }
+
+    // MARK: Hover
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self)
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let point = convert(event.locationInWindow, from: nil)
+        setHoveredEdge(Self.resizeBoundary(at: point.x, edges: resizeEdges().map(\.x), tolerance: Self.resizeTolerance))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        setHoveredEdge(nil)
+    }
+
+    private func setHoveredEdge(_ edge: Int?) {
+        guard hoveredEdge != edge else { return }
+        hoveredEdge = edge
+        needsDisplay = true
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        let tolerance = Self.resizeTolerance
+        for edge in resizeEdges() {
+            addCursorRect(
+                NSRect(x: edge.x - tolerance, y: 0, width: tolerance * 2, height: bounds.height),
+                cursor: .resizeLeftRight)
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let edges = resizeEdges()
+        guard let hoveredEdge, edges.indices.contains(hoveredEdge) else { return }
+        NSColor.secondaryLabelColor.setFill()
+        NSRect(x: edges[hoveredEdge].x - 1, y: 2, width: 2, height: bounds.height - 4).fill()
+    }
+
+    // MARK: Dragging a divider
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let edges = resizeEdges()
+        guard let index = Self.resizeBoundary(at: point.x, edges: edges.map(\.x), tolerance: Self.resizeTolerance)
+        else {
+            super.mouseDown(with: event)
+            return
+        }
+        let column = edges[index].column
+        if event.clickCount == 2 {
+            MainActor.assumeIsolated { controller?.autosizeColumn(named: column.identifier.rawValue) }
+            window?.invalidateCursorRects(for: self)
+            return
+        }
+        drag(columnID: column.identifier, from: point.x, startingAt: column.width)
+    }
+
+    /// Follows the pointer until the mouse goes up, setting the column's width as it goes.
+    ///
+    /// Setting the width posts `NSTableView.columnDidResizeNotification`, so the widths a
+    /// table tab remembers are written by the path that already handles a resize. That
+    /// notification is also why the column is looked up by identifier on every event
+    /// rather than held: the tab publishes the new widths, SwiftUI updates the grid inside
+    /// this loop, and a reload that rebuilds the columns would otherwise leave the drag
+    /// pushing a column the table no longer shows.
+    private func drag(columnID: NSUserInterfaceItemIdentifier, from startX: CGFloat, startingAt startWidth: CGFloat) {
+        NSCursor.resizeLeftRight.set()
+        window?.trackEvents(matching: [.leftMouseDragged, .leftMouseUp], timeout: .infinity, mode: .eventTracking) {
+            event, stop in
+            guard let event, let column = self.tableView?.tableColumns.first(where: { $0.identifier == columnID })
+            else {
+                stop.pointee = true
+                return
+            }
+            let point = self.convert(event.locationInWindow, from: nil)
+            let width = min(max(startWidth + point.x - startX, column.minWidth), column.maxWidth)
+            if column.width != width { column.width = width }
+            if event.type == .leftMouseUp {
+                stop.pointee = true
+                self.setHoveredEdge(nil)
+                self.window?.invalidateCursorRects(for: self)
+            }
+        }
     }
 }
 
@@ -1330,4 +1565,6 @@ extension Notification.Name {
     static let tinkerPeekOnMap = Notification.Name("TinkerPeekOnMap")
     /// The inspector asks the grid to open the foreign-key picker over a cell.
     static let tinkerPresentReferencePicker = Notification.Name("TinkerPresentReferencePicker")
+    /// Asks the grid to open a date or time cell's picker over it (UI demo only).
+    static let tinkerPresentTemporalPicker = Notification.Name("TinkerPresentTemporalPicker")
 }

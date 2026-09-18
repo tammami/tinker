@@ -169,8 +169,9 @@ final class AppHelperTests: XCTestCase {
         // A query may return columns that belong to no writable table. The inspector asks
         // the grid the same question the grid asks itself before a write, so a column the
         // grid would refuse is not offered as a field to type into.
-        let grid = GridModel(source: .query("SELECT id, name, id * 2 FROM invoices"), dialect: .sqlite,
-                             loader: ThreeColumnLoader())
+        let grid = GridModel(
+            source: .query("SELECT id, name, id * 2 FROM invoices"), dialect: .sqlite,
+            loader: ThreeColumnLoader())
         await grid.load(page: 0)
         grid.editTarget = TableRef(database: "main", schema: "main", name: "invoices")
         grid.setIdentity(columns: ["id"], kind: .int)
@@ -244,6 +245,57 @@ final class GridInsertTypingTests: XCTestCase {
         var columns = GridSelection(row: 3, column: 0)
         columns.mode = .columns
         XCTAssertFalse(rule(columns))
+    }
+}
+
+/// Which editor a cell's type opens, and how wide a column divider is to grab.
+@MainActor
+final class GridCellEditorChoiceTests: XCTestCase {
+    func testADateOrATimestampOpensTheCalendarRatherThanATextField() {
+        for kind in [DBValueKind.date, .time, .timestamp] {
+            XCTAssertEqual(
+                GridCoordinator.inlineEditorKind(for: kind, hasChoices: false), .temporal,
+                "\(kind) is picked, not typed blind")
+        }
+    }
+
+    func testEverythingElseIsStillTyped() {
+        for kind in [DBValueKind.string, .int, .decimal, .json, .bytes] {
+            XCTAssertEqual(GridCoordinator.inlineEditorKind(for: kind, hasChoices: false), .text)
+        }
+    }
+
+    /// An enum column whose type happens to be temporal is still picked from its values.
+    func testFixedValuesWinOverTheCalendar() {
+        XCTAssertEqual(GridCoordinator.inlineEditorKind(for: .timestamp, hasChoices: true), .choices)
+        XCTAssertEqual(GridCoordinator.inlineEditorKind(for: .string, hasChoices: true), .choices)
+    }
+
+    func testTheDividerIsGrabbedFromEitherSideOfIt() {
+        let edges: [CGFloat] = [100, 260]
+        let tolerance = GridHeaderView.resizeTolerance
+        XCTAssertEqual(GridHeaderView.resizeBoundary(at: 100, edges: edges, tolerance: tolerance), 0)
+        XCTAssertEqual(GridHeaderView.resizeBoundary(at: 100 - tolerance, edges: edges, tolerance: tolerance), 0)
+        XCTAssertEqual(GridHeaderView.resizeBoundary(at: 100 + tolerance, edges: edges, tolerance: tolerance), 0)
+        XCTAssertEqual(GridHeaderView.resizeBoundary(at: 258, edges: edges, tolerance: tolerance), 1)
+        XCTAssertNil(
+            GridHeaderView.resizeBoundary(at: 100 + tolerance + 1, edges: edges, tolerance: tolerance),
+            "past the band the click belongs to the header itself, which sorts")
+        XCTAssertNil(GridHeaderView.resizeBoundary(at: 180, edges: edges, tolerance: tolerance))
+    }
+
+    /// A column narrow enough for two dividers to be in reach hands over the nearer one.
+    func testTheNearerDividerWins() {
+        let edges: [CGFloat] = [100, 106]
+        XCTAssertEqual(GridHeaderView.resizeBoundary(at: 104, edges: edges, tolerance: 6), 1)
+        XCTAssertEqual(GridHeaderView.resizeBoundary(at: 102, edges: edges, tolerance: 6), 0)
+    }
+
+    /// The popover is as wide as the shape the picker draws: a clock alone is narrower.
+    func testTheEditorIsSizedForWhatItShows() {
+        XCTAssertLessThan(
+            CellTemporalEditorView.width(for: .time), CellTemporalEditorView.width(for: .timestamp))
+        XCTAssertEqual(CellTemporalEditorView.width(for: .date), CellTemporalEditorView.width(for: .timestamp))
     }
 }
 

@@ -140,6 +140,22 @@ public struct TableTabView: View {
                     }
                 }
             }
+            if UserDefaults.standard.bool(forKey: "uiDemo.temporalPick") {
+                UserDefaults.standard.removeObject(forKey: "uiDemo.temporalPick")
+                Task {
+                    for _ in 0 ..< 8 {
+                        try? await Task.sleep(for: .milliseconds(700))
+                        guard let model = controller.model,
+                            let column = model.columns.firstIndex(where: { TemporalText.isTemporal($0.kind) })
+                        else { continue }
+                        controller.selection = GridSelection(row: 0, column: column)
+                        NotificationCenter.default.post(
+                            name: .tinkerPresentTemporalPicker, object: controller,
+                            userInfo: ["row": 0, "column": column, "demo": true])
+                        return
+                    }
+                }
+            }
             if let wanted = UserDefaults.standard.string(forKey: "uiDemo.choices") {
                 UserDefaults.standard.removeObject(forKey: "uiDemo.choices")
                 Task {

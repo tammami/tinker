@@ -105,6 +105,9 @@ enum UIDemo {
             case "inspector":
                 workspace.selectedTab?.isInspectorVisible = true
             case "datepicker":
+                // The picker opens over the cell itself; the inspector shows the same
+                // value beside it.
+                UserDefaults.standard.set(true, forKey: "uiDemo.temporalPick")
                 if let preferred {
                     let tab = controller.openTable(preferred.ref, connectionID: config.id)
                     workspace.selectedTab?.isInspectorVisible = true

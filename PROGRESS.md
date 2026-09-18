@@ -866,3 +866,41 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 - The hosted performance tests run in Debug in `ci.sh` (the Release build of the app is
   not part of CI); the Release numbers above were taken by hand with
   `xcodebuild -configuration Release ENABLE_TESTABILITY=YES … test`.
+
+## 2026-09-18 — The grid's own date picker, and a column divider you can grab
+
+### Done
+- A date, time or timestamp cell opens its picker over the cell itself (↩, double-click,
+  ⌥↓ or the context menu's Pick Date and Time…), instead of only in the inspector
+  (SPEC §12.2). The popover carries the server's own text in a monospaced field — the
+  raw-text fallback, which commits verbatim — above the calendar and clock; both routes
+  go through the grid's ordinary edit path, so validation, auto-commit and the production
+  gate still apply. Which editor a cell opens is now one rule: fixed values are picked,
+  temporal types get the calendar, everything else is typed.
+- The column dividers in the header are handles six points either side, carry the resize
+  cursor over the whole band, and draw themselves two points wide under the pointer so the
+  handle can be seen before it is grabbed. The header now owns the drag rather than
+  leaving it to AppKit's two-point band, and looks the column up by identifier on every
+  event, so a reload that rebuilds the columns mid-drag cannot strand it. Double-clicking
+  a divider still sizes the column to fit.
+- `--ui-demo datepicker` now opens the picker over the cell as well as the inspector.
+
+### Tests
+- App-hosted `GridCellEditorChoiceTests` (6): `testADateOrATimestampOpensTheCalendarRatherThanATextField`,
+  `testEverythingElseIsStillTyped` and `testFixedValuesWinOverTheCalendar` pin the editor
+  rule, including an enum column whose type is temporal; `testTheDividerIsGrabbedFromEitherSideOfIt`,
+  `testTheNearerDividerWins` and `testTheEditorIsSizedForWhatItShows` pin the divider's
+  band, the tie between two dividers on a narrow column, and the popover's width per kind.
+- `Scripts/ci.sh`: green (PostgreSQL 16, MySQL 9.4, MariaDB 11.8, SQLite 3.54; the two
+  long-standing skips only).
+- Checked by hand against the local PostgreSQL `tinker_test.orders`: the popover opens
+  under `placed_at` with the timestamptz text selected, and nothing clips.
+
+### Not done / deferred
+- The divider's hover highlight is drawn but not covered by a test, and was not seen by
+  hand: a pointer cannot be moved over the header without sending synthetic input into
+  whatever window is frontmost, and the user's own Tinker was in front.
+- Why a table tab was harder to resize than a query tab is not confirmed. The likeliest
+  cause, from reading the code rather than from a reproduction, is that only a table tab
+  publishes each new width, so SwiftUI re-renders the grid mid-drag; the header owning the
+  drag holds either way, but the difference itself was never reproduced.

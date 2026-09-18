@@ -70,17 +70,22 @@ public struct CommitResult: Sendable {
     /// Rows the inserts returned, so the grid can show the real values without a reload.
     public let insertedRows: [[DBValue]]
     public let insertedColumns: [ColumnMeta]
+    /// The generated key each insert reported, in the order the inserts ran, for a server
+    /// that answers with a number rather than the row (MySQL). `nil` where none was given.
+    public let insertLastIDs: [Int64?]
 
     public init(
         statementCount: Int,
         totalAffectedRows: Int64,
         insertedRows: [[DBValue]] = [],
-        insertedColumns: [ColumnMeta] = []
+        insertedColumns: [ColumnMeta] = [],
+        insertLastIDs: [Int64?] = []
     ) {
         self.statementCount = statementCount
         self.totalAffectedRows = totalAffectedRows
         self.insertedRows = insertedRows
         self.insertedColumns = insertedColumns
+        self.insertLastIDs = insertLastIDs
     }
 }
 
@@ -104,6 +109,7 @@ public struct GridCommitter: Sendable {
         var totalAffected: Int64 = 0
         var insertedRows: [[DBValue]] = []
         var insertedColumns: [ColumnMeta] = []
+        var insertLastIDs: [Int64?] = []
 
         for statement in statements {
             let outcome: StatementOutcome
@@ -129,9 +135,12 @@ public struct GridCommitter: Sendable {
                 totalAffected += outcome.affectedRows ?? 0
             }
 
-            if statement.kind == .insert, !outcome.returnedRows.isEmpty {
-                insertedRows.append(contentsOf: outcome.returnedRows)
-                if insertedColumns.isEmpty { insertedColumns = outcome.returnedColumns }
+            if statement.kind == .insert {
+                insertLastIDs.append(outcome.lastInsertID)
+                if !outcome.returnedRows.isEmpty {
+                    insertedRows.append(contentsOf: outcome.returnedRows)
+                    if insertedColumns.isEmpty { insertedColumns = outcome.returnedColumns }
+                }
             }
         }
 
@@ -147,7 +156,8 @@ public struct GridCommitter: Sendable {
             statementCount: statements.count,
             totalAffectedRows: totalAffected,
             insertedRows: insertedRows,
-            insertedColumns: insertedColumns
+            insertedColumns: insertedColumns,
+            insertLastIDs: insertLastIDs
         )
     }
 }

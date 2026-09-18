@@ -394,7 +394,8 @@ public final class GridModel {
             page: pageOffset + page, strategy: strategy, keysetAnchor: anchor,
             sort: effectiveSort, filter: filter
         )
-        let signpost = GridSignposts.signposter.beginInterval("page load", id: GridSignposts.signposter.makeSignpostID())
+        let signpost = GridSignposts.signposter.beginInterval(
+            "page load", id: GridSignposts.signposter.makeSignpostID())
         defer { GridSignposts.signposter.endInterval("page load", signpost) }
         do {
             let loaded = try await loader.loadPage(request)
@@ -548,17 +549,120 @@ public final class GridModel {
     public func commit(
         using runner: any GridStatementRunner, scope: CommitScope = .everything
     ) async throws -> CommitResult {
-        guard let table = writableTable else { return try await GridCommitter().commit([], using: runner) }
+        try await commitRecordingRevert(using: runner, scope: scope).result
+    }
+
+    /// What a commit did, and what would put it back.
+    public struct CommitOutcome: Sendable {
+        public let result: CommitResult
+        /// The statements that would restore what this commit replaced, or a plan that
+        /// says why it cannot be restored (ADR-0060).
+        public let revert: RevertPlan
+    }
+
+    /// Runs the pending statements of `scope` and, on success, clears them from the
+    /// buffer — and works out, before running a thing, what would put them back.
+    public func commitRecordingRevert(
+        using runner: any GridStatementRunner, scope: CommitScope = .everything
+    ) async throws -> CommitOutcome {
+        guard let table = writableTable else {
+            return CommitOutcome(result: try await GridCommitter().commit([], using: runner), revert: .nothing)
+        }
         let generator = DMLGenerator(dialect: dialect, table: table, identityColumns: identityColumns)
         // Only what is written now is cleared afterwards: an edit that arrives while the
         // statements are on the server stays pending for the next commit.
         let snapshot = edits.snapshot(scope)
         let statements = try edits.statements(using: generator, snapshot: snapshot)
+        // Built here, while the rows still hold the values the write is about to replace:
+        // the page is re-read afterwards and by then the old values are gone.
+        let planner = RevertPlanner(generator: generator, identityColumns: identityColumns, columns: columns)
+        let undoing = revertOfLoadedRows(snapshot, planner: planner)
         let result = try await GridCommitter().commit(statements, using: runner)
+        let revert = revertAddingInserts(undoing, snapshot: snapshot, result: result, planner: planner)
         edits.remove(committed: snapshot)
         // What was written is on the server; undoing it here would show the grid a state
-        // the server no longer has.
+        // the server no longer has. `revert` is how it is taken back instead.
         clearUndoHistory()
-        return result
+        return CommitOutcome(result: result, revert: revert)
+    }
+
+    /// The inverses that are known before the write runs: the edits' old values and the
+    /// deleted rows, both read from what the grid loaded.
+    private func revertOfLoadedRows(_ snapshot: EditBuffer.Snapshot, planner: RevertPlanner) -> RevertPlan {
+        var statements: [GeneratedStatement] = []
+        var blocked: [String] = []
+        let loaded = loadedRowsByIdentity(snapshot)
+        for identity in snapshot.deletions.sorted(by: { $0.sortKey < $1.sortKey }) {
+            do {
+                statements.append(try planner.inverseOfDelete(loadedRow: loaded[identity] ?? [:]))
+            } catch {
+                blocked.append(Self.reason(error))
+            }
+        }
+        for identity in snapshot.edits.keys.sorted(by: { $0.sortKey < $1.sortKey }) {
+            guard let edit = snapshot.edits[identity], !edit.changes.isEmpty else { continue }
+            do {
+                statements.append(
+                    try planner.inverseOfUpdate(
+                        changes: edit.changes,
+                        loaded: loaded[identity] ?? [:],
+                        originalIdentity: edit.originalIdentity))
+            } catch {
+                blocked.append(Self.reason(error))
+            }
+        }
+        return RevertPlan(statements: statements, blocked: blocked)
+    }
+
+    /// The inverses that are only known afterwards: a new row can only be deleted once the
+    /// server has said which key it got.
+    private func revertAddingInserts(
+        _ plan: RevertPlan, snapshot: EditBuffer.Snapshot, result: CommitResult, planner: RevertPlanner
+    ) -> RevertPlan {
+        guard !snapshot.insertions.isEmpty else { return plan }
+        var statements: [GeneratedStatement] = []
+        var blocked = plan.blocked
+        for (index, insert) in snapshot.insertions.enumerated() {
+            let identity = RevertPlanner.insertedIdentity(
+                identityColumns: identityColumns,
+                supplied: insert.values,
+                returnedRow: index < result.insertedRows.count ? result.insertedRows[index] : nil,
+                returnedColumns: result.insertedColumns,
+                lastInsertID: index < result.insertLastIDs.count ? result.insertLastIDs[index] : nil)
+            guard let identity else {
+                blocked.append("the server did not report the new row's key")
+                continue
+            }
+            do {
+                statements.append(try planner.inverseOfInsert(identity: identity))
+            } catch {
+                blocked.append(Self.reason(error))
+            }
+        }
+        // A new row's delete runs first, as a commit runs its deletes before its inserts.
+        return RevertPlan(statements: statements + plan.statements, blocked: blocked)
+    }
+
+    /// Every loaded row the snapshot touches, keyed by identity and by column name.
+    private func loadedRowsByIdentity(_ snapshot: EditBuffer.Snapshot) -> [RowIdentity: [String: DBValue]] {
+        let wanted = Set(snapshot.edits.keys).union(snapshot.deletions)
+        guard !wanted.isEmpty else { return [:] }
+        var rows: [RowIdentity: [String: DBValue]] = [:]
+        for row in 0 ..< rowCount {
+            guard let identity = rowIdentity(row), wanted.contains(identity), rows[identity] == nil,
+                let values = loadedRow(row)
+            else { continue }
+            var byName: [String: DBValue] = [:]
+            for (index, column) in columns.enumerated() where index < values.count {
+                byName[column.name] = values[index]
+            }
+            rows[identity] = byName
+            if rows.count == wanted.count { break }
+        }
+        return rows
+    }
+
+    private static func reason(_ error: any Error) -> String {
+        (error as? RevertError)?.description ?? String(describing: error)
     }
 }

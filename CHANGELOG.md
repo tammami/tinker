@@ -4,6 +4,48 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.8] - 2026-09-18
+
+### Added
+- **A written edit can be taken back.** With auto-commit on, an edit reached the server
+  before the hand left the keyboard and there was nothing left to undo. Every write now
+  carries its own way back: the status line names the last one and offers Undo, ⌘Z takes
+  it back once nothing is pending, and a popover lists what the tab has written, each
+  entry with Put Back. The statements that restore the old values are worked out before
+  the write runs — while the rows still hold what is about to be replaced — and they run
+  under the same one-row check a commit does, so a row that changed again in the meantime
+  is refused rather than overwritten. Query result grids have it too.
+- **A date, time or timestamp cell opens its picker over the cell.** ↩, a double-click,
+  ⌥↓ or the context menu; the server's own text sits above the calendar for anything the
+  picker cannot spell, and the two routes end at the same spelling.
+
+### Changed
+- **The grid says what it is about to do.** The cell editor opens with the caret at the
+  end rather than the whole value selected, ending an edit that changed nothing writes
+  nothing, and emptying a cell that held a value is asked about once while auto-commit is
+  on. An editable cell outlines itself under the pointer.
+- **Add Row and Delete Row moved to the foot of the grid,** beside the row count they act
+  on; the delete names its own damage ("Delete 3 Rows"). Auto-commit is now a pill that
+  reads as the mode it is.
+- **Charts tell their categories apart.** Bars and pie slices take a hue from an
+  eight-colour palette chosen separately for light and dark surfaces and checked for
+  colour-blind separation; a line, an area or a scatter keeps one colour, because it draws
+  one series.
+- **The query bar carries names only for what runs.** Run, Run Selected and Run All keep
+  their labels; Explain, Beautify and Split are icons with their shortcut in the tooltip.
+  The window toolbar drops the six unlabelled glyphs that repeated them.
+
+### Fixed
+- **A production connection no longer opens a transaction for a read.** `SELECT 1` on a
+  production tab used to leave TRANSACTION OPEN, a Commit button for a statement that
+  changed nothing, and a connection sitting idle in a transaction. A transaction now waits
+  for a write, or for auto-commit being turned off deliberately.
+- **Column dividers can be grabbed.** They are handles six points either side, they show
+  themselves under the pointer, and the header drags the column itself. A press on a
+  heading that moved is a drag, not a click, so a missed grab no longer re-sorts a table
+  and fetches the page again — which is what made resizing feel broken in a table tab and
+  fine in a query tab.
+
 ## [0.1.7] - 2026-09-17
 
 ### Changed

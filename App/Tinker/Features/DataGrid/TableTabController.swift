@@ -45,6 +45,13 @@ public final class TableTabController: DataGridDelegate {
     /// One write at a time, requests during a write merged into the next (shared with the
     /// query tab's result grids).
     private let writes = GridWriteQueue()
+
+    /// What this tab has written, newest first, and what would take each write back.
+    ///
+    /// With auto-commit on the edit buffer is empty again the moment a write lands, so its
+    /// own undo history has nothing left in it — which is how an accidental edit used to
+    /// become permanent the instant it was made (ADR-0060).
+    public let writeLog = WriteLog()
     /// True while an auto-commit write is on the server.
     public var isWriting: Bool { writes.isWriting }
 
@@ -504,12 +511,81 @@ public final class TableTabController: DataGridDelegate {
         }
         do {
             let runner = SessionStatementRunner(session: session)
-            let result = try await model.commit(using: runner, scope: scope)
+            let outcome = try await model.commitRecordingRevert(using: runner, scope: scope)
+            let result = outcome.result
             if result.statementCount > 0 {
                 lastCommitMessage =
                     "Committed \(result.statementCount) statement\(result.statementCount == 1 ? "" : "s")"
+                writeLog.record(
+                    WriteRecord(
+                        summary: WriteRecord.summary(of: outcome.written),
+                        revert: outcome.revert.statements,
+                        blockedReason: outcome.revert.isRevertible
+                            ? nil : (outcome.revert.blockedReason ?? "this write cannot be put back")))
             }
             errorText = nil
+            bumpRevision()
+            updateStatus()
+            return true
+        } catch let error as GridCommitError {
+            errorText = error.description
+            return false
+        } catch {
+            errorText = (error as? DBError)?.errorDescription ?? String(describing: error)
+            return false
+        }
+    }
+
+    // MARK: - Taking a write back (ADR-0060)
+
+    /// Runs the statements that put one write back, through the same queue and the same
+    /// one-row checks a commit uses: a row that changed again since is refused rather
+    /// than overwritten, and the message is the server's own.
+    public func revert(_ record: WriteRecord) {
+        guard record.canRevert, !isWriting else { return }
+        guard isProduction, let confirm else {
+            performRevert(record)
+            return
+        }
+        // On production a revert is a write like any other, and goes through the gate.
+        confirm(
+            GridEditPrompts.revertWrite(summary: record.summary, table: table.name) { [weak self] in
+                self?.performRevert(record)
+            })
+    }
+
+    /// Takes back the newest write that still can be, which is what ⌘Z means once the
+    /// edit buffer is empty.
+    public func revertLastWrite() {
+        guard let record = writeLog.undoable else { return }
+        revert(record)
+    }
+
+    private func performRevert(_ record: WriteRecord) {
+        writes.enqueue(
+            .everything,
+            hasPending: { _ in true },
+            perform: { [weak self] _ in await self?.runRevert(record) ?? false },
+            afterDrain: { [weak self] in await self?.reloadAfterWrite() }
+        )
+    }
+
+    private func runRevert(_ record: WriteRecord) async -> Bool {
+        guard let session else { return false }
+        if await session.isReadOnly {
+            errorText = "This connection is read-only"
+            return false
+        }
+        do {
+            let runner = SessionStatementRunner(session: session)
+            _ = try await GridCommitter().commit(record.revert, using: runner)
+            writeLog.markReverted(record.id)
+            writeLog.record(
+                WriteRecord(
+                    summary: "Put back: \(record.summary)", revert: [],
+                    blockedReason: "a revert is not itself taken back; edit the rows again instead"))
+            errorText = nil
+            lastCommitMessage = "Put back \(record.summary.lowercased())"
             bumpRevision()
             updateStatus()
             return true
@@ -683,6 +759,32 @@ public final class TableTabController: DataGridDelegate {
             errorText = "\"\(text)\" is not a valid \(model.columns[column].nativeTypeName)"
             return
         }
+        // Emptying a cell that had something in it is a deletion, not an edit, and with
+        // auto-commit on it lands before the hand has left the keyboard. It is asked about
+        // once; ⌘⌫ (Set NULL) stays unasked, because that one is already deliberate
+        // (ADR-0061).
+        if Self.clearsAValue(old: model.value(row: row, column: column), new: value),
+            autoCommitsEdits, !model.isPendingInsertRow(row), let confirm
+        {
+            confirm(
+                GridEditPrompts.clearValue(column: model.columns[column].name, from: table.name) { [weak self] in
+                    self?.applyEdit(value, row: row, column: column)
+                })
+            return
+        }
+        applyEdit(value, row: row, column: column)
+    }
+
+    /// Whether an edit empties a cell that held something. An edit to a cell that was
+    /// already empty, or to one being filled in on a new row, is nothing to ask about.
+    static func clearsAValue(old: DBValue?, new: DBValue) -> Bool {
+        guard let old, !old.isNull, let text = old.text, !text.isEmpty else { return false }
+        if new.isNull { return true }
+        return (new.text ?? "").isEmpty
+    }
+
+    private func applyEdit(_ value: DBValue, row: Int, column: Int) {
+        guard let model else { return }
         model.setValue(value, row: row, column: column)
         bumpRevision()
         updateStatus()
@@ -794,6 +896,13 @@ public final class TableTabController: DataGridDelegate {
     /// is on the wire lands whatever the grid shows.
     public func gridDidRequestUndo() {
         guard let model, !isWriting else { return }
+        // Nothing pending to undo means the last change has already been written — with
+        // auto-commit on, that is the usual case — so ⌘Z takes that write back instead
+        // (ADR-0060).
+        guard model.canUndo else {
+            revertLastWrite()
+            return
+        }
         model.undo()
         bumpRevision()
         updateStatus()
@@ -806,7 +915,9 @@ public final class TableTabController: DataGridDelegate {
         updateStatus()
     }
 
-    public func gridCanUndo() -> Bool { !isWriting && (model?.canUndo ?? false) }
+    public func gridCanUndo() -> Bool {
+        !isWriting && ((model?.canUndo ?? false) || writeLog.undoable != nil)
+    }
     public func gridCanRedo() -> Bool { !isWriting && (model?.canRedo ?? false) }
 
     /// The values of one row as the form view edits them, in column order.

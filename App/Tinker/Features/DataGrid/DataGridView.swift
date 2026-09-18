@@ -809,6 +809,7 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
                 if case .null = value { return "" }
                 return value.text ?? ""
             } ?? ""
+        editor.seed = editor.stringValue
         editor.onCommit = { [weak self] text in
             self?.delegate?.gridDidCommitEdit(row: row, column: column, text: text)
         }
@@ -830,6 +831,12 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         editor.frame = cell.bounds
         editor.autoresizingMask = [.width, .height]
         tableView.window?.makeFirstResponder(editor)
+        // The caret goes to the end rather than over the whole value. A field that opens
+        // with its contents selected turns one stray keystroke into "replace everything",
+        // which is exactly how a value gets wiped by accident (ADR-0061).
+        if let text = editor.currentEditor() {
+            text.selectedRange = NSRange(location: editor.stringValue.utf16.count, length: 0)
+        }
     }
 
     /// Moves the focus one column after an edit ended with Tab, wrapping to the next row
@@ -863,6 +870,49 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
             probe += direction
         }
         return model.columns.indices.contains(probe) ? step : 0
+    }
+
+    // MARK: - Hover
+
+    /// The cell the pointer is over, when it is one that can be typed into.
+    private var hoveredCell: (row: Int, column: Int)?
+
+    /// Follows the pointer across the grid, marking the editable cell under it. Only the
+    /// two cells that change are redrawn, so this costs nothing on a wide result.
+    func updateHover(at point: NSPoint?) {
+        guard let tableView, model.isEditable else {
+            clearHover()
+            return
+        }
+        var found: (row: Int, column: Int)?
+        if let point {
+            let row = tableView.row(at: point)
+            let position = tableView.column(at: point)
+            if row >= 0, position >= 0, let column = modelColumn(atPosition: position),
+                model.isColumnEditable(column)
+            {
+                found = (row, column)
+            }
+        }
+        guard found?.row != hoveredCell?.row || found?.column != hoveredCell?.column else { return }
+        setHovered(false, at: hoveredCell)
+        hoveredCell = found
+        setHovered(true, at: found)
+        (found == nil ? NSCursor.arrow : NSCursor.iBeam).set()
+    }
+
+    func clearHover() {
+        guard hoveredCell != nil else { return }
+        setHovered(false, at: hoveredCell)
+        hoveredCell = nil
+        NSCursor.arrow.set()
+    }
+
+    private func setHovered(_ isHovered: Bool, at cell: (row: Int, column: Int)?) {
+        guard let cell, let tableView, let position = position(ofModelColumn: cell.column),
+            let view = tableView.view(atColumn: position, row: cell.row, makeIfNecessary: false) as? GridCellView
+        else { return }
+        view.isHovered = isHovered
     }
 
     // MARK: - Context menu
@@ -1270,6 +1320,29 @@ public final class GridTableView: NSTableView {
 
     public override var acceptsFirstResponder: Bool { true }
 
+    private var hoverArea: NSTrackingArea?
+
+    public override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    public override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let point = convert(event.locationInWindow, from: nil)
+        MainActor.assumeIsolated { controller?.updateHover(at: point) }
+    }
+
+    public override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        MainActor.assumeIsolated { controller?.clearHover() }
+    }
+
     public override func keyDown(with event: NSEvent) {
         if let controller, MainActor.assumeIsolated({ controller.handleKeyDown(event) }) { return }
         super.keyDown(with: event)
@@ -1385,6 +1458,9 @@ public final class GridTableView: NSTableView {
 
 /// The text field shown while a cell is being edited.
 final class GridInlineEditor: NSTextField {
+    /// The value the cell held when the editor opened, so ending the edit without
+    /// changing anything writes nothing at all (ADR-0061).
+    var seed = ""
     var onCommit: ((String) -> Void)?
     /// Called after the editor is gone, committed or not, with the key that ended it so
     /// the grid can carry on where Tab points.
@@ -1420,7 +1496,7 @@ final class GridInlineEditor: NSTextField {
         let text = stringValue
         let window = window
         removeFromSuperview()
-        if committing { onCommit?(text) }
+        if committing, text != seed { onCommit?(text) }
         // The table takes focus back before the grid moves on, or the move would land on a
         // view that is no longer in the responder chain.
         window?.makeFirstResponder(window?.contentView)

@@ -235,6 +235,8 @@ public enum Icon {
     public static let export = "square.and.arrow.up"
     public static let importData = "square.and.arrow.down"
     public static let history = "clock.arrow.circlepath"
+    /// A mode that is holding rather than acting: auto-commit turned off.
+    public static let pause = "pause.circle"
     public static let snippet = "text.badge.plus"
     public static let format = "wand.and.sparkles"
     public static let copy = "doc.on.doc"

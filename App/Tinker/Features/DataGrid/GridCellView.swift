@@ -21,6 +21,11 @@ final class GridCellView: NSView {
     private(set) var stringValue = ""
     private var backgroundColor: NSColor = .clear
     private var isFocusedCell = false
+    /// True while the pointer is over this cell and the cell can be typed into. A grid
+    /// that can be written into says so before it is written into (ADR-0061).
+    var isHovered = false {
+        didSet { if isHovered != oldValue { needsDisplay = true } }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -103,17 +108,20 @@ final class GridCellView: NSView {
             stringValue = "…"
             text = NSAttributedString(
                 string: stringValue,
-                attributes: Style.attributes(font: Style.font, color: DesignTokens.Colors.nullText, alignment: alignment))
+                attributes: Style.attributes(
+                    font: Style.font, color: DesignTokens.Colors.nullText, alignment: alignment))
         case .null:
             stringValue = "NULL"
             text = NSAttributedString(
                 string: stringValue,
-                attributes: Style.attributes(font: Style.italic, color: DesignTokens.Colors.nullText, alignment: alignment))
+                attributes: Style.attributes(
+                    font: Style.italic, color: DesignTokens.Colors.nullText, alignment: alignment))
         case let .bytes(data):
             stringValue = "<\(data.count) bytes>"
             text = NSAttributedString(
                 string: stringValue,
-                attributes: Style.attributes(font: Style.font, color: DesignTokens.Colors.binaryText, alignment: alignment))
+                attributes: Style.attributes(
+                    font: Style.font, color: DesignTokens.Colors.binaryText, alignment: alignment))
         case let .some(other):
             stringValue = Self.displayText(for: other)
             if let label, changeState != .deleted {
@@ -124,7 +132,8 @@ final class GridCellView: NSView {
                 shown.append(
                     NSAttributedString(
                         string: "  ·  \(label)",
-                        attributes: Style.attributes(font: Style.font, color: .secondaryLabelColor, alignment: alignment)))
+                        attributes: Style.attributes(
+                            font: Style.font, color: .secondaryLabelColor, alignment: alignment)))
                 text = shown
             } else {
                 text = NSAttributedString(
@@ -212,6 +221,13 @@ final class GridCellView: NSView {
             let path = NSBezierPath(rect: bounds.insetBy(dx: 1, dy: 1))
             path.lineWidth = 2
             path.stroke()
+        } else if isHovered {
+            // Quieter than the focus ring by design: it says "this can be typed into",
+            // not "this is selected".
+            NSColor.tertiaryLabelColor.setStroke()
+            let path = NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5))
+            path.lineWidth = 1
+            path.stroke()
         }
         guard let text else { return }
         // One line, vertically centred, cut with an ellipsis at the trailing edge.
@@ -241,8 +257,10 @@ final class GridRowNumberView: NSView {
     static let reuseIdentifier = NSUserInterfaceItemIdentifier("Tinker.GridRowNumber")
 
     @MainActor private static let selectedAttributes: [NSAttributedString.Key: Any] = attributes(color: .labelColor)
-    @MainActor private static let plainAttributes: [NSAttributedString.Key: Any] = attributes(color: .secondaryLabelColor)
-    @MainActor private static let lineHeight: CGFloat = ceil(NSLayoutManager().defaultLineHeight(for: DesignTokens.Fonts.grid))
+    @MainActor private static let plainAttributes: [NSAttributedString.Key: Any] = attributes(
+        color: .secondaryLabelColor)
+    @MainActor private static let lineHeight: CGFloat = ceil(
+        NSLayoutManager().defaultLineHeight(for: DesignTokens.Fonts.grid))
 
     private static func attributes(color: NSColor) -> [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()

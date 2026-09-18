@@ -27,6 +27,7 @@ public struct TableTabView: View {
 
     @State private var mode: Mode = .data
     @State private var isColumnsPopoverShown = false
+    @State private var isWriteLogShown = false
     /// The structure pane is built the first time it is asked for, then kept.
     @State private var hasVisitedStructure = false
     @State private var mapColumn = -1
@@ -278,25 +279,31 @@ public struct TableTabView: View {
                 // A production connection has no auto-commit: every write goes through the
                 // commit sheet, so the checkbox would only mislead and is not shown.
                 if !controller.isProduction {
-                    // Bound to the property itself, so the click shows at once; the write it
-                    // may owe happens after.
-                    Toggle("Auto-commit", isOn: $controller.autoCommit)
-                        .toggleStyle(.checkbox)
-                        .onChange(of: controller.autoCommit) { _, enabled in
-                            tab.autoCommit = enabled
-                            controller.autoCommitDidChange()
-                        }
-                        .help("On writes each edit as you make it; off keeps edits pending until Commit")
+                    // A mode, not an action: whether a keystroke in a cell reaches the
+                    // server at once is the most consequential thing in this bar, and a
+                    // grey checkbox beside six grey icons read as one more of them
+                    // (ADR-0061). Bound to the property itself, so the click shows at
+                    // once; the write it may owe happens after.
+                    ModePill(
+                        title: "Auto-commit",
+                        icon: controller.autoCommit ? Icon.commit : Icon.pause,
+                        isOn: $controller.autoCommit,
+                        onColor: .orange
+                    )
+                    .onChange(of: controller.autoCommit) { _, enabled in
+                        tab.autoCommit = enabled
+                        controller.autoCommitDidChange()
+                    }
+                    .help(
+                        controller.autoCommit
+                            ? "On: every edit is written to the server as you make it"
+                            : "Off: edits are held until you press Commit")
 
                     BarDivider()
                 }
 
-                IconButton(icon: Icon.add, label: "Add row (⌘⌥A)") { controller.addRow() }
-                    .disabled(!(controller.model?.isEditable ?? false))
-                IconButton(icon: Icon.remove, label: "Delete selected rows (⌘−)") {
-                    controller.deleteSelectedRows()
-                }
-                .disabled(!(controller.model?.isEditable ?? false))
+                // Adding and deleting rows live at the foot of the grid now, beside the
+                // row count they act on, rather than one icon away from Refresh.
                 IconButton(icon: Icon.refresh, label: "Reload rows (F5)") {
                     Task { await controller.refresh() }
                 }
@@ -442,8 +449,10 @@ public struct TableTabView: View {
     var statusBar: some View {
         StatusBarView {
             pager
+            rowActions
             Text(controller.statusText)
             Spacer()
+            lastWriteStatus
             if let model = controller.model {
                 let rows = controller.selection.selectedRowCount(totalRows: model.displayRowCount)
                 if controller.selection.mode == .rows, rows > 0 {
@@ -472,6 +481,63 @@ public struct TableTabView: View {
                     .disabled(controller.isWriting)
                 }
             }
+        }
+    }
+
+    /// Adding and deleting rows, next to the count of rows they act on. The delete says
+    /// how many it would take, because a button that names its own damage is half the
+    /// safeguard (ADR-0061).
+    @ViewBuilder
+    private var rowActions: some View {
+        if let model = controller.model, model.isEditable {
+            let rows = controller.selection.selectedRowCount(totalRows: model.displayRowCount)
+            Button {
+                controller.addRow()
+            } label: {
+                Label("Add Row", systemImage: Icon.add)
+            }
+            .controlSize(.small)
+            .help("Add a row (⌘⌥A)")
+
+            Button(role: .destructive) {
+                controller.deleteSelectedRows()
+            } label: {
+                Label(rows > 1 ? "Delete \(rows) Rows" : "Delete Row", systemImage: Icon.delete)
+            }
+            .controlSize(.small)
+            .disabled(rows == 0)
+            .help(
+                rows == 0 ? "Select a row first — click its number in the left column" : "Delete the selected rows (⌘−)"
+            )
+
+            BarDivider()
+        }
+    }
+
+    /// What the last write did, and the way back from it. With auto-commit on this is the
+    /// only trace a written edit leaves, so it carries the Undo (ADR-0060).
+    @ViewBuilder
+    private var lastWriteStatus: some View {
+        if let latest = controller.writeLog.latest, !controller.isWriting {
+            Button {
+                isWriteLogShown = true
+            } label: {
+                Label(latest.summary, systemImage: Icon.history)
+                    .labelStyle(.titleAndIcon)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("What this tab has written")
+            .popover(isPresented: $isWriteLogShown, arrowEdge: .top) {
+                WriteLogPopover(controller: controller)
+            }
+
+            if let undoable = controller.writeLog.undoable, undoable.id == latest.id {
+                Button("Undo") { controller.revert(undoable) }
+                    .controlSize(.small)
+                    .help("Put back what this write replaced (⌘Z)")
+            }
+            BarDivider()
         }
     }
 

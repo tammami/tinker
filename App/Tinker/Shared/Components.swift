@@ -95,6 +95,41 @@ struct Badge: View {
     }
 }
 
+/// A switch that reads as a mode rather than as one more button in the row.
+///
+/// For the settings that change what a click *does* — auto-commit being the one that
+/// decides whether a keystroke in a cell reaches the server at once. A checkbox among
+/// icon buttons reads as passive; a filled pill reads as a state the window is in
+/// (ADR-0061).
+struct ModePill: View {
+    let title: String
+    let icon: String
+    @Binding var isOn: Bool
+    var onColor: Color = .accentColor
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+        } label: {
+            HStack(spacing: DesignTokens.Spacing.xs) {
+                Image(systemName: icon)
+                Text(title)
+                    .font(.caption.weight(.semibold))
+            }
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, DesignTokens.Spacing.sm)
+            .padding(.vertical, 2)
+            .background(isOn ? onColor.opacity(0.22) : Color.secondary.opacity(0.12))
+            .foregroundStyle(isOn ? onColor : Color.secondary)
+            .clipShape(Capsule())
+            .overlay(Capsule().strokeBorder(isOn ? onColor.opacity(0.55) : .clear))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title), \(isOn ? "on" : "off")")
+    }
+}
+
 /// A keyboard shortcut drawn as a key cap, so hints look the same everywhere.
 struct KeyCap: View {
     let keys: String

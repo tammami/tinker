@@ -558,6 +558,9 @@ public final class GridModel {
         /// The statements that would restore what this commit replaced, or a plan that
         /// says why it cannot be restored (ADR-0060).
         public let revert: RevertPlan
+        /// What was written, in the order it ran, so a tab can say "1 row updated"
+        /// rather than "1 statement".
+        public let written: [GeneratedStatement.Kind]
     }
 
     /// Runs the pending statements of `scope` and, on success, clears them from the
@@ -566,7 +569,8 @@ public final class GridModel {
         using runner: any GridStatementRunner, scope: CommitScope = .everything
     ) async throws -> CommitOutcome {
         guard let table = writableTable else {
-            return CommitOutcome(result: try await GridCommitter().commit([], using: runner), revert: .nothing)
+            return CommitOutcome(
+                result: try await GridCommitter().commit([], using: runner), revert: .nothing, written: [])
         }
         let generator = DMLGenerator(dialect: dialect, table: table, identityColumns: identityColumns)
         // Only what is written now is cleared afterwards: an edit that arrives while the
@@ -583,7 +587,7 @@ public final class GridModel {
         // What was written is on the server; undoing it here would show the grid a state
         // the server no longer has. `revert` is how it is taken back instead.
         clearUndoHistory()
-        return CommitOutcome(result: result, revert: revert)
+        return CommitOutcome(result: result, revert: revert, written: statements.map(\.kind))
     }
 
     /// The inverses that are known before the write runs: the edits' old values and the

@@ -19,4 +19,35 @@ enum GridEditPrompts {
             action: action
         )
     }
+
+    /// Asked before clearing a value that had something in it, when auto-commit would send
+    /// the UPDATE at once. Emptying a cell is a deletion, not an edit, and the editor
+    /// opens on a whole selected value where one keystroke does it (ADR-0061).
+    static func clearValue(
+        column: String, from name: String, action: @escaping @MainActor () async -> Void
+    ) -> DestructiveConfirmation {
+        DestructiveConfirmation(
+            title: "Clear “\(column)”?",
+            message:
+                "The cell has a value; leaving it empty writes an empty value to “\(name)” straight away, "
+                + "because auto-commit is on. Esc leaves the value as it was.",
+            confirmTitle: "Clear Value",
+            action: action
+        )
+    }
+
+    /// Asked before putting a write back on a production connection: the revert is itself
+    /// a write, and production asks about every one of them.
+    static func revertWrite(
+        summary: String, table name: String, action: @escaping @MainActor () async -> Void
+    ) -> DestructiveConfirmation {
+        DestructiveConfirmation(
+            title: "Put back “\(summary)” on “\(name)”?",
+            message:
+                "This runs the statements that restore the values the write replaced, in one transaction. "
+                + "A row that changed again since is refused rather than overwritten.",
+            confirmTitle: "Put It Back",
+            action: action
+        )
+    }
 }

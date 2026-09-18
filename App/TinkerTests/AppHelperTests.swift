@@ -248,6 +248,64 @@ final class GridInsertTypingTests: XCTestCase {
     }
 }
 
+/// What a write leaves behind, so it can be taken back (ADR-0060), and the guard on the
+/// edit that empties a cell (ADR-0061).
+@MainActor
+final class WriteLogTests: XCTestCase {
+    private func record(
+        _ summary: String, revert: [GeneratedStatement]? = nil, blocked: String? = nil
+    )
+        -> WriteRecord
+    {
+        WriteRecord(summary: summary, revert: revert ?? [Self.statement], blockedReason: blocked)
+    }
+
+    private static let statement = GeneratedStatement(
+        kind: .update, sql: "UPDATE t SET a = $1 WHERE id = $2", parameters: [.string("Ada"), .int(1)],
+        table: TableRef(database: "app", schema: "public", name: "t"), expectsSingleRow: true)
+
+    func testAWriteIsDescribedByWhatItDidNotByItsStatementCount() {
+        XCTAssertEqual(WriteRecord.summary(of: [.update]), "1 row updated")
+        XCTAssertEqual(WriteRecord.summary(of: [.update, .update]), "2 rows updated")
+        XCTAssertEqual(WriteRecord.summary(of: [.delete, .delete, .delete]), "3 rows deleted")
+        XCTAssertEqual(WriteRecord.summary(of: [.insert]), "1 row added")
+        XCTAssertEqual(WriteRecord.summary(of: [.insert, .delete]), "2 changes written")
+    }
+
+    func testTheNewestWriteThatCanBeTakenBackIsTheOneOffered() {
+        let log = WriteLog()
+        log.record(record("1 row updated"))
+        log.record(record("1 row added", revert: [], blocked: "the server did not report the new row's key"))
+        XCTAssertEqual(log.latest?.summary, "1 row added", "the status line names the last thing that happened")
+        XCTAssertEqual(log.undoable?.summary, "1 row updated", "but Undo offers the last one it can actually undo")
+
+        guard let undoable = log.undoable else { return XCTFail("nothing to undo") }
+        log.markReverted(undoable.id)
+        XCTAssertNil(log.undoable, "a write is taken back once")
+        XCTAssertEqual(log.records.count, 2, "and stays in the list afterwards")
+    }
+
+    func testTheLogIsBounded() {
+        let log = WriteLog()
+        for index in 0 ..< (WriteLog.capacity + 10) { log.record(record("write \(index)")) }
+        XCTAssertEqual(log.records.count, WriteLog.capacity)
+        XCTAssertEqual(log.records.first?.summary, "write \(WriteLog.capacity + 9)", "newest first")
+    }
+
+    /// Emptying a cell that held something is a deletion; typing in an empty one is not.
+    func testOnlyAnEditThatEmptiesAFilledCellIsAskedAbout() {
+        XCTAssertTrue(TableTabController.clearsAValue(old: .string("Aspal"), new: .string("")))
+        XCTAssertTrue(TableTabController.clearsAValue(old: .string("Aspal"), new: .null))
+        XCTAssertTrue(TableTabController.clearsAValue(old: .int(7), new: .null))
+        XCTAssertFalse(TableTabController.clearsAValue(old: .string(""), new: .string("")))
+        XCTAssertFalse(TableTabController.clearsAValue(old: .null, new: .string("")))
+        XCTAssertFalse(TableTabController.clearsAValue(old: nil, new: .string("")))
+        XCTAssertFalse(
+            TableTabController.clearsAValue(old: .string("Aspal"), new: .string("Semen")),
+            "replacing a value is an ordinary edit")
+    }
+}
+
 /// When a statement opens a transaction: the rule a production tab lives by (ADR-0057).
 @MainActor
 final class TransactionOpeningTests: XCTestCase {

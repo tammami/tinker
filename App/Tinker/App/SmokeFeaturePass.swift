@@ -129,6 +129,30 @@ extension SmokeTest {
                 check(
                     "auto-commit writes a cell edit when it ends (\(table.errorText ?? "no error"))",
                     byrons == 1 && table.errorText == nil)
+
+                // MARK: An auto-committed write can still be taken back (ADR-0060)
+                check(
+                    "the write is in the tab's log and can be put back",
+                    table.writeLog.latest?.summary == "1 row updated" && table.writeLog.undoable != nil)
+                let takenBack = table.writeLog.undoable?.id
+                table.revertLastWrite()
+                try await waitUntil(timeout: .seconds(20)) { !table.isWriting }
+                let backAgain =
+                    (try? await sql("SELECT name FROM \(scratchName) WHERE name = 'Ada Lovelace'"))??.rows.count
+                let byronsAfter =
+                    (try? await sql("SELECT name FROM \(scratchName) WHERE name = 'Ada Byron'"))??.rows.count
+                check(
+                    "undo puts the replaced value back on the server (\(table.errorText ?? "no error"))",
+                    backAgain == 1 && byronsAfter == 0 && table.errorText == nil)
+                // The log keeps every write this tab made, so what is offered next is the
+                // one before it; the one just undone is marked and never offered again.
+                check(
+                    "a write is taken back once",
+                    table.writeLog.records.first { $0.id == takenBack }?.isReverted == true
+                        && table.writeLog.undoable?.id != takenBack)
+                // Put it back the way the rest of the pass expects to find it.
+                table.gridDidCommitEdit(row: byronRow, column: nameColumn, text: "Ada Byron")
+                try await waitUntil(timeout: .seconds(20)) { !table.isWriting && table.pendingStatements().isEmpty }
             } else {
                 check("the renamed row is on the page", false)
             }

@@ -339,7 +339,6 @@ public struct TableTabView: View {
                     DataGridView(
                         model: model,
                         selection: $controller.selection,
-                        columnWidths: controller.columnWidths,
                         hiddenColumns: controller.hiddenColumns,
                         revision: controller.revision,
                         delegate: controller

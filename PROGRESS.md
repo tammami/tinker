@@ -904,3 +904,46 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
   cause, from reading the code rather than from a reproduction, is that only a table tab
   publishes each new width, so SwiftUI re-renders the grid mid-drag; the header owning the
   drag holds either way, but the difference itself was never reproduced.
+  (Both closed by the entry below.)
+
+## 2026-09-18 — Why a table tab lost the divider, measured (ADR-0056)
+
+### Done
+- The difference between the two tabs is found and fixed. A drag sets a column's width on
+  every mouse-move; a table tab reported each one into an `@Observable` property its view
+  read, so the whole tab re-rendered per mouse-move, while a query tab — whose
+  `gridDidChangeColumnWidths` is empty — did nothing. Measured in the running app with a
+  drag simulated as sixty width changes one frame apart: **62 `updateNSView` passes and
+  the header's tracking areas rebuilt 60 times**, against **3 passes and one** afterwards.
+  Rebuilding the tracking areas is what loses the pointer — the view following the mouse
+  over the divider is replaced while the mouse is on it. The same runs timed a worst step
+  of 19 ms before and 2.2 ms after, but a run with the tab re-evaluating and the grid not
+  updating showed 16 ms too, so the lateness does not separate the two cases; the rebuilt
+  tracking areas do.
+- The grid now asks for the widths it starts from (`DataGridDelegate.gridStoredColumnWidths()`,
+  read when the columns are built) instead of being handed them; `TableTabController.columnWidths`
+  is `@ObservationIgnored`. `hiddenColumns` stays observed — hiding a column must rebuild
+  the grid.
+- The divider's hover highlight is covered by a test now, driven by a synthetic
+  `NSEvent` on the header in a test window rather than by moving the real pointer.
+
+### Tests
+- App-hosted `GridHeaderTests` (3): `testThePointerOnADividerLightsItUp` moves the pointer
+  onto a divider, a few points short of it and a few points past it, and then to the
+  middle of a heading; `testTheRememberedWidthsAreAskedForWhenTheColumnsAreBuilt` proves
+  the widths arrive through the delegate; `testTheColumnSurvivesARebuildUnderTheDrag`
+  proves a rebuild makes new columns and the remembered width survives it, which is why
+  the drag looks its column up by identifier.
+- App-hosted `TableTabWidthObservationTests` (2): `testAWidthWrittenDuringADragNotifiesNobody`
+  is the regression guard for ADR-0056 — checked by removing `@ObservationIgnored`, where
+  it fails as it should — and `testHidingAColumnStillNotifies` keeps the other preferences
+  observed.
+- `Scripts/ci.sh`: green (PostgreSQL 16, MySQL 9.4, MariaDB 11.8, SQLite 3.54; the two
+  long-standing skips only).
+
+### Not done / deferred
+- The hover highlight is proven by event, not by eye: a real pointer cannot be moved over
+  the header without sending synthetic input into whatever window is frontmost.
+
+### Spec deviations
+- None. The decision is recorded as ADR-0056.

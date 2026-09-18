@@ -16,7 +16,13 @@ public final class TableTabController: DataGridDelegate {
     public var selection = GridSelection()
     /// Bumped whenever the grid's contents changed, which is what makes the view reload.
     public private(set) var revision = 0
-    public var columnWidths: [String: Double] = [:]
+    /// The widths the grid was last left at, remembered per table.
+    ///
+    /// Deliberately unobserved: the grid asks for these when it builds its columns
+    /// (`gridStoredColumnWidths`), and a drag writes one here on every mouse-move. A view
+    /// that read them would re-render the grid forty times a second mid-drag, which threw
+    /// the header's cursor rects away as fast as they were made (ADR-0056).
+    @ObservationIgnored public var columnWidths: [String: Double] = [:]
     /// Columns kept off the grid for this table. Remembered with the widths.
     public var hiddenColumns: Set<String> = []
     public var filterRules: [FilterRule] = []
@@ -808,6 +814,8 @@ public final class TableTabController: DataGridDelegate {
         guard let model, row >= 0, row < model.displayRowCount else { return nil }
         return (0 ..< model.columns.count).map { model.value(row: row, column: $0) ?? .null }
     }
+
+    public func gridStoredColumnWidths() -> [String: Double] { columnWidths }
 
     public func gridDidChangeColumnWidths(_ widths: [String: Double]) {
         columnWidths = widths

@@ -614,3 +614,41 @@ Date: 2026-09-17
 The alternative was to guess: MariaDB is often on another port here (3316), and the connection was even named "MariaDB". Both were rejected. A port is a local accident — the same server moves, and a MySQL instance can sit on 3316 just as easily — and a name is whatever someone typed. A badge that claims to identify an engine has to be right for the reason it says, which is that the server answered. The cost is that a connection never yet opened shows the dolphin once; after the first connection it is right for good.
 
 **Consequences.** The field is optional, so a connection saved before it existed decodes with `knownFlavor` nil and behaves exactly as before — covered by `testTheFlavourAServerReportedSurvivesAReopenAndAnOlderRowStillLoads`, which also proves the answer survives a quit.
+
+## ADR-0056 — A remembered column width is asked for, not published
+Date: 2026-09-18
+
+**Context.** Resizing a column was much harder in a table tab than in a query tab: the
+pointer would find the divider and then lose it. The two tabs host the same grid, so the
+difference had to be in what surrounds it. `TableTabController.gridDidChangeColumnWidths`
+stored the widths in an `@Observable` property that `TableTabView` read to build the grid;
+`QueryTabController`'s implementation of the same method is empty, because a result set
+remembers nothing.
+
+A drag sets a column's width on every mouse-move, and every width was reported back.
+Measured in the running app, with a drag simulated as sixty width changes one frame
+apart (the probe was temporary and is not in the tree): the table tab ran **62
+`updateNSView` passes and rebuilt the header's tracking areas 60 times**. The query tab
+does none of it. Tearing down the header's tracking areas is exactly what loses the
+pointer: the view that was following the mouse over the divider is replaced while the
+mouse is on it. A single run also timed a worst step of 19 ms before against 2.2 ms
+after, but a run with the tab re-evaluating and the grid *not* updating showed 16 ms too,
+so the lateness does not separate the two cases; the count of rebuilt tracking areas
+does.
+
+**Decision.** The grid asks for the widths it should start from — a new
+`DataGridDelegate.gridStoredColumnWidths()`, read when the columns are built — instead of
+being handed them as a view property. `TableTabController.columnWidths` is
+`@ObservationIgnored`: it is written on every mouse-move and no view may re-render for it.
+The same measurement afterwards: 3 `updateNSView` passes, tracking areas built once.
+
+Making the write cheaper instead — coalescing the reports, or publishing only on mouse-up
+— was rejected. The grid would still be re-rendering for state no one is showing, and the
+next property written mid-drag would bring the problem straight back. The widths are the
+grid's own business; the tab only stores them.
+
+**Consequences.** The other grid preferences are unaffected: `hiddenColumns` stays
+observed, because hiding a column *must* rebuild the grid — pinned by
+`testHidingAColumnStillNotifies` beside `testAWidthWrittenDuringADragNotifiesNobody`. A
+width now reaches the columns only when they are built, which is where it was applied
+before; the widths are still persisted, debounced, by the path that already did it.

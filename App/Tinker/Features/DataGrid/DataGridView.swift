@@ -12,6 +12,12 @@ public protocol DataGridDelegate: AnyObject {
     func gridDidCommitEdit(row: Int, column: Int, text: String)
     func gridDidRequestInspector()
     func gridDidChangeColumnWidths(_ widths: [String: Double])
+    /// The widths this tab remembers, asked for when the columns are built.
+    ///
+    /// Asked for rather than passed in: a drag sets a width forty times a second, and a
+    /// width the view read would re-render the grid — and throw away the header's cursor
+    /// rects — on every one of them (measured; ADR-0056).
+    func gridStoredColumnWidths() -> [String: Double]
     /// A click on a column heading. `additive` is true when shift was held, which adds a
     /// secondary sort rather than replacing the first (SPEC §12.4).
     func gridDidClickColumnHeader(column: Int, additive: Bool)
@@ -77,6 +83,8 @@ public extension DataGridDelegate {
     func gridDidRequestShowOnMap(row: Int, column: Int) {}
     func gridDidRequestHideColumn(_ column: Int) {}
     func gridDidRequestShowAllColumns() {}
+    /// A results grid remembers nothing: its columns are whatever the statement returned.
+    func gridStoredColumnWidths() -> [String: Double] { [:] }
 }
 
 /// The data grid: an `NSTableView` in an `NSScrollView`, wrapped for SwiftUI.
@@ -86,7 +94,6 @@ public extension DataGridDelegate {
 public struct DataGridView: NSViewRepresentable {
     public let model: GridModel
     @Binding public var selection: GridSelection
-    public let columnWidths: [String: Double]
     /// Columns left out of the table, by name. The model keeps them; only the view skips them.
     public let hiddenColumns: Set<String>
     public weak var delegate: (any DataGridDelegate)?
@@ -96,14 +103,12 @@ public struct DataGridView: NSViewRepresentable {
     public init(
         model: GridModel,
         selection: Binding<GridSelection>,
-        columnWidths: [String: Double] = [:],
         hiddenColumns: Set<String> = [],
         revision: Int,
         delegate: (any DataGridDelegate)? = nil
     ) {
         self.model = model
         _selection = selection
-        self.columnWidths = columnWidths
         self.hiddenColumns = hiddenColumns
         self.revision = revision
         self.delegate = delegate
@@ -165,7 +170,6 @@ public struct DataGridView: NSViewRepresentable {
         coordinator.delegate = delegate
         coordinator.selection = selection
         coordinator.selectionBinding = $selection
-        coordinator.storedColumnWidths = columnWidths
         coordinator.hiddenColumns = hiddenColumns
         if coordinator.revision != revision || modelChanged {
             coordinator.revision = revision
@@ -297,7 +301,6 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         referencePopover?.close()
         referencePopover = nil
     }
-    var storedColumnWidths: [String: Double] = [:]
     var hiddenColumns: Set<String> = []
 
     private var builtColumnNames: [String] = []
@@ -376,6 +379,7 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         gutter.resizingMask = []
         tableView.addTableColumn(gutter)
 
+        let stored = delegate?.gridStoredColumnWidths() ?? [:]
         for meta in model.columns where !hiddenColumns.contains(meta.name) {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(meta.name))
             column.headerCell = GridHeaderCell(textCell: meta.name)
@@ -384,7 +388,7 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
             column.minWidth = DesignTokens.Metrics.minimumColumnWidth
             column.maxWidth = DesignTokens.Metrics.maximumColumnWidth
             column.width =
-                storedColumnWidths[meta.name].map { CGFloat($0) }
+                stored[meta.name].map { CGFloat($0) }
                 ?? Self.defaultWidth(for: meta)
             column.resizingMask = .userResizingMask
             tableView.addTableColumn(column)
@@ -1418,7 +1422,7 @@ final class GridHeaderView: NSTableHeaderView {
 
     /// The divider the pointer is on, as an index into `resizeEdges()`; nil when it is
     /// not on one. Drawn thicker so the handle is visible before it is grabbed.
-    private var hoveredEdge: Int?
+    private(set) var hoveredEdge: Int?
     private var trackingArea: NSTrackingArea?
 
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -1448,7 +1452,7 @@ final class GridHeaderView: NSTableHeaderView {
 
     /// The trailing edge of every column that can be resized, in this view's coordinates.
     /// The gutter has no resizing mask, so its edge is not a handle.
-    private func resizeEdges() -> [(x: CGFloat, column: NSTableColumn)] {
+    func resizeEdges() -> [(x: CGFloat, column: NSTableColumn)] {
         guard let tableView else { return [] }
         return tableView.tableColumns.enumerated().compactMap { position, column in
             guard column.resizingMask.contains(.userResizingMask) else { return nil }

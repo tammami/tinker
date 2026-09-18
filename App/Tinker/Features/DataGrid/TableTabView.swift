@@ -529,7 +529,7 @@ public struct TableTabView: View {
             .buttonStyle(.plain)
             .help("What this tab has written")
             .popover(isPresented: $isWriteLogShown, arrowEdge: .top) {
-                WriteLogPopover(controller: controller)
+                WriteLogPopover(owner: controller)
             }
 
             if let undoable = controller.writeLog.undoable, undoable.id == latest.id {

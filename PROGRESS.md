@@ -1036,3 +1036,49 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 
 ### Spec deviations
 - None. ADR-0059 records the rule.
+
+## 2026-09-18 — A written edit can be taken back (ADR-0060, ADR-0061)
+
+### Done
+- Every commit now works out its own inverse, from the same snapshot it writes and before
+  it runs: an update restores the columns it changed (addressed by the key the row will
+  have after the write, so an edit to a primary key is undone where the row now is), a
+  delete puts the whole row back, and a new row is deleted by the key the server reported.
+  A write whose inverse cannot be built says why instead of pretending.
+- Both kinds of tab keep a bounded log of what they wrote. The status line names the last
+  write and offers Undo, ⌘Z takes it back once the edit buffer is empty, and a popover
+  lists the rest with Put Back. The revert runs through the same committer: one
+  transaction, the same exactly-one-row check, the server's own message on refusal. On a
+  production connection it asks first, like every other write.
+- The accident is harder to have: the inline editor opens with the caret at the end rather
+  than the whole value selected, ending an edit that changed nothing writes nothing, and
+  emptying a cell that held a value is asked about once while auto-commit is on. ⌘⌫ stays
+  unasked — it is already deliberate.
+- An editable cell outlines itself under the pointer, quieter than the focus ring.
+- Add Row and Delete Row moved from the top-right icon cluster to the foot of the grid,
+  beside the row count they act on; the delete names its own damage ("Delete 3 Rows") and
+  says why it is disabled. Auto-commit is a filled pill that reads as a mode.
+
+### Tests
+- Package `RevertPlannerTests` + `GridModelRevertTests` (9): the inverse of an update, of
+  an edit to the key, of a delete, of a new row; a column that was never loaded and a
+  composite key MySQL cannot name both block the revert; the value a commit replaced
+  survives in the plan after the buffer is cleared.
+- App-hosted `WriteLogTests` (4): how a write is described, which one Undo offers, the
+  bound on the log, and which edits count as emptying a cell.
+- App smoke pass against the local PostgreSQL: "the write is in the tab's log and can be
+  put back", "undo puts the replaced value back on the server", "a write is taken back
+  once" — the old value is read back with SQL, not just from the grid.
+- `Scripts/ci.sh`: green.
+
+### Not done / deferred
+- Holding each auto-committed write back for a few seconds before sending it was on the
+  list and was not built; ADR-0060 says why. The revert covers the same accident,
+  including for writes that have already landed, without inventing a "written here, not
+  yet on the server" state for the reload, the pager and the tab close to disagree about.
+- A revert is not itself revertible: the log says so on the entry it leaves behind.
+- Marking a working connection read-only or production remains the strongest guard and is
+  a per-connection setting, not a code change.
+
+### Spec deviations
+- None. ADR-0060 and ADR-0061.

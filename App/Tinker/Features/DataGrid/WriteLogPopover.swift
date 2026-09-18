@@ -7,7 +7,7 @@ import SwiftUI
 /// grid shows the new value, and nothing says what the old one was. This list is where
 /// "I did not mean that" is answered.
 struct WriteLogPopover: View {
-    @Bindable var controller: TableTabController
+    let owner: any WriteLogOwner
 
     private static let time: DateFormatter = {
         let formatter = DateFormatter()
@@ -26,14 +26,14 @@ struct WriteLogPopover: View {
 
             Divider()
 
-            if controller.writeLog.records.isEmpty {
+            if owner.writeLog.records.isEmpty {
                 Text("Nothing written yet.")
                     .foregroundStyle(.secondary)
                     .padding(DesignTokens.Spacing.md)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(controller.writeLog.records) { record in
+                        ForEach(owner.writeLog.records) { record in
                             row(record)
                             Divider()
                         }
@@ -66,9 +66,9 @@ struct WriteLogPopover: View {
             }
             Spacer()
             if record.canRevert {
-                Button("Put Back") { controller.revert(record) }
+                Button("Put Back") { owner.revert(record) }
                     .controlSize(.small)
-                    .disabled(controller.isWriting)
+                    .disabled(owner.isWritingNow)
             }
         }
         .padding(.horizontal, DesignTokens.Spacing.md)

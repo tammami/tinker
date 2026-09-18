@@ -13,6 +13,7 @@ public struct QueryTabView: View {
     @Bindable var settings: AppSettings
 
     @State private var resultPane: ResultPane = .result
+    @State private var isWriteLogShown = false
     /// `--ui-demo chart` asked for the Chart pane. Read once when the tab appears and
     /// cleared there, so a scene whose statement failed cannot leave the flag behind for
     /// the next ordinary launch to pick up.
@@ -224,6 +225,27 @@ public struct QueryTabView: View {
                 Badge(text: "TRANSACTION OPEN", color: .orange)
                 Button("Commit") { Task { await controller.commitTransaction() } }
                 Button("Rollback") { Task { await controller.rollbackTransaction() } }
+            }
+
+            // What the last edit to a result grid wrote, and the way back from it: a
+            // result grid writes to a real table, so a slip here is as permanent as one in
+            // a table tab (ADR-0060).
+            if let latest = controller.writeLog.latest, !controller.isWritingEdits {
+                Button {
+                    isWriteLogShown = true
+                } label: {
+                    Label(latest.summary, systemImage: Icon.history)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("What this tab has written")
+                .popover(isPresented: $isWriteLogShown, arrowEdge: .bottom) {
+                    WriteLogPopover(owner: controller)
+                }
+                if let undoable = controller.writeLog.undoable, undoable.id == latest.id {
+                    Button("Undo") { controller.revert(undoable) }
+                        .help("Put back what this write replaced (⌘Z)")
+                }
             }
 
             Spacer()

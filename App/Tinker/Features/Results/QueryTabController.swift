@@ -10,7 +10,7 @@ import SwiftUI
 /// Runs the statements in a query tab and collects one result per statement.
 @MainActor
 @Observable
-public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
+public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, WriteLogOwner {
     public var sql: String = ""
     public var caretOffset = 0
     /// The editor's selection, when text is highlighted; what Run Selected runs.
@@ -783,12 +783,25 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             // A transaction the user opened by hand (BEGIN as a statement) is theirs to
             // commit: the edit joins it under a savepoint rather than committing it.
             let runner = HeldConnectionRunner(connection: connection, usesSavepoint: !autoCommit || isInTransaction)
-            let committed = try await grid.commit(using: runner, scope: scope)
+            let outcome = try await grid.commitRecordingRevert(using: runner, scope: scope)
+            let committed = outcome.result
             isInTransaction = await connection.isInTransaction
             if committed.statementCount > 0 {
                 lastCommitMessage =
                     "Committed \(committed.statementCount) statement\(committed.statementCount == 1 ? "" : "s")"
                     + (isInTransaction ? " into the open transaction" : "")
+                // A result grid writes to a real table, so a mistake here is as permanent
+                // as one in a table tab; it is taken back the same way (ADR-0060). A write
+                // that joined an open transaction is not logged: Rollback is the way back
+                // from that one, and offering both would be two answers to one question.
+                if !isInTransaction {
+                    writeLog.record(
+                        WriteRecord(
+                            summary: WriteRecord.summary(of: outcome.written),
+                            revert: outcome.revert.statements,
+                            blockedReason: outcome.revert.isRevertible
+                                ? nil : (outcome.revert.blockedReason ?? "this write cannot be put back")))
+                }
             }
             bumpRevision()
             return true
@@ -1527,6 +1540,12 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
 
     public func gridDidRequestUndo() {
         guard let grid = selectedResult?.grid, !isWritingEdits else { return }
+        // Nothing pending means the change has already been written; ⌘Z takes that write
+        // back instead of doing nothing (ADR-0060).
+        guard grid.canUndo else {
+            revertLastWrite()
+            return
+        }
         grid.undo()
         bumpRevision()
     }
@@ -1537,7 +1556,63 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         bumpRevision()
     }
 
-    public func gridCanUndo() -> Bool { !isWritingEdits && (selectedResult?.grid?.canUndo ?? false) }
+    public func gridCanUndo() -> Bool {
+        !isWritingEdits && ((selectedResult?.grid?.canUndo ?? false) || writeLog.undoable != nil)
+    }
+
+    /// What this tab has written through its result grids, and the way back from each.
+    public let writeLog = WriteLog()
+
+    public var isWritingNow: Bool { isWritingEdits }
+
+    /// Takes back the newest write that still can be.
+    public func revertLastWrite() {
+        guard let record = writeLog.undoable else { return }
+        revert(record)
+    }
+
+    /// Runs the statements that put one write back, with the same one-row checks a commit
+    /// uses. On a production connection it asks first, as every other write does.
+    public func revert(_ record: WriteRecord) {
+        guard record.canRevert, !isWritingEdits else { return }
+        guard isProduction, let confirm, let config else {
+            Task { await performRevert(record) }
+            return
+        }
+        confirm(
+            GridEditPrompts.revertWrite(summary: record.summary, table: config.name) { [weak self] in
+                await self?.performRevert(record)
+            })
+    }
+
+    private func performRevert(_ record: WriteRecord) async {
+        guard let session else { return }
+        if await session.isReadOnly {
+            errorBanner = QueryErrorBanner(
+                error: DBError.protocolError("This connection is read-only. Unlock it with ⌘⇧L to write."),
+                statement: "")
+            return
+        }
+        do {
+            let connection = try await connectionForRun(session: session, writes: true)
+            let runner = HeldConnectionRunner(connection: connection, usesSavepoint: !autoCommit || isInTransaction)
+            _ = try await GridCommitter().commit(record.revert, using: runner)
+            isInTransaction = await connection.isInTransaction
+            writeLog.markReverted(record.id)
+            writeLog.record(
+                WriteRecord(
+                    summary: "Put back: \(record.summary)", revert: [],
+                    blockedReason: "a revert is not itself taken back; edit the rows again instead"))
+            lastCommitMessage = "Put back \(record.summary.lowercased())"
+            await reloadPagedResults()
+        } catch let error as GridCommitError {
+            errorBanner = QueryErrorBanner(error: error, statement: error.statement ?? "")
+            bumpRevision()
+        } catch {
+            errorBanner = QueryErrorBanner(error: error, statement: "")
+            bumpRevision()
+        }
+    }
     public func gridCanRedo() -> Bool { !isWritingEdits && (selectedResult?.grid?.canRedo ?? false) }
     public func gridDidChangeColumnWidths(_ widths: [String: Double]) {}
     public func gridDidRequestCopy(format: ClipboardFormat) { copySelection(format: format) }

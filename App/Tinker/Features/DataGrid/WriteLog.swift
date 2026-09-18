@@ -47,6 +47,18 @@ public struct WriteRecord: Identifiable, Sendable {
     }
 }
 
+/// A tab that writes through a grid and can take those writes back.
+///
+/// Both kinds of tab write to real tables and both auto-commit, so both need the same way
+/// back; this is what the status line and the log popover talk to.
+@MainActor
+public protocol WriteLogOwner: AnyObject, Observable {
+    var writeLog: WriteLog { get }
+    /// True while a write is on the server, when nothing may be taken back.
+    var isWritingNow: Bool { get }
+    func revert(_ record: WriteRecord)
+}
+
 /// What a tab has written since it was opened, newest first.
 ///
 /// A grid with auto-commit on writes as the user types, and the edit buffer — with its

@@ -759,3 +759,76 @@ with posted mouse events: a click still sorts, and the four-point slip no longer
 longer drag never sorted — AppKit had already turned it into a column reorder, which both
 kinds of tab do and still do. A press the header never saw go down — a test, something synthetic — still
 sorts, so nothing that drives the grid programmatically changes.
+
+## ADR-0060 — A written edit is a write to take back, not a value that is gone
+Date: 2026-09-18
+
+**Context.** A user opened a table, put the cursor in a cell by accident and cleared it.
+Auto-commit was on, so the `UPDATE` reached the server before their hand left the
+keyboard; ⌘Z did nothing, because `GridModel.commit` clears the undo history on purpose —
+"what was written is on the server; undoing it here would show the grid a state the server
+no longer has". Both halves of that are true, and together they mean the one class of
+mistake a data grid must forgive was the one it could not.
+
+What was missing is not history but *statements*. At the moment of the write the grid
+still holds the row as it was loaded and the key it is addressed by, which is everything
+an inverse needs.
+
+**Decision.** Each commit builds its own inverse, from the same snapshot it writes and
+before it runs: an update restores the columns it changed, a delete puts the whole row
+back, a new row is deleted by the key the server reported (`RETURNING`, the value the user
+typed, or MySQL's generated id — one number cannot name a composite key, and that write is
+simply not offered as revertible). The plan runs through `GridCommitter` like any other
+write: one transaction, and the same "exactly one row" check, so a row that changed again
+in the meantime is refused rather than overwritten, with the server's own message.
+
+Every tab keeps a bounded log of what it wrote. The status line names the last write and
+offers Undo; ⌘Z takes it back once the edit buffer is empty; a popover lists the rest.
+Both kinds of tab have it, because a query result grid writes to a real table too. A write
+that joined an open transaction is not logged — Rollback is the way back from that one,
+and two answers to one question is worse than one.
+
+**Rejected: holding the write back a few seconds** (a "sent in 3… Undo" window), which was
+on the same list of suggestions. It duplicates what the revert already does for *every*
+write, including those already landed, while adding a state — written in the grid, not yet
+on the server — that fights the page reload after a write, paging, closing the tab, and
+the honesty of "Saving…". The revert covers the same accident without inventing that state.
+
+**Consequences.** `RevertPlannerTests` and `GridModelRevertTests` (9) pin the inverses,
+including an edit to a primary key, a column the grid never loaded, and a composite key
+MySQL cannot name; `WriteLogTests` (4) pin the log; the app smoke pass proves it against a
+real server — an auto-committed edit, then Undo, then the old value read back with SQL.
+The undo history's own behaviour is unchanged: pending edits still undo without touching
+the server.
+
+## ADR-0061 — The grid says what it is about to do
+Date: 2026-09-18
+
+**Context.** The accident behind ADR-0060 took three cheap steps in a row: the inline
+editor opened with the whole value selected, so one keystroke replaced it; leaving the
+editor — by clicking anywhere — committed; and auto-commit sent the `UPDATE` at once. None
+of the three asked anything, and the two controls that would have made the difference sat
+in the wrong place: Add Row and Delete Row were unlabelled `+`/`−` glyphs at the far top
+right, one icon from Refresh and two from Export, while the selection they act on is at
+the bottom left; and auto-commit — the setting that decides whether a keystroke is
+permanent — was a grey checkbox among grey icon buttons.
+
+**Decision.** Four changes, none of which removes a capability:
+
+- The editor opens with the caret at the end, not the value selected, and ending an edit
+  that changed nothing writes nothing.
+- Emptying a cell that held a value is asked about once when auto-commit is on. It is a
+  deletion, not an edit. ⌘⌫ (Set NULL) stays unasked: that one is already deliberate.
+- An editable cell outlines itself under the pointer, quieter than the focus ring, so
+  "this can be typed into" is known before it is typed into.
+- Add Row and Delete Row move to the foot of the grid, beside the row count and the pager,
+  and the delete names its own damage ("Delete 3 Rows"), disabled with a reason when
+  nothing is selected. The top bar keeps what only changes the view. Auto-commit becomes a
+  filled pill that reads as a mode, next to the red `MANUAL COMMIT` badge it mirrors on a
+  production connection.
+
+**Consequences.** `testOnlyAnEditThatEmptiesAFilledCellIsAskedAbout` pins the one rule with
+a decision in it; the rest is layout. Delete Row is still on the row's context menu and on
+⌘−, and Add Row still on ⌘⌥A, so nothing moved out of reach. The hover outline is drawn by
+the cell itself and only the two cells that change are redrawn, so it costs nothing on a
+wide result (the grid's performance tests measure the same reload and scroll as before).

@@ -11,7 +11,7 @@ import SwiftUI
 /// context menus act on.
 @MainActor
 @Observable
-public final class TableTabController: DataGridDelegate {
+public final class TableTabController: DataGridDelegate, WriteLogOwner {
     public private(set) var model: GridModel?
     public var selection = GridSelection()
     /// Bumped whenever the grid's contents changed, which is what makes the view reload.
@@ -45,6 +45,8 @@ public final class TableTabController: DataGridDelegate {
     /// One write at a time, requests during a write merged into the next (shared with the
     /// query tab's result grids).
     private let writes = GridWriteQueue()
+
+    public var isWritingNow: Bool { isWriting }
 
     /// What this tab has written, newest first, and what would take each write back.
     ///

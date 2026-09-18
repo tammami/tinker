@@ -256,6 +256,16 @@ extension SmokeTest {
             check(
                 "a write with auto-commit off opens a transaction (inTransaction=\(query.isInTransaction), error=\(query.results.first?.error?.message ?? "none"), status=\(query.statusText))",
                 query.isInTransaction && query.results.first?.error == nil)
+            // A statement that fails inside the transaction must not end it: the lease is
+            // held for exactly as long as the transaction is open (ADR-0057), so a
+            // transaction reported closed here would take the user's work with it.
+            query.sql = "INSERT INTO smoke_features (no_such_column) VALUES (1)"
+            query.caretOffset = 0
+            query.run(all: true)
+            try await waitUntil(timeout: .seconds(20)) { !query.isRunning && query.results.first?.error != nil }
+            check(
+                "a statement that fails inside a transaction leaves it open",
+                query.isInTransaction)
             await query.rollbackTransaction()
             let afterRollback = await count()
             check("rollback leaves the table as it was", !query.isInTransaction && afterRollback == 5)
@@ -321,6 +331,21 @@ extension SmokeTest {
                 !query.isRunning && query.results.first?.statement == "SELECT 1"
             }
             check("a read on production runs without asking", asked == nil)
+            // A read holds nothing open: a transaction on production is for the writes it
+            // has to be able to roll back, and a SELECT sitting idle in one would pin a
+            // snapshot and a pool slot for nothing (ADR-0057).
+            check("a read on production opens no transaction", !query.isInTransaction)
+            // A write is the reason production holds a transaction: it runs, and it waits.
+            query.sql = "UPDATE smoke_features SET name = name WHERE id = -1"
+            query.caretOffset = 0
+            asked = nil
+            query.run(all: true)
+            try await waitUntil(timeout: .seconds(20)) { asked != nil }
+            await asked?.action()
+            try await waitUntil(timeout: .seconds(20)) { !query.isRunning }
+            check("a confirmed write on production opens a transaction", query.isInTransaction)
+            await query.rollbackTransaction()
+            check("rolling it back closes it", !query.isInTransaction)
             // Explain Analyze runs what it explains, so it asks like the statement would.
             query.sql = "DELETE FROM smoke_features WHERE id = -1"
             query.caretOffset = 0
@@ -344,8 +369,8 @@ extension SmokeTest {
             query.errorBanner = nil
             await environment.save(config)
             check("the connection is back off production", !table.isProduction)
-            // Production held every statement in one transaction; leaving production does
-            // not end it (that is the user's call), so end it here before the edits below.
+            // Production held its writes in one transaction; leaving production does not
+            // end it (that is the user's call), so end it here before the edits below.
             await query.rollbackTransaction()
             check("leaving production keeps its transaction until it is ended", !query.isInTransaction)
 
@@ -612,7 +637,8 @@ extension SmokeTest {
                 do {
                     try await lockedSession.withLease { connection in
                         // Straight to the driver, past every client-side check.
-                        _ = try await connection.executeCollecting("INSERT INTO smoke_features (name) VALUES ('locked')")
+                        _ = try await connection.executeCollecting(
+                            "INSERT INTO smoke_features (name) VALUES ('locked')")
                     }
                     refused = false
                 } catch {
@@ -644,7 +670,8 @@ extension SmokeTest {
                 do {
                     try await lockedSession.withLease { connection in
                         _ = try await connection.executeCollecting("BEGIN")
-                        _ = try await connection.executeCollecting("INSERT INTO smoke_features (name) VALUES ('unlocked')")
+                        _ = try await connection.executeCollecting(
+                            "INSERT INTO smoke_features (name) VALUES ('unlocked')")
                         _ = try await connection.executeCollecting("ROLLBACK")
                     }
                     unlocked = true

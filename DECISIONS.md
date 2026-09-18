@@ -652,3 +652,72 @@ observed, because hiding a column *must* rebuild the grid — pinned by
 `testHidingAColumnStillNotifies` beside `testAWidthWrittenDuringADragNotifiesNobody`. A
 width now reaches the columns only when they are built, which is where it was applied
 before; the widths are still persisted, debounced, by the path that already did it.
+
+## ADR-0057 — A read on a production connection opens no transaction
+Date: 2026-09-18
+
+**Context.** A production connection never auto-commits: a write is held until the user
+presses Commit, so a mistake can still be rolled back. That rule was implemented as
+`commitsAutomatically = autoCommit && !isProduction`, and `connectionForRun` opened a
+transaction whenever `commitsAutomatically` was false — before the *first statement of any
+kind*. So opening a query tab on a production connection and running `SELECT 1` left the
+tab with TRANSACTION OPEN, a Commit button for a statement that changed nothing, and a
+leased connection sitting idle in a transaction: a held snapshot on PostgreSQL, a read
+view on MySQL, and a pool slot on both, until the user committed nothing or closed the
+tab. The user asked what the transaction was for, which is the right question — there was
+no answer.
+
+**Decision.** A statement opens a transaction for one of two reasons, and a read on
+production is neither:
+
+- The user turned auto-commit off. Then every statement joins the transaction they are
+  holding, reads included — that is what the checkbox means (SPEC §13).
+- The connection is production *and the statement writes*.
+
+`QueryTabController.opensTransaction(autoCommit:isProduction:statementWrites:)` is that
+rule, apart from the controller so it can be tested; `connectionForRun` takes a `writes`
+flag from `SQLStatement.isProbablyReadOnly` — the same classifier the production
+confirmation gate already uses, rather than a second one that could disagree with it.
+The lease is now returned whenever no transaction is open, not only when the connection
+auto-commits, so a production tab that has only read holds nothing.
+
+Classifying by what the statement *did* (rows affected) instead of what it looks like was
+rejected: the transaction has to exist before the statement runs, or the write it is meant
+to protect has already happened.
+
+**Consequences.** The badge now means what it says: TRANSACTION OPEN appears when there is
+something to commit. `TransactionOpeningTests` pins all four cases and the app smoke pass
+checks both ends against a real server — a read on production opens nothing, a confirmed
+write does. Nothing changes for a non-production tab, or for one where the user turned
+auto-commit off themselves.
+
+## ADR-0058 — A chart's categories carry the colour; a series keeps one
+Date: 2026-09-18
+
+**Context.** Every mark in the Chart pane was drawn in the same accent colour: a bar chart
+of nine categories was nine identical blue bars, and only the pie told its slices apart.
+Convention for a single-series bar chart is one colour for every bar — colour is a free
+channel and length already carries the value. The user asked for the categories to be
+told apart, which is a fair ask for a pane whose job is reading a result at a glance.
+
+**Decision.** A category is an identity, so it takes a hue: bars and pie slices are
+coloured by their label from an eight-hue categorical palette
+(`DesignTokens.Colors.chartCategories`), assigned in the order the plot first lists each
+category — the hue belongs to the category, not to its rank, so sorting the rows or
+filtering some away never repaints the ones that remain. Past eight categories the rest
+share the first hue rather than inventing colours nobody can tell apart.
+
+A line, an area and a scatter keep one hue: they draw one series, and changing colour from
+point to point would claim a difference the data does not have.
+
+The palette is chosen twice — once for a light surface, once for a dark one — rather than
+lightened automatically, and every adjacent pair was checked for colour-blind separation
+(ΔE ≥ 8 under protanopia, deuteranopia and tritanopia; worst pair 9.1 light, 8.4 dark)
+before the values were written down. Three of the light hues fall below 3:1 contrast
+against a near-white surface, which is allowed only where something else carries the
+identity: the x axis names every bar, the pie keeps its legend, and the Rows tab holds the
+same numbers. The bar chart shows no legend of its own — its axis already names every bar,
+so the colour is a second reading of something stated, never the only one.
+
+**Consequences.** `SPEC.md` §12.8 names the chart kinds and says nothing about colour, so
+this is a decision rather than a deviation. The pie's legend stays.

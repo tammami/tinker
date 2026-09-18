@@ -53,6 +53,28 @@ struct ChartPaneView: View {
 
     private var points: [ChartPoint] { cachedPlot.points }
 
+    /// The categories in the order the plot lists them, which is the order the hues are
+    /// handed out in: a colour belongs to a category, not to its place in the ranking, so
+    /// sorting the rows or filtering some away never repaints the ones that remain.
+    private var categoryOrder: [String] {
+        var seen = Set<String>()
+        return points.compactMap { seen.insert($0.label).inserted ? $0.label : nil }
+    }
+
+    /// One hue per category, up to the eight the palette holds. Past that everything
+    /// shares the first hue rather than inventing colours nobody can tell apart; the axis
+    /// and the readout still name each point.
+    private var categoryColours: [Color] {
+        let palette = DesignTokens.Colors.chartCategories
+        return categoryOrder.enumerated().map { index, _ in
+            Color(nsColor: index < palette.count ? palette[index] : palette[0])
+        }
+    }
+
+    /// The single hue a line, an area or a scatter draws in. One series is one colour:
+    /// changing it from point to point would claim a difference the data does not have.
+    private var seriesColour: Color { Color(nsColor: DesignTokens.Colors.chartCategories[0]) }
+
     var body: some View {
         VStack(spacing: 0) {
             controls
@@ -161,6 +183,7 @@ struct ChartPaneView: View {
                     .foregroundStyle(by: .value("Label", point.label))
                     .opacity(highlighted == nil || highlighted == point ? 1 : 0.4)
             }
+            .chartForegroundStyleScale(domain: categoryOrder, range: categoryColours)
             .chartLegend(position: .trailing)
         case .scatter:
             Chart(points) { point in
@@ -168,6 +191,7 @@ struct ChartPaneView: View {
                     x: .value("x", point.x ?? Double(point.id)),
                     y: .value("y", point.value)
                 )
+                .foregroundStyle(seriesColour)
                 .opacity(highlighted == nil || highlighted == point ? 1 : 0.35)
             }
             .chartOverlay { proxy in hoverOverlay(proxy) }
@@ -177,34 +201,48 @@ struct ChartPaneView: View {
                     // "Each row" means each row: two rows sharing a label stand side by
                     // side rather than stacking into one bar that reads as their sum.
                     .position(by: .value("Row", aggregate == .none ? point.id : 0))
+                    .foregroundStyle(by: .value("Label", point.label))
                     .opacity(highlighted == nil || highlighted == point ? 1 : 0.4)
             }
+            .chartForegroundStyleScale(domain: categoryOrder, range: categoryColours)
+            // No legend: the x axis already names every bar, and a legend repeating it
+            // would take the room the bars are drawn in.
+            .chartLegend(.hidden)
             .chartOverlay { proxy in hoverOverlay(proxy) }
         case .line where points.allSatisfy({ $0.x != nil }) && continuousX != nil:
             Chart(points) { point in
                 LineMark(x: .value("x", point.x ?? 0), y: .value("Value", point.value))
+                    .foregroundStyle(seriesColour)
                 PointMark(x: .value("x", point.x ?? 0), y: .value("Value", point.value))
+                    .foregroundStyle(seriesColour)
                     .symbolSize(highlighted == point ? 90 : 25)
             }
             .chartOverlay { proxy in hoverOverlay(proxy) }
         case .area where points.allSatisfy({ $0.x != nil }) && continuousX != nil:
             Chart(points) { point in
-                AreaMark(x: .value("x", point.x ?? 0), y: .value("Value", point.value)).opacity(0.6)
+                AreaMark(x: .value("x", point.x ?? 0), y: .value("Value", point.value))
+                    .foregroundStyle(seriesColour)
+                    .opacity(0.6)
                 LineMark(x: .value("x", point.x ?? 0), y: .value("Value", point.value))
+                    .foregroundStyle(seriesColour)
             }
             .chartOverlay { proxy in hoverOverlay(proxy) }
         case .line:
             Chart(points) { point in
                 LineMark(x: .value("Label", point.label), y: .value("Value", point.value))
+                    .foregroundStyle(seriesColour)
                 PointMark(x: .value("Label", point.label), y: .value("Value", point.value))
+                    .foregroundStyle(seriesColour)
                     .symbolSize(highlighted == point ? 90 : 25)
             }
             .chartOverlay { proxy in hoverOverlay(proxy) }
         case .area:
             Chart(points) { point in
                 AreaMark(x: .value("Label", point.label), y: .value("Value", point.value))
+                    .foregroundStyle(seriesColour)
                     .opacity(0.6)
                 LineMark(x: .value("Label", point.label), y: .value("Value", point.value))
+                    .foregroundStyle(seriesColour)
             }
             .chartOverlay { proxy in hoverOverlay(proxy) }
         }

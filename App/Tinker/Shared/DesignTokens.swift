@@ -78,6 +78,33 @@ public enum DesignTokens {
         /// separate them, and vertical lines through the values read as a cage.
         public static let gridSeparator = NSColor.separatorColor.withAlphaComponent(0.22)
 
+        /// The eight hues a chart tells its categories apart with, in fixed order.
+        ///
+        /// A slot belongs to a category, not to its rank: the first category the plot
+        /// lists takes slot 1 and keeps it however the rows are sorted or filtered. Each
+        /// hue is chosen twice — once for a light surface, once for a dark one — rather
+        /// than lightened automatically, and both sets were checked for colour-blind
+        /// separation (ΔE ≥ 8 for every adjacent pair under protanopia, deuteranopia and
+        /// tritanopia) before being written down.
+        public static let chartCategories: [NSColor] = [
+            chartHue(light: 0x2A78D6, dark: 0x3987E5),  // blue
+            chartHue(light: 0xEB6834, dark: 0xD95926),  // orange
+            chartHue(light: 0x1BAF7A, dark: 0x199E70),  // aqua
+            chartHue(light: 0xEDA100, dark: 0xC98500),  // yellow
+            chartHue(light: 0xE87BA4, dark: 0xD55181),  // magenta
+            chartHue(light: 0x008300, dark: 0x008300),  // green
+            chartHue(light: 0x4A3AA7, dark: 0x9085E9),  // violet
+            chartHue(light: 0xE34948, dark: 0xE66767),  // red
+        ]
+
+        /// One hue that follows the appearance, as every colour here does.
+        private static func chartHue(light: Int, dark: Int) -> NSColor {
+            NSColor(name: nil) { appearance in
+                let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                return NSColor(hex: isDark ? dark : light)
+            }
+        }
+
         /// The stripe colour for a connection.
         public static func connection(_ color: ConnectionColor?) -> NSColor {
             switch color {
@@ -121,6 +148,19 @@ public enum DesignTokens {
             NSFont(name: name, size: size)
                 ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
         }
+    }
+}
+
+extension NSColor {
+    /// A colour from `0xRRGGBB`, for the chart hues, which are chosen values rather than
+    /// system semantic colours.
+    convenience init(hex: Int) {
+        self.init(
+            srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+            green: CGFloat((hex >> 8) & 0xFF) / 255,
+            blue: CGFloat(hex & 0xFF) / 255,
+            alpha: 1
+        )
     }
 }
 

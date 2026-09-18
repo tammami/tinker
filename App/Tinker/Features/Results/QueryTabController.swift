@@ -367,10 +367,12 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         // it is plain that every statement ran; the strip switches between the rest.
         if results.count > 1 { selectedResultID = results.first?.id }
         bumpRevision()
-        // With nothing to keep on this connection — auto-commit on, no transaction open —
-        // the lease goes back now. Eight idle query tabs used to hold the whole pool, and
-        // the ninth caller (a table tab, the sidebar) waited on them.
-        if commitsAutomatically, !isInTransaction { await releaseHeldConnection() }
+        // With nothing to keep on this connection — no transaction open — the lease goes
+        // back now. Eight idle query tabs used to hold the whole pool, and the ninth
+        // caller (a table tab, the sidebar) waited on them. A production tab that has only
+        // read holds nothing either, which is the point of not opening a transaction for a
+        // read (ADR-0057).
+        if !isInTransaction { await releaseHeldConnection() }
     }
 
     /// Runs one statement and appends its result. Returns true when it failed.
@@ -382,13 +384,14 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         let startedAt = Date()
         let clockStart = ContinuousClock.now
         do {
-            let connection = try await connectionForRun(session: session)
+            let connection = try await connectionForRun(session: session, writes: !statement.isProbablyReadOnly)
             // A SELECT pages on the server like a table tab: one page of rows now, the
             // rest on demand, whatever the table's size.
             if QueryGridLoader.isPageable(statement.text, dialect: dialect) {
                 let loader = QueryGridLoader(statement: statement.text, dialect: dialect) { [weak self] in
                     guard let self else { throw DBError.notConnected }
-                    return try await self.connectionForRun(session: session)
+                    // Another page of the same SELECT: a read, whatever opened the first one.
+                    return try await self.connectionForRun(session: session, writes: false)
                 }
                 // A SELECT over one table with its key edits like a table tab.
                 let source = sourceTable(for: statement.text, session: session)
@@ -776,7 +779,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             return false
         }
         do {
-            let connection = try await connectionForRun(session: session)
+            let connection = try await connectionForRun(session: session, writes: true)
             // A transaction the user opened by hand (BEGIN as a statement) is theirs to
             // commit: the edit joins it under a savepoint rather than committing it.
             let runner = HeldConnectionRunner(connection: connection, usesSavepoint: !autoCommit || isInTransaction)
@@ -839,7 +842,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
             if let failure = grid.lastError {
                 errorBanner = QueryErrorBanner(error: failure, statement: result.statement)
             } else {
-                result.message = Self.pageMessage(grid, exactTotal: result.exactTotal, duration: started.duration(to: .now))
+                result.message = Self.pageMessage(
+                    grid, exactTotal: result.exactTotal, duration: started.duration(to: .now))
             }
             bumpRevision()
         }
@@ -860,15 +864,35 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         await goToPage(Int((total - 1) / Int64(grid.pageSize)))
     }
 
+    /// Whether a statement about to run should open a transaction first.
+    ///
+    /// Apart from the controller so the rule can be tested. Two reasons to open one, and
+    /// a read on a production connection is neither (ADR-0057):
+    ///
+    /// - The user turned auto-commit off. Then every statement belongs to the transaction
+    ///   they are holding open, reads included: that is what the checkbox means (SPEC §13).
+    /// - The connection is production and the statement writes. There a write waits for
+    ///   Commit, so a mistake can still be rolled back.
+    static func opensTransaction(autoCommit: Bool, isProduction: Bool, statementWrites: Bool) -> Bool {
+        if !autoCommit { return true }
+        return isProduction && statementWrites
+    }
+
     /// The connection a statement runs on: the held one when a transaction is open, else
     /// a fresh lease returned as soon as the statement finishes.
-    private func connectionForRun(session: ConnectionSession) async throws -> any SQLConnection {
+    ///
+    /// `writes` says whether this statement changes anything, which is what decides
+    /// whether a transaction is opened around it.
+    private func connectionForRun(session: ConnectionSession, writes: Bool) async throws -> any SQLConnection {
+        let opensTransaction = Self.opensTransaction(
+            autoCommit: autoCommit, isProduction: isProduction, statementWrites: writes)
         if let heldConnection {
             try await applySessionDatabase(on: heldConnection)
             await session.applyReadOnlyGuard(to: heldConnection)
-            // Auto-commit was turned off after this connection was taken: the next statement
-            // is the first of a transaction, so one is opened here rather than never.
-            if !commitsAutomatically, !isInTransaction {
+            // Auto-commit was turned off after this connection was taken, or this is the
+            // first write on a production connection: either way the transaction starts
+            // here rather than never.
+            if opensTransaction, !isInTransaction {
                 try await heldConnection.beginTransaction()
                 isInTransaction = true
             }
@@ -880,7 +904,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate {
         // closes — so that COMMIT reaches the same connection the statements ran on.
         heldLease = lease
         heldConnection = connection
-        if !commitsAutomatically {
+        if opensTransaction {
             try await connection.beginTransaction()
             isInTransaction = true
         }

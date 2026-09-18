@@ -130,36 +130,34 @@ public struct QueryTabView: View {
             .disabled(controller.isRunning)
             .help("Run every statement on the page (⌘⌥R)")
 
-            Button {
+            BarDivider()
+
+            // Running a statement is what the bar is for, so those three carry their
+            // names. What shapes the page rather than running it — the plan, the layout,
+            // where the results sit — is an icon with its shortcut in the tooltip: each
+            // is a keystroke and a menu item as well, and three more labels crowded out
+            // the connection and database this tab runs on.
+            IconButton(icon: Icon.explain, label: "Explain the statement under the cursor (⌘⇧E)") {
                 controller.explain(analyze: false)
-            } label: {
-                Label("Explain", systemImage: Icon.explain)
             }
             .disabled(controller.isRunning)
-            .help("Show the plan for the statement under the cursor (⌘⇧E)")
             .contextMenu {
                 Button("Explain") { controller.explain(analyze: false) }
                 Button("Explain Analyze (runs the statement)") { controller.explain(analyze: true) }
             }
 
-            Button {
+            IconButton(icon: Icon.format, label: "Beautify: one clause per line, or just the selection (⌘⇧I)") {
                 controller.formatSQL()
-            } label: {
-                Label("Beautify", systemImage: Icon.format)
             }
-            .help("Lay the SQL out one clause per line, or just the selection (⌘⇧I)")
 
-            Button {
+            IconButton(
+                icon: settings.splitQuerySideBySide ? Icon.splitSideBySide : Icon.splitStacked,
+                label: settings.splitQuerySideBySide
+                    ? "Put the results back below the editor" : "Put the results beside the editor"
+            ) {
                 settings.splitQuerySideBySide.toggle()
                 Task { await settings.save() }
-            } label: {
-                Label(
-                    "Split",
-                    systemImage: settings.splitQuerySideBySide ? Icon.splitSideBySide : Icon.splitStacked)
             }
-            .help(
-                settings.splitQuerySideBySide
-                    ? "Put the results back below the editor" : "Put the results beside the editor")
 
             if controller.isRunning {
                 Button {
@@ -434,7 +432,8 @@ public struct QueryTabView: View {
                 Image(systemName: result.error != nil ? Icon.error : (result.grid == nil ? Icon.success : Icon.data))
                     .font(.system(size: DesignTokens.Typography.chipIcon))
                     .foregroundStyle(result.error != nil ? .red : (isSelected ? Color.accentColor : .secondary))
-                Text(result.label).lineLimit(1).font(.system(size: DesignTokens.Typography.chip, weight: isSelected ? .medium : .regular))
+                Text(result.label).lineLimit(1).font(
+                    .system(size: DesignTokens.Typography.chip, weight: isSelected ? .medium : .regular))
                 if let grid = result.grid {
                     Badge(text: "\(grid.displayRowCount)")
                 }

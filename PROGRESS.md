@@ -947,3 +947,50 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 
 ### Spec deviations
 - None. The decision is recorded as ADR-0056.
+
+## 2026-09-18 — The transaction production opened for nothing, chart colour, and a bar that fits
+
+### Done
+- A read on a production connection no longer opens a transaction (ADR-0057). It used to:
+  `SELECT 1` on a production tab left TRANSACTION OPEN, a Commit button for a statement
+  that changed nothing, and a leased connection idle in a transaction — a pinned snapshot
+  on PostgreSQL, a read view on MySQL, a pool slot on both. A transaction is now opened
+  for a write on production, or for anything at all when the user turned auto-commit off
+  themselves. The lease goes back whenever no transaction is open, so a production tab
+  that has only read holds nothing.
+- Charts tell their categories apart (ADR-0058): bars and pie slices take a hue from an
+  eight-hue categorical palette, assigned in the order the plot first lists each category
+  so sorting or filtering never repaints what remains. Lines, areas and scatters keep one
+  hue — one series, one colour. The palette is chosen for light and dark surfaces
+  separately and every adjacent pair clears ΔE ≥ 8 under all three kinds of colour
+  blindness (worst 9.1 light, 8.4 dark).
+- The query bar carries names only for what runs: Run, Run Selected, Run All. Explain,
+  Beautify and Split are icons with their shortcut in the tooltip, which leaves room for
+  the connection and database pop-ups the tab actually runs on.
+- The window toolbar drops its two control groups — Run/Run All/Stop/Explain and
+  Commit/Rollback — which repeated, as six unlabelled glyphs, what the bar underneath
+  says in words. Commit stays on File › Commit (⌘⇧S), in the query bar while a
+  transaction is open, and in a table tab's status line.
+
+### Tests
+- App-hosted `TransactionOpeningTests` (4): a read on production opens nothing, a write
+  does, auto-commit off opens one for anything, and an ordinary connection opens none.
+- App smoke pass, against the local PostgreSQL: "a read on production opens no
+  transaction", "a confirmed write on production opens a transaction", "rolling it back
+  closes it", and — because the lease is now held for exactly as long as the transaction
+  is open — "a statement that fails inside a transaction leaves it open".
+- `Scripts/ci.sh`: green (PostgreSQL 16, MySQL 9.4, MariaDB 11.8, SQLite 3.54; the two
+  long-standing skips only).
+- The chart palette was checked by the `dataviz` validator in both modes, and the bar
+  chart looked at in a window: nine categories, nine hues, the ninth folding back to the
+  first.
+
+### Not done / deferred
+- Three of the light-mode chart hues sit below 3:1 contrast against a near-white surface.
+  Allowed here because nothing depends on colour alone — the axis names every bar, the pie
+  keeps its legend, the Rows tab holds the same numbers — but worth revisiting if a chart
+  ever loses its labels.
+
+### Spec deviations
+- None. ADR-0057 and ADR-0058 record the two decisions; SPEC §12.8 names the chart kinds
+  and says nothing about colour, and §13 only requires the auto-commit toggle.

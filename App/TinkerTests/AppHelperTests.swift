@@ -248,6 +248,40 @@ final class GridInsertTypingTests: XCTestCase {
     }
 }
 
+/// When a statement opens a transaction: the rule a production tab lives by (ADR-0057).
+@MainActor
+final class TransactionOpeningTests: XCTestCase {
+    private func opens(autoCommit: Bool, production: Bool, writes: Bool) -> Bool {
+        QueryTabController.opensTransaction(
+            autoCommit: autoCommit, isProduction: production, statementWrites: writes)
+    }
+
+    /// The point of the change: a SELECT on production held a connection open in a
+    /// transaction nobody had asked for, pinning a snapshot and a pool slot.
+    func testAReadOnProductionOpensNothing() {
+        XCTAssertFalse(opens(autoCommit: true, production: true, writes: false))
+    }
+
+    /// A write on production still waits for Commit, which is what the badge promises.
+    func testAWriteOnProductionIsHeldUntilItIsCommitted() {
+        XCTAssertTrue(opens(autoCommit: true, production: true, writes: true))
+    }
+
+    /// Auto-commit off is the user asking for a transaction; reads join it, as they do on
+    /// any client where the checkbox means what it says (SPEC §13).
+    func testAutoCommitOffOpensOneForAnythingAtAll() {
+        XCTAssertTrue(opens(autoCommit: false, production: false, writes: false))
+        XCTAssertTrue(opens(autoCommit: false, production: false, writes: true))
+        XCTAssertTrue(opens(autoCommit: false, production: true, writes: false))
+    }
+
+    /// An ordinary connection with auto-commit on opens nothing, write or not.
+    func testAnOrdinaryConnectionCommitsAsItGoes() {
+        XCTAssertFalse(opens(autoCommit: true, production: false, writes: true))
+        XCTAssertFalse(opens(autoCommit: true, production: false, writes: false))
+    }
+}
+
 /// Which editor a cell's type opens, and how wide a column divider is to grab.
 @MainActor
 final class GridCellEditorChoiceTests: XCTestCase {

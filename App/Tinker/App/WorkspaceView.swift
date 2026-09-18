@@ -308,60 +308,10 @@ public struct WorkspaceView: View {
             .disabled(workspace.activeConnectionID == nil)
         }
 
-        ToolbarItemGroup(placement: .principal) {
-            ControlGroup {
-                Button {
-                    controller.run(all: false)
-                } label: {
-                    Label("Run", systemImage: Icon.run)
-                }
-                .help("Run the statement under the cursor, or the highlighted block (⌘R)")
-                .disabled(queryController == nil || queryController?.isRunning == true)
-
-                Button {
-                    controller.run(all: true)
-                } label: {
-                    Label("Run All", systemImage: Icon.runAll)
-                }
-                .help("Run every statement on the page (⌘⌥R)")
-                .disabled(queryController == nil || queryController?.isRunning == true)
-
-                Button {
-                    queryController?.cancel()
-                } label: {
-                    Label("Stop", systemImage: Icon.stop)
-                }
-                .help("Cancel on the server (⌘.)")
-                .disabled(queryController?.isRunning != true)
-
-                Button {
-                    queryController?.explain(analyze: false)
-                } label: {
-                    Label("Explain", systemImage: Icon.explain)
-                }
-                .help("Show the plan for the statement under the cursor (⌘⇧E)")
-                .disabled(queryController == nil || queryController?.isRunning == true)
-            }
-
-            ControlGroup {
-                Button {
-                    controller.commit()
-                } label: {
-                    Label("Commit", systemImage: Icon.commit)
-                }
-                .help("Commit (⌘⇧S)")
-                .disabled(!hasPendingWork)
-
-                Button {
-                    controller.rollback()
-                } label: {
-                    Label("Rollback", systemImage: Icon.rollback)
-                }
-                .help("Roll back (⌘⇧⌫)")
-                .disabled(!hasPendingWork)
-            }
-        }
-
+        // No run or commit controls here: the query tab's own bar carries Run, Run
+        // Selected and Run All where the statement is, a table tab commits from its
+        // status line, and both are on File › Commit (⌘⇧S) and Query › Run (⌘R). Six
+        // unlabelled glyphs repeating them said nothing the bar underneath did not.
         ToolbarItemGroup(placement: .primaryAction) {
             Button {
                 controller.refresh()
@@ -392,17 +342,6 @@ public struct WorkspaceView: View {
             .help("Show or hide the inspector of the tab in front (⌘⌥I)")
             .disabled(!workspace.canShowInspector)
         }
-    }
-
-    var queryController: QueryTabController? {
-        guard let tab = workspace.selectedTab, tab.isQueryTab else { return nil }
-        return queryControllers[tab.id]
-    }
-
-    /// True when there is something a commit or rollback would act on.
-    var hasPendingWork: Bool {
-        guard let tab = workspace.selectedTab else { return false }
-        return hasUnsavedWork(tab)
     }
 
     func hasUnsavedWork(_ tab: WorkspaceTab) -> Bool {

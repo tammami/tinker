@@ -557,8 +557,28 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         reportColumnWidths()
     }
 
+    /// Where the pointer went down on the header, in window coordinates, when the header
+    /// handed the gesture to AppKit rather than resizing a column itself.
+    var headerMouseDownLocation: NSPoint?
+
+    /// Whether a press that ended here was a click on the heading rather than a drag that
+    /// began on it. Apart from the table view so the rule can be tested.
+    ///
+    /// AppKit calls `didClick` for a press that moved a few points, which on a table tab
+    /// means a missed grab at a column divider re-sorts the table and fetches the page
+    /// again. A query tab ignores the click, so the same slip costs nothing there; this is
+    /// what makes the two headers behave alike (ADR-0059).
+    static func isClickRatherThanDrag(from origin: NSPoint?, to end: NSPoint, slop: CGFloat = 3) -> Bool {
+        guard let origin else { return true }
+        return abs(end.x - origin.x) <= slop && abs(end.y - origin.y) <= slop
+    }
+
     public func tableView(_ tableView: NSTableView, didClick tableColumn: NSTableColumn) {
+        let origin = headerMouseDownLocation
+        headerMouseDownLocation = nil
         guard tableColumn.identifier != Self.rowNumberColumnID,
+            let window = tableView.window,
+            Self.isClickRatherThanDrag(from: origin, to: window.mouseLocationOutsideOfEventStream),
             let column = model.columns.firstIndex(where: {
                 $0.name == tableColumn.identifier.rawValue
             })
@@ -1514,9 +1534,13 @@ final class GridHeaderView: NSTableHeaderView {
         let edges = resizeEdges()
         guard let index = Self.resizeBoundary(at: point.x, edges: edges.map(\.x), tolerance: Self.resizeTolerance)
         else {
+            // AppKit takes it from here: a click sorts, a drag carries the column. Where
+            // it started is remembered so the coordinator can tell the two apart.
+            MainActor.assumeIsolated { controller?.headerMouseDownLocation = event.locationInWindow }
             super.mouseDown(with: event)
             return
         }
+        MainActor.assumeIsolated { controller?.headerMouseDownLocation = nil }
         let column = edges[index].column
         if event.clickCount == 2 {
             MainActor.assumeIsolated { controller?.autosizeColumn(named: column.identifier.rawValue) }

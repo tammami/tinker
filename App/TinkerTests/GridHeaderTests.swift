@@ -126,6 +126,25 @@ final class GridHeaderTests: XCTestCase {
         XCTAssertNil(header.hoveredEdge, "the middle of a heading is for sorting, not resizing")
     }
 
+    /// A press that moved is a drag, not a click. AppKit reports both as `didClick`, and a
+    /// table tab answers a click by re-sorting and fetching the page again: a missed grab
+    /// at a divider used to throw the rows the user was aiming at across the screen, while
+    /// the same slip in a query tab — which ignores the click — cost nothing (ADR-0059).
+    func testAPressThatMovedIsNotAClickOnTheHeading() {
+        let origin = NSPoint(x: 100, y: 10)
+        XCTAssertTrue(GridCoordinator.isClickRatherThanDrag(from: origin, to: origin))
+        XCTAssertTrue(
+            GridCoordinator.isClickRatherThanDrag(from: origin, to: NSPoint(x: 103, y: 12)),
+            "a hand is never perfectly still; three points is still a click")
+        XCTAssertFalse(
+            GridCoordinator.isClickRatherThanDrag(from: origin, to: NSPoint(x: 104, y: 10)),
+            "four points is the slip that used to re-sort the table")
+        XCTAssertFalse(GridCoordinator.isClickRatherThanDrag(from: origin, to: NSPoint(x: 160, y: 10)))
+        XCTAssertTrue(
+            GridCoordinator.isClickRatherThanDrag(from: nil, to: origin),
+            "a click the header never saw go down — the keyboard, a test — still sorts")
+    }
+
     /// The drag looks its column up by identifier on every event, so a reload that rebuilt
     /// the columns underneath it cannot strand it.
     func testTheColumnSurvivesARebuildUnderTheDrag() throws {

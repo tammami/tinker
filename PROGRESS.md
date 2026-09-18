@@ -994,3 +994,45 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 ### Spec deviations
 - None. ADR-0057 and ADR-0058 record the two decisions; SPEC §12.8 names the chart kinds
   and says nothing about colour, and §13 only requires the auto-commit toggle.
+
+## 2026-09-18 — What was actually wrong with resizing in a table tab (ADR-0059)
+
+### Done
+- Found the real difference, with mouse events posted at a real header rather than by
+  reading code: a press on a heading that moves a few points is reported by AppKit as
+  `didClick`, and a table tab answers a click by re-sorting and fetching the page again.
+  So a missed grab at a divider re-sorted the table; eight to fourteen points off, the
+  same press carried the column away as a reorder. A query tab takes the identical path
+  but ignores the click, which is why resizing felt right there. The divider's width had
+  nothing to do with it.
+- The header now follows the query tab's rule: a press that moved is a drag, and a drag
+  never sorts. `GridHeaderView` records where a press went down when it hands the gesture
+  to AppKit, and the coordinator answers `didClick` only when the pointer let go within
+  three points of it. A press inside the divider band never reaches AppKit at all.
+- Sorting on a click, additively with shift, is unchanged (SPEC §12.4).
+
+### Tests
+- App-hosted `testAPressThatMovedIsNotAClickOnTheHeading`: still, three points, four
+  points, sixty points, and a click the header never saw go down.
+- Checked with posted mouse events against the running app, on a table of 28 columns
+  scrolled sideways: on the divider resizes, a four-point slip no longer sorts, a plain
+  click still does. The twelve-point drag never sorted — AppKit had already made it a
+  column reorder — and still reorders. The same offsets were run in a query tab: identical
+  branches, scrolled and unscrolled, which is what "the same rule" means here.
+- Only the rule is unit-tested. Driving `GridHeaderView.mouseDown` from a test would enter
+  AppKit's own tracking loop and wait for a mouse-up that no test can post, so the wiring
+  between the header and the coordinator rests on the recorded manual run above.
+- `Scripts/ci.sh`: green.
+
+### Not done / deferred
+- A missed grab can still pick the column up and reorder it — AppKit's own behaviour, and
+  the same in both kinds of tab, so it is no longer a difference between them.
+
+### Housekeeping
+- `tinker_test.spatial_places` on MySQL 3306 had row 1's geometry set to NULL at some
+  point during today's clicking about, which failed
+  `testSpatialColumnsDecodeToPlaceableShapes`. Restored with a single UPDATE; MariaDB's
+  copy was untouched. No code was involved.
+
+### Spec deviations
+- None. ADR-0059 records the rule.

@@ -721,3 +721,41 @@ so the colour is a second reading of something stated, never the only one.
 
 **Consequences.** `SPEC.md` §12.8 names the chart kinds and says nothing about colour, so
 this is a decision rather than a deviation. The pie's legend stays.
+
+## ADR-0059 — A press on a heading that moved is a drag, not a click
+Date: 2026-09-18
+
+**Context.** Resizing a column felt wrong in a table tab and right in a query tab, and the
+divider's width was not the reason — measured with real mouse events posted at the header
+of a table tab, at several distances from a divider:
+
+| gesture | what happened |
+|---|---|
+| press on the divider | the column resizes |
+| press 4 points off it, moved 4 points | AppKit reports `didClick` — **the table re-sorts** and fetches the page again |
+| press 8–14 points off it, moved 60 | AppKit carries the column (a reorder) |
+
+A query tab takes the identical path — the grid and its header are one implementation —
+but `QueryTabController.gridDidClickColumnHeader` is empty, because re-ordering a result
+would mean running a different statement. So the same missed grab costs nothing there and
+throws the rows across the screen in a table tab. That is the difference the user
+reported, and neither the hit band (ADR-0056) nor the divider's thickness addressed it.
+
+**Decision.** The header follows one rule, the one a query tab has by accident: a press
+that moved is a drag, and a drag never sorts. `GridHeaderView` records where the press
+went down whenever it hands the gesture to AppKit; `GridCoordinator.isClickRatherThanDrag`
+compares that with where the pointer let go, and `didClick` is answered only within three
+points — enough for a hand that is not perfectly still, short of the slip that used to
+re-sort the table. A press that lands in the divider band never reaches AppKit at all, so
+it cannot sort either.
+
+Raising the slop until a miss is impossible was rejected: past a few points the gesture
+*is* a drag, and a header that ignores a deliberate click on a heading would lose the sort
+the spec asks for (SPEC §12.4).
+
+**Consequences.** Sorting still happens on a click, additively with shift.
+`testAPressThatMovedIsNotAClickOnTheHeading` pins the rule, and the behaviour was checked
+with posted mouse events: a click still sorts, and the four-point slip no longer does. The
+longer drag never sorted — AppKit had already turned it into a column reorder, which both
+kinds of tab do and still do. A press the header never saw go down — a test, something synthetic — still
+sorts, so nothing that drives the grid programmatically changes.

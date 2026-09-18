@@ -566,7 +566,11 @@ public final class TableTabController: DataGridDelegate, WriteLogOwner {
     private func performRevert(_ record: WriteRecord) {
         writes.enqueue(
             .everything,
-            hasPending: { _ in true },
+            // Re-read from the log rather than trusting the captured copy: a scope merged
+            // in behind this one would otherwise run the same revert twice.
+            hasPending: { [weak self] _ in
+                self?.writeLog.records.first { $0.id == record.id }?.canRevert ?? false
+            },
             perform: { [weak self] _ in await self?.runRevert(record) ?? false },
             afterDrain: { [weak self] in await self?.reloadAfterWrite() }
         )

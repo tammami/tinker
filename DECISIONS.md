@@ -830,5 +830,5 @@ permanent — was a grey checkbox among grey icon buttons.
 **Consequences.** `testOnlyAnEditThatEmptiesAFilledCellIsAskedAbout` pins the one rule with
 a decision in it; the rest is layout. Delete Row is still on the row's context menu and on
 ⌘−, and Add Row still on ⌘⌥A, so nothing moved out of reach. The hover outline is drawn by
-the cell itself and only the two cells that change are redrawn, so it costs nothing on a
-wide result (the grid's performance tests measure the same reload and scroll as before).
+the cell itself and only the two cells that change are redrawn; the hosted performance
+tests still pass in the Debug build CI runs.

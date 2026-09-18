@@ -743,6 +743,9 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
     var reloadWaitsForEditor = false
 
     func reloadAfterRevision() {
+        // The cells are about to be asked for their values again, and the grid may have
+        // stopped being editable meanwhile (⌘⇧L locks it): the hover outline goes with them.
+        clearHover()
         let columnsChanged = builtColumnNames != visibleColumnNames
         rebuildColumnsIfNeeded()
         updateGutterWidth()

@@ -418,6 +418,22 @@ extension SmokeTest {
                     "committing result edits writes by key and re-reads the page (\(message ?? ""))",
                     edited == "Edited via query"
                         && resultGrid.value(row: 0, column: nameColumn) == .string("Edited via query"))
+                // A result grid writes to a real table, so its writes are taken back the
+                // same way a table tab's are (ADR-0060).
+                check(
+                    "a result-grid write is logged and can be put back",
+                    query.writeLog.latest?.summary == "1 row updated" && query.writeLog.undoable != nil)
+                let queryTakenBack = query.writeLog.undoable?.id
+                query.revertLastWrite()
+                try await waitUntil(timeout: .seconds(20)) { !query.isWritingEdits }
+                let restored = (try? await sql("SELECT name FROM \(scratchName) ORDER BY id LIMIT 1"))??.firstText
+                check(
+                    "undo puts a result-grid write back on the server (\(restored ?? "nothing"))",
+                    restored != "Edited via query"
+                        && query.writeLog.records.first { $0.id == queryTakenBack }?.isReverted == true)
+                // Put the row back the way the checks below expect to find it.
+                query.gridDidCommitEdit(row: 0, column: nameColumn, text: "Edited via query")
+                _ = await query.commitEdits()
                 // Auto-commit off: the edit joins the tab's transaction until that commits.
                 await query.setAutoCommit(false)
                 query.gridDidCommitEdit(row: 0, column: nameColumn, text: "Grace")

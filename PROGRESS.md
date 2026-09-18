@@ -1066,9 +1066,14 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
   survives in the plan after the buffer is cleared.
 - App-hosted `WriteLogTests` (4): how a write is described, which one Undo offers, the
   bound on the log, and which edits count as emptying a cell.
-- App smoke pass against the local PostgreSQL: "the write is in the tab's log and can be
-  put back", "undo puts the replaced value back on the server", "a write is taken back
-  once" — the old value is read back with SQL, not just from the grid.
+- App smoke pass against the local PostgreSQL, for both kinds of tab: "the write is in the
+  tab's log and can be put back", "undo puts the replaced value back on the server", "a
+  write is taken back once", "a result-grid write is logged and can be put back", "undo
+  puts a result-grid write back on the server" — the old value is read back with SQL, not
+  just from the grid.
+- Both reverts go through the tab's own write queue, so `isWriting` covers them and a
+  second ⌘Z cannot start a second revert of the same write while the first is on the wire;
+  the queue's `hasPending` re-reads the log rather than trusting the captured record.
 - `Scripts/ci.sh`: green.
 
 ### Not done / deferred

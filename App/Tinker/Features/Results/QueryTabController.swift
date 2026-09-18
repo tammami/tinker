@@ -1576,22 +1576,39 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     public func revert(_ record: WriteRecord) {
         guard record.canRevert, !isWritingEdits else { return }
         guard isProduction, let confirm, let config else {
-            Task { await performRevert(record) }
+            enqueueRevert(record)
             return
         }
         confirm(
             GridEditPrompts.revertWrite(summary: record.summary, table: config.name) { [weak self] in
-                await self?.performRevert(record)
+                self?.enqueueRevert(record)
             })
     }
 
-    private func performRevert(_ record: WriteRecord) async {
-        guard let session else { return }
+    /// Through the same gate a commit goes through, so a revert never runs beside a write
+    /// or beside a statement on the tab's held connection, and `isWritingEdits` is true
+    /// while it is on the wire.
+    private func enqueueRevert(_ record: WriteRecord) {
+        writes.enqueue(
+            .everything,
+            hasPending: { [weak self] _ in
+                // Re-read from the log rather than trusting the captured copy: a scope
+                // merged in behind this one would otherwise run the same revert twice.
+                self?.writeLog.records.first { $0.id == record.id }?.canRevert ?? false
+            },
+            perform: { [weak self] _ in await self?.performRevert(record) ?? false },
+            afterDrain: { [weak self] in await self?.reloadPagedResults() }
+        )
+    }
+
+    @discardableResult
+    private func performRevert(_ record: WriteRecord) async -> Bool {
+        guard let session else { return false }
         if await session.isReadOnly {
             errorBanner = QueryErrorBanner(
                 error: DBError.protocolError("This connection is read-only. Unlock it with ⌘⇧L to write."),
                 statement: "")
-            return
+            return false
         }
         do {
             let connection = try await connectionForRun(session: session, writes: true)
@@ -1604,13 +1621,16 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
                     summary: "Put back: \(record.summary)", revert: [],
                     blockedReason: "a revert is not itself taken back; edit the rows again instead"))
             lastCommitMessage = "Put back \(record.summary.lowercased())"
-            await reloadPagedResults()
+            bumpRevision()
+            return true
         } catch let error as GridCommitError {
             errorBanner = QueryErrorBanner(error: error, statement: error.statement ?? "")
             bumpRevision()
+            return false
         } catch {
             errorBanner = QueryErrorBanner(error: error, statement: "")
             bumpRevision()
+            return false
         }
     }
     public func gridCanRedo() -> Bool { !isWritingEdits && (selectedResult?.grid?.canRedo ?? false) }

@@ -565,3 +565,62 @@ final class QuerySessionChoiceTests: XCTestCase {
     }
 }
 
+/// Which database the status bar and the window subtitle name.
+///
+/// The tab in front decides, because it need not be on the connection's own database: a
+/// PostgreSQL query tab can be pointed at another one, and a table can be opened from one.
+@MainActor
+final class DisplayedDatabaseTests: XCTestCase {
+    private let connectionID = UUID()
+
+    private func config(_ dialect: SQLDialect = .postgresql, database: String? = "postgres") -> ConnectionConfig {
+        var made = ConnectionConfig(
+            name: "PostgreSQL", dialect: dialect, host: "localhost", port: 5432, user: "postgres",
+            database: database)
+        made.id = connectionID
+        return made
+    }
+
+    private func named(_ config: ConnectionConfig?, _ tab: WorkspaceTab?, query: String? = nil) -> String? {
+        WorkspaceController.displayedDatabase(config: config, tab: tab) { _ in query }
+    }
+
+    /// The mismatch this fixes: the tab ran in `tinker_test` while the status bar still
+    /// said `postgres`, the database the connection itself opens.
+    func testAQueryTabPointedAtAnotherDatabaseNamesThatOne() {
+        let tab = WorkspaceTab(kind: .query, connectionID: connectionID, title: "SQL 1")
+        XCTAssertEqual(named(config(), tab, query: "tinker_test"), "tinker_test")
+    }
+
+    /// A tab that has not woken its connection yet has no database of its own to name.
+    func testAnUnusedQueryTabFallsBackToTheConnectionsOwn() {
+        let tab = WorkspaceTab(kind: .query, connectionID: connectionID, title: "SQL 1")
+        XCTAssertEqual(named(config(), tab), "postgres")
+    }
+
+    /// A table opened from another database says where it came from.
+    func testATableNamesItsOwnDatabase() {
+        let table = TableRef(database: "vila_ombak", schema: "public", name: "rooms")
+        let tab = WorkspaceTab(kind: .table(table), connectionID: connectionID, title: "rooms")
+        XCTAssertEqual(named(config(), tab), "vila_ombak")
+    }
+
+    /// A tab belonging to another connection says nothing about this one.
+    func testATabOfAnotherConnectionIsIgnored() {
+        let tab = WorkspaceTab(kind: .query, connectionID: UUID(), title: "SQL 1")
+        XCTAssertEqual(named(config(), tab, query: "tinker_test"), "postgres")
+    }
+
+    /// A SQLite connection is one file, and the path is what names it whatever is in front.
+    func testAFileConnectionKeepsNamingItsFile() {
+        let file = ConnectionConfig(
+            name: "app.db", dialect: .sqlite, host: "", port: 0, user: "", database: "/Users/me/app.db")
+        let tab = WorkspaceTab(kind: .query, connectionID: file.id, title: "SQL 1")
+        XCTAssertEqual(named(file, tab, query: SchemaRef.sqliteMainSchema), "/Users/me/app.db")
+    }
+
+    /// No connection in front, nothing to name.
+    func testNoConnectionNamesNothing() {
+        XCTAssertNil(named(nil, nil))
+    }
+}

@@ -234,6 +234,42 @@ public final class WorkspaceController {
         queryControllers[tab.id]
     }
 
+    /// The database the window says it is on: the front tab's, when it has one of its own.
+    ///
+    /// A tab need not be on the connection's own database — a PostgreSQL query tab can be
+    /// pointed at another one, a table can be opened from another one — and a status bar
+    /// naming the connection's while the tab runs somewhere else says the wrong thing. A
+    /// file connection keeps naming its file, which is what its path is for.
+    public var displayedDatabase: String? {
+        Self.displayedDatabase(
+            config: workspace.displayedConnection, tab: workspace.selectedTab
+        ) { [weak self] tab in
+            guard let query = self?.queryControllers[tab.id] else { return nil }
+            switch query.dialect {
+            // On PostgreSQL the tab's database is the session it opened; on MySQL it is
+            // whatever it last switched to with `USE`.
+            case .postgresql: return query.sessionCatalog
+            case .mysql, .sqlite: return query.sessionDatabase
+            }
+        }
+    }
+
+    /// The rule itself, so it can be checked without a window: `queryDatabase` answers for
+    /// a query tab, whose database only its controller knows.
+    static func displayedDatabase(
+        config: ConnectionConfig?, tab: WorkspaceTab?, queryDatabase: (WorkspaceTab) -> String?
+    ) -> String? {
+        guard let config, !config.dialect.isFileBased else { return config?.database }
+        guard let tab, tab.connectionID == config.id else { return config.database }
+        switch tab.kind {
+        case let .table(ref): return ref.database
+        case let .objects(schema), let .queryBuilder(schema): return schema.database
+        case let .source(object): return object.schema.database
+        case .query: return queryDatabase(tab) ?? config.database
+        case .serverActivity: return config.database
+        }
+    }
+
     /// The query controller of the selected tab, which is what the Run commands act on.
     public var activeQueryController: QueryTabController? {
         guard let tab = workspace.selectedTab, tab.isQueryTab else { return nil }

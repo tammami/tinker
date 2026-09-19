@@ -291,7 +291,8 @@ public struct WorkspaceView: View {
         // A file connection has no user or host: the path says everything.
         if config.dialect.isFileBased { return ((config.database ?? "") as NSString).abbreviatingWithTildeInPath }
         var parts = ["\(config.user)@\(config.host)"]
-        if let database = config.database { parts.append(database) }
+        // The database the tab in front is on, which is not always the connection's own.
+        if let database = controller.displayedDatabase { parts.append(database) }
         return parts.joined(separator: " · ")
     }
 
@@ -513,7 +514,7 @@ public struct WorkspaceView: View {
                         .frame(width: 7, height: 7)
                     Text(config.name).foregroundStyle(.primary)
                 }
-                if let database = config.database {
+                if let database = controller.displayedDatabase {
                     Label(database, systemImage: Icon.database)
                 }
                 Text(sidebar.state(of: config.id).describedForStatusBar)

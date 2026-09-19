@@ -28,6 +28,12 @@ enum SQLiteFileOpener {
                 if controller.openSQLFile(at: url) { taken += 1 }
                 continue
             }
+            // A connections backup is not a database: it opens its restore sheet.
+            if url.pathExtension.lowercased() == ConnectionBackupCodec.fileExtension {
+                controller.openConnectionBackup(at: url)
+                taken += 1
+                continue
+            }
             if SQLiteDriver.isDatabaseFile(at: path) {
                 await openDatabase(atPath: path, in: controller)
                 taken += 1

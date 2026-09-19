@@ -1,6 +1,7 @@
 import DBCore
 import DBGrid
 import DBSQL
+import DBStore
 import DBTunnel
 import XCTest
 
@@ -622,5 +623,169 @@ final class DisplayedDatabaseTests: XCTestCase {
     /// No connection in front, nothing to name.
     func testNoConnectionNamesNothing() {
         XCTAssertNil(named(nil, nil))
+    }
+}
+
+/// The `.think` connections backup: what travels to another Mac, and what stays sealed.
+@MainActor
+final class ConnectionBackupTests: XCTestCase {
+    private let postgres = UUID()
+    private let mysql = UUID()
+
+    /// Two connections that between them use every kind of secret a config can carry.
+    private func connections() -> [ConnectionConfig] {
+        let pg = ConnectionConfig(
+            id: postgres, name: "PostgreSQL", groupPath: ["Localhost"], dialect: .postgresql,
+            host: "localhost", port: 5432, user: "postgres",
+            passwordRef: SecretRef.forConnection(postgres, field: SecretField.password.rawValue),
+            database: "postgres", isProduction: false)
+        let jump = SSHConfig(
+            host: "bastion.example", port: 22, user: "ops",
+            auth: .privateKey(
+                path: "~/.ssh/id_ed25519",
+                passphrase: SecretRef.forConnection(mysql, field: SecretField.sshPassphrase.rawValue)))
+        let my = ConnectionConfig(
+            id: mysql, name: "MySQL", groupPath: ["Office"], dialect: .mysql, host: "10.10.222.3",
+            port: 3306, user: "tammami",
+            passwordRef: SecretRef.forConnection(mysql, field: SecretField.password.rawValue),
+            ssh: SSHConfig(
+                host: "gateway.example", port: 22, user: "ops",
+                auth: .password(SecretRef.forConnection(mysql, field: SecretField.sshPassword.rawValue)),
+                jumpHost: jump),
+            readOnly: true, isProduction: true)
+        return [pg, my]
+    }
+
+    private func secrets(for configs: [ConnectionConfig]) -> [ConnectionBackupFile.StoredSecret] {
+        let values = [
+            "pg-password-a1", "my-password-b2", "my-ssh-password-c3", "my-key-passphrase-d4",
+        ]
+        let refs = configs.flatMap { ConnectionBackupCodec.secretRefs(of: $0) }
+        return zip(refs, values).map { ConnectionBackupFile.StoredSecret(ref: $0, value: $1) }
+    }
+
+    private let groups = [
+        ConnectionBackupFile.BackupGroup(path: ["Localhost"], isExpanded: true, sortOrder: 0),
+        ConnectionBackupFile.BackupGroup(path: ["Office"], isExpanded: false, sortOrder: 1),
+    ]
+
+    private func write(passphrase: String = "correct horse battery staple") async throws -> Data {
+        let configs = connections()
+        return try await ConnectionBackupCodec().write(
+            connections: configs, groups: groups, secrets: secrets(for: configs),
+            passphrase: passphrase, app: "Tinker 0.1.9 (18)")
+    }
+
+    /// The point of the file: a second Mac ends up with the same connections, folders and
+    /// passwords, down to the production mark.
+    func testABackupRoundTripsEveryConnectionAndEverySecret() async throws {
+        let codec = ConnectionBackupCodec()
+        let data = try await write()
+        let file = try codec.read(data)
+        XCTAssertEqual(file.connections.map(\.name), ["PostgreSQL", "MySQL"])
+        XCTAssertEqual(file.connections.map(\.id), [postgres, mysql])
+        XCTAssertEqual(file.connections[1].groupPath, ["Office"])
+        XCTAssertTrue(file.connections[1].isProduction, "a production connection is still production")
+        XCTAssertTrue(file.connections[1].readOnly)
+        XCTAssertEqual(file.groups, groups, "the sidebar folders travel with their order and state")
+
+        let opened = try await codec.secrets(in: file, passphrase: "correct horse battery staple")
+        XCTAssertEqual(
+            opened.map(\.value),
+            ["pg-password-a1", "my-password-b2", "my-ssh-password-c3", "my-key-passphrase-d4"],
+            "the SSH password and the jump host's key passphrase come back too")
+        XCTAssertEqual(
+            opened.map(\.ref), connections().flatMap { ConnectionBackupCodec.secretRefs(of: $0) },
+            "each one keeps the reference its connection looks it up by")
+    }
+
+    /// Without the passphrase the passwords are noise — and the message says which of the
+    /// two things that can go wrong it was.
+    func testAWrongPassphraseIsRefusedInPlainWords() async throws {
+        let codec = ConnectionBackupCodec()
+        let file = try codec.read(try await write())
+        do {
+            _ = try await codec.secrets(in: file, passphrase: "not the passphrase")
+            XCTFail("a wrong passphrase must not open the backup")
+        } catch let error as ConnectionBackupError {
+            XCTAssertEqual(error, .wrongPassphrase)
+        }
+    }
+
+    /// The Keychain-only rule, applied to the file this feature writes: the same test the
+    /// store file gets. No password may appear anywhere in the bytes.
+    func testNoPasswordAppearsInTheFileBytes() async throws {
+        let data = try await write()
+        let text = String(decoding: data, as: UTF8.self)
+        for value in ["pg-password-a1", "my-password-b2", "my-ssh-password-c3", "my-key-passphrase-d4"] {
+            XCTAssertFalse(text.contains(value), "\(value) is in the file in the clear")
+            XCTAssertFalse(data.range(of: Data(value.utf8)) != nil, "\(value) is in the file's bytes")
+        }
+        XCTAssertTrue(text.contains("10.10.222.3"), "hosts are readable on purpose, as the sheet says")
+    }
+
+    /// What the restore sheet leans on: the file describes itself before anyone types a
+    /// passphrase, and a file that is not ours is refused.
+    func testAFileDescribesItselfWithoutThePassphrase() async throws {
+        let codec = ConnectionBackupCodec()
+        let file = try codec.read(try await write())
+        XCTAssertEqual(file.app, "Tinker 0.1.9 (18)")
+        XCTAssertEqual(file.version, ConnectionBackupFile.currentVersion)
+        XCTAssertThrowsError(try codec.read(Data("{\"format\":\"something.else\"}".utf8))) { error in
+            XCTAssertEqual(error as? ConnectionBackupError, .notABackup)
+        }
+        XCTAssertThrowsError(try codec.read(Data("not json at all".utf8)))
+    }
+
+    /// A backup with no passphrase would be a password file; it is refused at the source.
+    func testAPassphraseIsRequired() async throws {
+        do {
+            _ = try await write(passphrase: "")
+            XCTFail("an empty passphrase must not write a backup")
+        } catch let error as ConnectionBackupError {
+            XCTAssertEqual(error, .emptyPassphrase)
+        }
+    }
+
+    /// Restoring the same backup twice does nothing the second time, unless asked.
+    func testTheRestorePlanMatchesConnectionsByIdentity() {
+        let configs = connections()
+        let fresh = ConnectionBackupCodec.plan(existing: [], incoming: configs, policy: .skip)
+        XCTAssertEqual(fresh.added.count, 2)
+        XCTAssertTrue(fresh.skipped.isEmpty)
+
+        let again = ConnectionBackupCodec.plan(existing: configs, incoming: configs, policy: .skip)
+        XCTAssertTrue(again.isEmpty, "nothing is written when everything is already here")
+        XCTAssertEqual(again.skipped.count, 2)
+
+        let overwriting = ConnectionBackupCodec.plan(existing: configs, incoming: configs, policy: .replace)
+        XCTAssertEqual(overwriting.replaced.count, 2)
+        XCTAssertTrue(overwriting.added.isEmpty)
+
+        let half = ConnectionBackupCodec.plan(existing: [configs[0]], incoming: configs, policy: .skip)
+        XCTAssertEqual(half.added.map(\.name), ["MySQL"])
+        XCTAssertEqual(half.skipped.map(\.name), ["PostgreSQL"])
+    }
+
+    /// A connection's secrets include the SSH chain's, or a restore would lose the way in.
+    func testSecretReferencesFollowTheSSHChain() {
+        let refs = ConnectionBackupCodec.secretRefs(of: connections()[1])
+        XCTAssertEqual(
+            refs.map(\.account),
+            [
+                "\(mysql.uuidString).password",
+                "\(mysql.uuidString).sshPassword",
+                "\(mysql.uuidString).sshPassphrase",
+            ],
+            "the jump host's key passphrase is the third")
+        XCTAssertTrue(ConnectionBackupCodec.secretRefs(of: connections()[0]).count == 1)
+    }
+
+    /// The name a backup is offered under carries its date, so a folder of them sorts.
+    func testTheSuggestedNameIsDatedAndCarriesTheExtension() {
+        let date = Date(timeIntervalSince1970: 1_789_000_000)
+        let name = ConnectionBackupCodec.suggestedFilename(now: date)
+        XCTAssertTrue(name.hasSuffix(".think"))
+        XCTAssertTrue(name.hasPrefix("Tinker Connections 20"), name)
     }
 }

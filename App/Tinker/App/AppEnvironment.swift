@@ -123,6 +123,14 @@ public final class AppEnvironment {
         groups = (try? await store?.groups()) ?? groups
     }
 
+    /// Writes a folder back as it was — its place in the order and whether it was open —
+    /// which is what restoring a backup means, as against making a folder by hand.
+    public func restoreGroup(_ group: StoredGroup) async {
+        guard !group.path.isEmpty else { return }
+        try? await store?.save(group)
+        groups = (try? await store?.groups()) ?? groups
+    }
+
     /// Renames the last component of a folder; every connection and subfolder follows.
     public func renameGroup(_ path: [String], to name: String) async {
         guard !path.isEmpty, !name.isEmpty else { return }

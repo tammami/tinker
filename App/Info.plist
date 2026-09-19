@@ -39,6 +39,22 @@
 		</dict>
 		<dict>
 			<key>CFBundleTypeName</key>
+			<string>Tinker Connections Backup</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.thinkfree.tinker.connections</string>
+			</array>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>think</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
 			<string>SQL Script</string>
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
@@ -48,6 +64,26 @@
 			<array>
 				<string>sql</string>
 			</array>
+		</dict>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.thinkfree.tinker.connections</string>
+			<key>UTTypeDescription</key>
+			<string>Tinker Connections Backup</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>think</string>
+				</array>
+			</dict>
 		</dict>
 	</array>
 </dict>

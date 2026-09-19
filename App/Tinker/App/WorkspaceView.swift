@@ -261,6 +261,23 @@ public struct WorkspaceView: View {
             )
         }
         .sheet(isPresented: boundWorkspace.isExportPresented) { exportSheet }
+        .sheet(isPresented: boundWorkspace.isBackUpConnectionsPresented) {
+            BackUpConnectionsSheet(
+                connectionCount: environment.connections.count,
+                onBackUp: { passphrase in await controller.writeConnectionBackup(passphrase: passphrase) },
+                onDismiss: { workspace.isBackUpConnectionsPresented = false }
+            )
+        }
+        .sheet(item: boundWorkspace.pendingConnectionRestore) { request in
+            RestoreConnectionsSheet(
+                request: request,
+                existing: environment.connections,
+                onRestore: { passphrase, policy in
+                    await controller.restoreConnections(from: request, passphrase: passphrase, policy: policy)
+                },
+                onDismiss: { workspace.pendingConnectionRestore = nil }
+            )
+        }
         .sheet(isPresented: $isFirstRunPresented) {
             FirstRunView(
                 onAddConnection: { workspace.presentNewConnection() },

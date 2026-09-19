@@ -212,6 +212,10 @@ public final class WorkspaceModel {
     public var isStructureSyncPresented = false
     public var isHistoryPresented = false
     public var isExportPresented = false
+    /// The connections backup sheets: one asks for a passphrase to seal a `.think` file,
+    /// the other holds a file that has been opened and is waiting to be restored.
+    public var isBackUpConnectionsPresented = false
+    var pendingConnectionRestore: ConnectionRestoreRequest?
     public var isSettingsPresented = false
     /// On by default: a table tab is for finding rows, and a filter behind a shortcut is
     /// a filter most people never find.

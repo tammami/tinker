@@ -41,7 +41,8 @@ struct TinkerApp: App {
                     guard let controller = CommandCenter.shared.current else { return false }
                     let accepted = urls.filter { url in
                         let ext = url.pathExtension.lowercased()
-                        return ext == "sql" || SQLiteDriver.fileExtensions.contains(ext)
+                        return ext == "sql" || ext == ConnectionBackupCodec.fileExtension
+                            || SQLiteDriver.fileExtensions.contains(ext)
                             || SQLiteDriver.isDatabaseFile(at: url.path)
                     }
                     guard !accepted.isEmpty else { return false }
@@ -127,6 +128,9 @@ struct TinkerCommands: Commands {
                 .keyboardShortcut("o", modifiers: [.command, .option])
             Button("Save Query…") { workspace?.saveSQLFile() }
                 .keyboardShortcut("s", modifiers: .command)
+            Divider()
+            Button("Back Up Connections…") { workspace?.backUpConnections() }
+            Button("Restore Connections…") { workspace?.chooseConnectionBackup() }
             Divider()
             Button("Import from CSV…") { workspace?.importCSV() }
             Button("Export Result…") { workspace?.workspace.isExportPresented = true }

@@ -234,6 +234,9 @@ public enum Icon {
     public static let close = "xmark"
     public static let export = "square.and.arrow.up"
     public static let importData = "square.and.arrow.down"
+    /// A backup of every connection, and putting one back.
+    public static let backup = "archivebox"
+    public static let restore = "arrow.uturn.backward.circle"
     public static let history = "clock.arrow.circlepath"
     /// A mode that is holding rather than acting: auto-commit turned off.
     public static let pause = "pause.circle"

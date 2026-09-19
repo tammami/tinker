@@ -4,6 +4,25 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.10] - 2026-09-19
+
+### Added
+- **Connections can be backed up and restored.** Setting up a second Mac meant typing every
+  host, port, user and option again. File › Back Up Connections… now writes one `.think`
+  file holding every connection — TLS, SSH with its jump host, options, colour, the
+  production and read-only marks — together with the sidebar folders, their order and
+  whether they were open. File › Restore Connections… puts it all back, and so does
+  opening the file from Finder or dropping it on the window.
+- **Passwords travel with the backup, sealed.** The SSH passwords and key passphrases too.
+  They are encrypted with AES-GCM under a key derived from a passphrase you type, 600,000
+  PBKDF2 rounds, and the file's own header is authenticated along with them, so a secrets
+  box taken from another backup will not open in this one. Everything else stays plain
+  JSON, so a backup can be read, compared and kept; the file is written readable by you
+  alone. The Keychain remains the only place a secret lives unsealed.
+- A restore matches connections by identity rather than by name, so the same backup
+  restored twice changes nothing unless you ask for the backup's version to win. It never
+  connects to a server, and a production connection comes back marked production.
+
 ## [0.1.9] - 2026-09-19
 
 ### Added

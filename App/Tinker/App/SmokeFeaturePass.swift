@@ -270,6 +270,18 @@ extension SmokeTest {
                 "explain returns a plan",
                 (query.results.first?.grid?.rowCount ?? 0) > 0 && query.results.first?.error == nil)
             await query.setAutoCommit(false)
+            // With auto-commit off a plain read opens the transaction too (SPEC §13.2) —
+            // the server really does hold a read view for it — and that transaction has
+            // nothing to commit, which is the difference the badge now draws (ADR-0062).
+            query.sql = "SELECT * FROM smoke_features"
+            query.caretOffset = 0
+            query.run(all: true)
+            try await waitUntil(timeout: .seconds(20)) {
+                !query.isRunning && query.results.first?.statement.hasPrefix("SELECT") == true
+            }
+            check(
+                "a read with auto-commit off opens a transaction that holds no writes",
+                query.isInTransaction && !query.transactionHasWrites)
             query.sql = "INSERT INTO smoke_features (name) VALUES ('tx only')"
             query.caretOffset = 0
             query.run(all: true)
@@ -280,6 +292,9 @@ extension SmokeTest {
             check(
                 "a write with auto-commit off opens a transaction (inTransaction=\(query.isInTransaction), error=\(query.results.first?.error?.message ?? "none"), status=\(query.statusText))",
                 query.isInTransaction && query.results.first?.error == nil)
+            check(
+                "the write is what gives that transaction something to commit",
+                query.transactionHasWrites)
             // A statement that fails inside the transaction must not end it: the lease is
             // held for exactly as long as the transaction is open (ADR-0057), so a
             // transaction reported closed here would take the user's work with it.
@@ -292,7 +307,9 @@ extension SmokeTest {
                 query.isInTransaction)
             await query.rollbackTransaction()
             let afterRollback = await count()
-            check("rollback leaves the table as it was", !query.isInTransaction && afterRollback == 5)
+            check(
+                "rollback leaves the table as it was",
+                !query.isInTransaction && !query.transactionHasWrites && afterRollback == 5)
             await query.setAutoCommit(true)
             let history = await environment.history(connectionID: config.id)
             check("history records what ran", history.contains { $0.sql.contains("smoke_features") })

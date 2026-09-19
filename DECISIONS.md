@@ -832,3 +832,51 @@ a decision in it; the rest is layout. Delete Row is still on the row's context m
 ⌘−, and Add Row still on ⌘⌥A, so nothing moved out of reach. The hover outline is drawn by
 the cell itself and only the two cells that change are redrawn; the hosted performance
 tests still pass in the Debug build CI runs.
+
+## ADR-0062 — A held transaction says whether it has anything to commit
+Date: 2026-09-19
+
+**Context.** With Auto-commit unchecked on an ordinary MySQL connection, `SELECT * FROM
+big_table` left the tab showing TRANSACTION OPEN in orange beside Commit and Rollback. The
+user read that as the bug ADR-0057 had fixed the day before and asked why it was back. It
+was not back: ADR-0057 removed a transaction nobody had asked for — a *read on a
+production connection with the box still ticked*. Unchecking the box is asking for one, and
+SPEC §13.2 says so in as many words ("When off, the status bar shows 'Transaction open' in
+orange and `Commit`/`Rollback` become active"). The badge was telling the truth. It was
+telling it in words that read like a warning about unsaved data when nothing had been
+written, and it said nothing about what the server was actually holding.
+
+**Decision.** The rule in `opensTransaction` is unchanged: auto-commit off means every
+statement joins the transaction, reads included. What changes is that the transaction now
+reports whether anything in it has to be committed to survive.
+
+- `QueryTabController.transactionHasWrites` is set in `connectionForRun`, from the same
+  `writes` classification that decides whether a transaction opens at all, so the two
+  cannot disagree. It is set *before* the statement goes out: a write that fails may still
+  have taken locks, and the flag is only ever allowed to make the badge louder.
+- The toolbar badge reads `TRANSACTION OPEN` when there are writes and
+  `TRANSACTION · NO WRITES` when there are not. The status bar, which has the room, reads
+  "Transaction open · nothing written". Both stay orange, as §13.2 requires.
+- Both tiers keep Commit and Rollback active. Committing a transaction that wrote nothing
+  is the honest way to let go of what it holds, and §13.2 gives no other rule.
+- The tooltip on both names what is held, by engine: on MySQL the read view and a metadata
+  lock on the tables read, so someone else's `ALTER` waits; on PostgreSQL a session idle in
+  transaction, pinning the snapshot and keeping vacuum from reclaiming rows behind it.
+- Unchecking the box sets the status text at once — "Auto-commit off: the next statement
+  opens a transaction this tab holds until you commit or roll back" — so the question is
+  answered before the badge can raise it.
+
+**Rejected.** *Opening the transaction lazily, on the first write.* That is DBeaver's smart
+commit: a third mode, not a new meaning for this checkbox. It would contradict §13.2, and
+it would take away the one thing manual mode is for on a REPEATABLE READ engine — reading
+several tables against one snapshot before deciding what to write. If it is ever wanted it
+gets its own setting and its own spec line. *Hiding the badge for a read-only transaction.*
+The lock is real; a client that draws nothing while the server holds a metadata lock is
+lying, which is the failure ADR-0057 was written against.
+
+**Consequences.** `isProbablyReadOnly` is a heuristic, so a `SELECT` that calls a writing
+function, or `SELECT … FOR UPDATE`, is classed as a read and the quieter badge is shown
+while the server holds row locks. The flag can only ever make the badge quieter, never hide
+it, and the tooltip says "nothing it recognised as a write" rather than claiming more than
+it knows — the same limit ADR-0057 already accepted for the production gate. The smoke pass
+proves both tiers against the local PostgreSQL.

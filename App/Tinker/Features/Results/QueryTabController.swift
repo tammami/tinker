@@ -25,6 +25,15 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     public private(set) var revision = 0
     public var autoCommit = true
     public var isInTransaction = false
+    /// Whether the open transaction has anything to commit.
+    ///
+    /// A transaction held because auto-commit is off starts empty: every statement joins
+    /// it, reads included, so Commit and Rollback would leave the same rows behind. What
+    /// the server holds is real either way — a consistent read view, and on MySQL a
+    /// metadata lock on the tables read — so the badge stays; it just says which of the
+    /// two it is (ADR-0062). Set from the same classification that decides whether a
+    /// transaction opens at all, so the two can never disagree.
+    public private(set) var transactionHasWrites = false
     /// True when the connection is read-only and the user has not unlocked it.
     public var isReadOnly = false
     public var completionCandidates: [CompletionCandidate] = []
@@ -941,6 +950,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
                 try await heldConnection.beginTransaction()
                 isInTransaction = true
             }
+            noteWrite(writes)
             return heldConnection
         }
         let (lease, connection) = try await session.lease()
@@ -954,7 +964,18 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
             try await connection.beginTransaction()
             isInTransaction = true
         }
+        noteWrite(writes)
         return connection
+    }
+
+    /// Records that a statement about to run inside the open transaction changes something.
+    ///
+    /// Counted before the statement goes out rather than after it comes back: a write that
+    /// fails may still have taken locks, and this flag is only ever allowed to make the
+    /// badge louder, never quieter.
+    private func noteWrite(_ writes: Bool) {
+        guard writes, isInTransaction else { return }
+        transactionHasWrites = true
     }
 
     /// Points the connection at the chosen database or schema.
@@ -1297,6 +1318,42 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     public func setAutoCommit(_ enabled: Bool) async {
         autoCommit = enabled
         if enabled, isInTransaction { await commitTransaction() }
+        // Says what the checkbox just did before the badge appears and is wondered about:
+        // off means this tab holds a transaction from its next statement, reads included.
+        if !enabled {
+            statusText =
+                "Auto-commit off: the next statement opens a transaction this tab holds "
+                + "until you commit or roll back."
+        }
+    }
+
+    /// What the transaction badge says when it is asked, naming what the server is
+    /// actually holding rather than repeating the badge.
+    ///
+    /// A transaction with nothing written is not nothing: the engine still holds the read
+    /// view it gave, and on MySQL a metadata lock on every table read, so an `ALTER` from
+    /// anyone else waits on it. Saying so is the point of the quieter tier — the user
+    /// asked what the transaction was for, and this answers it (ADR-0062).
+    public var transactionHelp: String {
+        guard !transactionHasWrites else {
+            return "This tab holds a transaction with changes that have not been committed. "
+                + "Commit keeps them; Rollback undoes them."
+        }
+        let held: String
+        switch dialect {
+        case .mysql:
+            held =
+                "The server still holds the read view it gave you and a metadata lock on the "
+                + "tables read, so an ALTER on them waits, until you commit or roll back."
+        case .postgresql:
+            held =
+                "The session stays idle in transaction: it holds the snapshot you read and "
+                + "keeps vacuum from reclaiming rows behind it, until you commit or roll back."
+        case .sqlite:
+            held = "The file stays in a read transaction until you commit or roll back."
+        }
+        return "Auto-commit is off, so this tab has held a transaction since its first "
+            + "statement. Nothing it recognised as a write has run. " + held
     }
 
     public func commitTransaction() async {
@@ -1305,6 +1362,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         do {
             try await connection.commit()
             isInTransaction = false
+            transactionHasWrites = false
             statusText = "Committed"
         } catch {
             errorBanner = QueryErrorBanner(error: error, statement: "COMMIT")
@@ -1316,6 +1374,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         do {
             try await connection.rollback()
             isInTransaction = false
+            transactionHasWrites = false
             statusText = "Rolled back"
         } catch {
             errorBanner = QueryErrorBanner(error: error, statement: "ROLLBACK")

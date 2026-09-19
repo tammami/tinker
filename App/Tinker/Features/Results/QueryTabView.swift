@@ -245,11 +245,22 @@ public struct QueryTabView: View {
                         tab.autoCommit = enabled
                         Task { await controller.setAutoCommit(enabled) }
                     }
-                    .help("Off holds a transaction open until you commit or roll back")
+                    .help(
+                        "Off holds a transaction open until you commit or roll back, "
+                            + "from the next statement and including reads")
             }
 
             if controller.isInTransaction {
-                Badge(text: "TRANSACTION OPEN", color: .orange)
+                // Two tiers, because the two are not the same thing to lose: one holds
+                // changes that Commit would keep, the other only the read view the server
+                // gave. Both stay orange and both keep Commit and Rollback (SPEC §13.2) —
+                // a transaction with nothing written still holds locks, and committing it
+                // is the honest way to let them go.
+                Badge(
+                    text: controller.transactionHasWrites ? "TRANSACTION OPEN" : "TRANSACTION · NO WRITES",
+                    color: .orange
+                )
+                .help(controller.transactionHelp)
                 Button("Commit") { Task { await controller.commitTransaction() } }
                 Button("Rollback") { Task { await controller.rollbackTransaction() } }
             }

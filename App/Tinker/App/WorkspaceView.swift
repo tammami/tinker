@@ -577,7 +577,15 @@ public struct WorkspaceView: View {
             if let tab = workspace.selectedTab, tab.isQueryTab,
                 let controller = queryControllers[tab.id], controller.isInTransaction
             {
-                Label("Transaction open", systemImage: Icon.transaction).foregroundStyle(.orange)
+                // The bar has the room the toolbar badge does not, so this is where the
+                // transaction says whether it is holding changes or only a read view.
+                Label(
+                    controller.transactionHasWrites
+                        ? "Transaction open" : "Transaction open · nothing written",
+                    systemImage: Icon.transaction
+                )
+                .foregroundStyle(.orange)
+                .help(controller.transactionHelp)
             }
             if let tab = workspace.selectedTab, let controller = tableControllers[tab.id],
                 let model = controller.model, model.edits.pendingStatementCount > 0

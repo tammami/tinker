@@ -41,6 +41,19 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     /// The connection the tab runs on. Changing it points the tab at another server
     /// (SPEC §13.1a).
     public var connectionID: UUID
+    /// Reports an accepted move to the workspace tab, which is what the window title, the
+    /// status bar, ⌘T, Disconnect and Export all read. Set by the workspace that creates
+    /// the controller; a move the user declined never calls it.
+    @ObservationIgnored public var onConnectionChanged: ((UUID) -> Void)?
+    /// Bumped when a move is declined, so the pop-up — which AppKit has already redrawn on
+    /// the connection that was clicked — is asked to show the one the tab is still on.
+    public private(set) var connectionChoiceRevision = 0
+    /// What the connection pop-up shows: the tab's connection, re-read after a declined
+    /// move so the menu goes back to it rather than naming a server the tab never reached.
+    public var pickedConnectionID: UUID {
+        _ = connectionChoiceRevision
+        return connectionID
+    }
     public var dialect: SQLDialect
 
     /// The database (MySQL) or schema (PostgreSQL) statements resolve unqualified names
@@ -1290,41 +1303,28 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
 
     /// Points the tab at another connection, which is a different server and therefore a
     /// different set of databases and a different completion cache.
+    ///
+    /// Moving the tab gives the current connection back, and that rolls back whatever it
+    /// was holding. That is the same loss as closing the tab, so it is asked about in the
+    /// same words rather than done quietly (ADR-0063).
     public func selectConnection(_ id: UUID) async {
         guard id != connectionID,
             let config = environment.connections.first(where: { $0.id == id })
         else { return }
-        warmTask?.cancel()
-        await releaseHeldConnection()
-        connectionID = id
-        dialect = config.dialect
-        sessionDatabase = nil
-        sessionCatalog = nil
-        availableDatabases = []
-        availableCatalogs = []
-        hasLoadedSessionChoices = false
-        results.removeAll()
-        references.removeAll()
-        choices.removeAll()
-        selectedResultID = nil
-        statusText = "Connected to \(config.name)"
-        cachedColumns = [:]
-        await loadSessionChoices()
-        await loadCompletionSources()
-    }
-
-    /// Turns auto-commit on or off. Turning it on while a transaction is open commits that
-    /// transaction, so nothing is left waiting for a commit that would never come.
-    public func setAutoCommit(_ enabled: Bool) async {
-        autoCommit = enabled
-        if enabled, isInTransaction { await commitTransaction() }
-        // Says what the checkbox just did before the badge appears and is wondered about:
-        // off means this tab holds a transaction from its next statement, reads included.
-        if !enabled {
-            statusText =
-                "Auto-commit off: the next statement opens a transaction this tab holds "
-                + "until you commit or roll back."
+        guard let confirm, let loss = workAtRisk else {
+            await move(to: config)
+            return
         }
+        confirm(
+            DestructiveConfirmation(
+                title: "Move this tab to \(config.name)?",
+                message: "\(loss) Moving the tab gives its connection back, so that goes first.",
+                confirmTitle: "Move",
+                action: { [weak self] in await self?.move(to: config) },
+                // The pop-up has already drawn the connection the click chose; the tab did
+                // not go there, so the menu is put back on the one it is still on.
+                onCancel: { [weak self] in self?.connectionChoiceRevision &+= 1 }
+            ))
     }
 
     /// What the transaction badge says when it is asked, naming what the server is
@@ -1354,6 +1354,60 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         }
         return "Auto-commit is off, so this tab has held a transaction since its first "
             + "statement. Nothing it recognised as a write has run. " + held
+    }
+
+    /// What moving or closing this tab would throw away, in the words the close prompt
+    /// uses, or nil when there is nothing to lose.
+    private var workAtRisk: String? {
+        var parts: [String] = []
+        if isInTransaction {
+            parts.append(
+                transactionHasWrites
+                    ? "This tab has an open transaction with changes that have not been committed."
+                    : "This tab has an open transaction, which will be rolled back.")
+        }
+        if hasPendingEdits { parts.append("It has uncommitted result edits.") }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    private func move(to config: ConnectionConfig) async {
+        warmTask?.cancel()
+        await releaseHeldConnection()
+        // Whatever the old connection held is gone with it, including a rollback that
+        // could not be sent because the connection was already lost. The badge does not
+        // follow the tab to a server where nothing is open.
+        isInTransaction = false
+        transactionHasWrites = false
+        connectionID = config.id
+        onConnectionChanged?(config.id)
+        dialect = config.dialect
+        sessionDatabase = nil
+        sessionCatalog = nil
+        availableDatabases = []
+        availableCatalogs = []
+        hasLoadedSessionChoices = false
+        results.removeAll()
+        references.removeAll()
+        choices.removeAll()
+        selectedResultID = nil
+        statusText = "Connected to \(config.name)"
+        cachedColumns = [:]
+        await loadSessionChoices()
+        await loadCompletionSources()
+    }
+
+    /// Turns auto-commit on or off. Turning it on while a transaction is open commits that
+    /// transaction, so nothing is left waiting for a commit that would never come.
+    public func setAutoCommit(_ enabled: Bool) async {
+        autoCommit = enabled
+        if enabled, isInTransaction { await commitTransaction() }
+        // Says what the checkbox just did before the badge appears and is wondered about:
+        // off means this tab holds a transaction from its next statement, reads included.
+        if !enabled {
+            statusText =
+                "Auto-commit off: the next statement opens a transaction this tab holds "
+                + "until you commit or roll back."
+        }
     }
 
     public func commitTransaction() async {

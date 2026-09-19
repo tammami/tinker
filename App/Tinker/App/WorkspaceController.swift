@@ -304,6 +304,9 @@ public final class WorkspaceController {
         )
         controller.sql = sql
         controller.confirm = { [weak self] in self?.workspace.confirmation = $0 }
+        // The tab is the half that lasts, so a move the controller accepted is written
+        // there: the title, the status bar and Disconnect all read the tab (ADR-0063).
+        controller.onConnectionChanged = { [weak tab] id in tab?.moveToConnection(id) }
         queryControllers[tab.id] = controller
         return tab
     }

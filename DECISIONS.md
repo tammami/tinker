@@ -880,3 +880,51 @@ while the server holds row locks. The flag can only ever make the badge quieter,
 it, and the tooltip says "nothing it recognised as a write" rather than claiming more than
 it knows — the same limit ADR-0057 already accepted for the production gate. The smoke pass
 proves both tiers against the local PostgreSQL.
+
+## ADR-0063 — A query tab's connection is the tab's, and moving it is asked about
+Date: 2026-09-19
+
+**Context.** The connection pop-up added to the query toolbar wrote only
+`QueryTabController.connectionID`. `WorkspaceTab.connectionID` was a `let` and never moved,
+so a tab switched from PostgreSQL to MySQL ran its statements on MySQL while the rest of the
+window went on describing it as PostgreSQL: the window title and subtitle named the old
+server beside the new server's database ("postgres@localhost · tinker_test"), and the status
+bar reported the old connection's state — "Disconnected" — for a tab that was running
+queries. Two consequences were worse than the labels: ⌘T inherited the old connection, and
+`tabs(for:)` keyed Disconnect and Close on it, so disconnecting the server the tab had left
+closed the tab and disconnecting the one it was using did not. `streamEverything` and the
+result-grid commit preview read the same stale id, so Export everything re-ran the statement
+on the original server and a tab moved onto a production connection could have written grid
+edits without the production confirmation. SPEC §13.1a already says a query tab carries its
+own connection; the tab simply was not being told.
+
+**Decision.** The tab owns the identity. `WorkspaceTab.connectionID` becomes
+`private(set) var` with `moveToConnection(_:)`, which only a query tab honours — every other
+kind is keyed by the object it was opened on, and moving one would break that key. The
+controller reports an accepted move through `onConnectionChanged`, wired in
+`WorkspaceController.newQueryTab` beside `confirm`. Every consumer goes on reading
+`tab.connectionID` and becomes correct without knowing about the picker.
+
+This mirrors what the tab already does for `sql` and `autoCommit` (ADR-0038): the controller
+is the disposable half — `pruneControllers` throws it away — so state that outlives it lives
+on the tab. Resolving an "effective connection" through the controller instead was rejected:
+`WorkspaceModel` cannot see controllers (`tabs(for:database:)` already takes a closure to
+avoid it, and the model's own tests build tabs with no controller at all), so every accessor
+would need a controller-aware wrapper while the model kept a stale id underneath — two
+truths instead of one.
+
+**Decision, second half.** Moving a tab releases its connection, and
+`releaseHeldConnection` rolls back whatever it was holding. That was happening silently,
+while *closing* the same tab asks first. A move that would lose an open transaction or
+uncommitted result edits now goes through the same `DestructiveConfirmation`, in the same
+words the close prompt uses. Declining it bumps `connectionChoiceRevision`, which the
+pop-up's binding reads through `pickedConnectionID`: AppKit has already drawn the clicked
+row, and without that the menu would keep naming a server the tab never reached.
+
+**Consequences.** A move clears `isInTransaction` and `transactionHasWrites` after the
+release: whatever the old connection held is gone with it, including a rollback that could
+not be sent because the connection had already been lost, and the badge must not follow the
+tab to a server where nothing is open. The tab's colour stripe, which reads
+`tab.connectionID`, now changes with the picker, so the move is visible in the tab bar. The tab keeps its title: "SQL 1" is the
+user's handle on it, not its address. Nothing persists tabs across a relaunch, so there is
+no stored id to migrate.

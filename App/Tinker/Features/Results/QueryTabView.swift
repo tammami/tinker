@@ -205,7 +205,9 @@ public struct QueryTabView: View {
             BarPopUp(
                 items: connectionItems,
                 selection: Binding(
-                    get: { controller.connectionID },
+                    // Not `connectionID` itself: a move the user declined leaves that
+                    // unchanged, and the menu would keep showing where the tab did not go.
+                    get: { controller.pickedConnectionID },
                     set: { id in Task { await controller.selectConnection(id) } }
                 ),
                 onWillOpen: { controller.loadConnectionChoices() }

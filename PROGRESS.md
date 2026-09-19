@@ -1087,3 +1087,69 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 
 ### Spec deviations
 - None. ADR-0060 and ADR-0061.
+
+## 2026-09-19 — A moved tab is on the connection it moved to, and a held transaction says what it holds (ADR-0062, ADR-0063)
+
+### Done
+- A query tab moved with the connection pop-up now *is* on that connection.
+  `WorkspaceTab.connectionID` was a `let`, so the picker changed only the controller and the
+  window went on describing the tab by the server it had left: the title and subtitle named
+  the old connection beside the new one's database ("postgres@localhost · tinker_test"), and
+  the status bar reported that connection's state — "Disconnected" — for a tab that was
+  running queries. It is `private(set) var` with `moveToConnection(_:)`, which only a query
+  tab honours; the controller reports an accepted move through `onConnectionChanged`, wired
+  in `newQueryTab`. Every consumer reads the tab and is correct without knowing about the
+  picker.
+- Two bugs behind those labels went with it: ⌘T inherited the old connection, and Disconnect
+  and Close keyed on it, so disconnecting the server a tab had left closed the tab while
+  disconnecting the one it was using did not. Export everything and the result-grid commit
+  preview read the same id — the first re-ran the statement on the original server, the
+  second could have written grid edits to a production connection without the production
+  confirmation.
+- Moving a tab releases its connection, which rolls back whatever it held. That was silent
+  while *closing* the same tab asked first; it now goes through the same confirmation in the
+  same words. Declining puts the pop-up back on the connection the tab is still on, which
+  AppKit had already drawn over.
+- The transaction badge says whether it has anything to commit. The rule is unchanged —
+  auto-commit off means every statement joins the transaction, reads included (SPEC §13.2) —
+  but the badge no longer reads like a warning about unsaved data when nothing has been
+  written: `TRANSACTION · NO WRITES` in the toolbar, "Transaction open · nothing written" in
+  the status bar, both orange, both keeping Commit and Rollback. The tooltip names what the
+  server is holding, by engine: on MySQL the read view and a metadata lock on the tables
+  read; on PostgreSQL a session idle in transaction, pinning the snapshot against vacuum.
+  Unchecking the box now says what it just did, before the badge can raise the question.
+
+### Tests
+- App-hosted `MovedTabConnectionTests` (6): a query tab moves and a table tab does not;
+  `activeConnectionID` follows the move, so ⌘T inherits the right server; `tabs(for:)` and
+  `closeTabs(for:)` follow it, so the connection a tab left cannot close it and the one it
+  runs on can; a move that would roll back a transaction asks first, stays put and tells the
+  tab nothing until the answer comes, and declining puts the pop-up back; a move with
+  nothing to lose goes straight through. Both connections in those two point at a port
+  nothing listens on, so the question is answered without a server.
+- `DisplayedDatabaseTests.testAMovedTabNamesTheDatabaseOfTheConnectionItMovedTo`: the mongrel
+  subtitle in the report, pinned from both sides — the new connection names the tab's
+  database, the old one says nothing about it.
+- App smoke pass against the local PostgreSQL: "a read with auto-commit off opens a
+  transaction that holds no writes", "the write is what gives that transaction something to
+  commit", and the existing rollback check extended to prove the flag clears with it.
+- `TinkerTests`: 73 tests, 0 failures. App build: zero warnings. Only the App half of
+  `Scripts/ci.sh` was run — app build, `TinkerTests`, the smoke pass — because no package
+  was touched.
+
+### Not done / deferred
+- Smart commit — holding the transaction back until the first write — is not built. ADR-0062
+  says why: it is a third mode, not a new meaning for this checkbox, and folding it in would
+  contradict SPEC §13.2 and take away the one thing manual mode is for on a REPEATABLE READ
+  engine. It would need its own setting and its own spec line.
+- The quieter badge rests on `isProbablyReadOnly`, so `SELECT … FOR UPDATE` and a `SELECT`
+  that calls a writing function are shown as reads. The flag can only make the badge
+  quieter, never hide it, and the tooltip claims no more than "nothing it recognised as a
+  write".
+- The smoke pass ran against the local PostgreSQL, so the MySQL wording of the tooltip — the
+  metadata lock — has not been read on screen, only the PostgreSQL path it shares.
+
+### Spec deviations
+- None. SPEC §13.1a ("a query tab carries its own connection") is what the first half
+  implements rather than changes; §13.2's badge, its colour and its two buttons are
+  unchanged. ADR-0062 and ADR-0063.

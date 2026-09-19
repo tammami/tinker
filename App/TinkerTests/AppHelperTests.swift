@@ -624,6 +624,143 @@ final class DisplayedDatabaseTests: XCTestCase {
     func testNoConnectionNamesNothing() {
         XCTAssertNil(named(nil, nil))
     }
+
+    /// The bug this closes: the picker moved the tab to MySQL while the tab still carried
+    /// the PostgreSQL id, so the subtitle read `postgres@localhost · tinker_test` — the
+    /// server from one connection and the database from another.
+    func testAMovedTabNamesTheDatabaseOfTheConnectionItMovedTo() {
+        let mysql = UUID()
+        let tab = WorkspaceTab(kind: .query, connectionID: connectionID, title: "SQL 1")
+        tab.moveToConnection(mysql)
+        var moved = ConnectionConfig(
+            name: "MySQL", dialect: .mysql, host: "localhost", port: 3306, user: "root",
+            database: "mysql")
+        moved.id = mysql
+        XCTAssertEqual(named(moved, tab, query: "tinker_test"), "tinker_test")
+        // And the connection it left says nothing about it any more.
+        XCTAssertEqual(named(config(), tab, query: "tinker_test"), "postgres")
+    }
+}
+
+/// Which connection a tab belongs to after its picker moved it (SPEC §13.1a).
+///
+/// The tab is the half that lasts — controllers are pruned — so everything that asks which
+/// server a tab is on reads the tab, and the move has to reach it (ADR-0063).
+@MainActor
+final class MovedTabConnectionTests: XCTestCase {
+    private let postgres = UUID()
+    private let mysql = UUID()
+
+    private func workspace() -> WorkspaceModel {
+        WorkspaceModel(environment: AppEnvironment(secrets: EphemeralSecretStore()))
+    }
+
+    func testAQueryTabMovesToTheConnectionItWasPointedAt() {
+        let tab = WorkspaceTab(kind: .query, connectionID: postgres, title: "SQL 1")
+        tab.moveToConnection(mysql)
+        XCTAssertEqual(tab.connectionID, mysql)
+    }
+
+    /// Only a query tab has a picker. The other kinds are keyed by the object they were
+    /// opened on, and moving one would leave that key pointing at the wrong server.
+    func testATableTabDoesNotMove() {
+        let table = TableRef(database: "tinker_test", schema: "public", name: "big_table")
+        let tab = WorkspaceTab(kind: .table(table), connectionID: postgres, title: "big_table")
+        tab.moveToConnection(mysql)
+        XCTAssertEqual(tab.connectionID, postgres)
+    }
+
+    /// ⌘T inherits the connection of whatever is in front (SPEC §13.1a), which after a
+    /// move is the one the tab actually runs on.
+    func testTheActiveConnectionFollowsTheMovedTab() {
+        let model = workspace()
+        let tab = WorkspaceTab(kind: .query, connectionID: postgres, title: "SQL 1")
+        model.open(tab)
+        XCTAssertEqual(model.activeConnectionID, postgres)
+        tab.moveToConnection(mysql)
+        XCTAssertEqual(model.activeConnectionID, mysql)
+    }
+
+    /// Moving a tab releases its connection, which rolls back whatever it held. Closing
+    /// the tab asks first, so moving it asks in the same words (ADR-0063).
+    func testAMoveThatWouldRollBackATransactionIsAskedAboutFirst() async {
+        // Both connections point at a port nothing listens on: the test is about the
+        // question, and a move the user accepts must not need a server to answer it.
+        let store = NSTemporaryDirectory() + "tinker-move-\(UUID().uuidString).sqlite"
+        defer { try? FileManager.default.removeItem(atPath: store) }
+        let environment = AppEnvironment(secrets: EphemeralSecretStore(), storePath: store)
+        await environment.load()
+        var here = ConnectionConfig(
+            name: "PostgreSQL", dialect: .postgresql, host: "127.0.0.1", port: 1, user: "nobody")
+        here.id = postgres
+        var there = ConnectionConfig(
+            name: "MySQL", dialect: .mysql, host: "127.0.0.1", port: 1, user: "nobody")
+        there.id = mysql
+        await environment.save(here)
+        await environment.save(there)
+
+        let controller = QueryTabController(
+            connectionID: postgres, dialect: .postgresql, environment: environment)
+        var asked: DestructiveConfirmation?
+        controller.confirm = { asked = $0 }
+        var reported: UUID?
+        controller.onConnectionChanged = { reported = $0 }
+        controller.isInTransaction = true
+
+        await controller.selectConnection(mysql)
+        XCTAssertNotNil(asked, "a move that would roll back a transaction asks first")
+        XCTAssertEqual(controller.connectionID, postgres, "and does not move while it is asking")
+        XCTAssertNil(reported, "so the tab is not told either")
+
+        asked?.onCancel?()
+        XCTAssertEqual(
+            controller.connectionChoiceRevision, 1,
+            "declining puts the pop-up back on the connection the tab is still on")
+        XCTAssertEqual(controller.connectionID, postgres)
+
+        await asked?.action()
+        XCTAssertEqual(controller.connectionID, mysql, "accepting moves it")
+        XCTAssertEqual(reported, mysql, "and the tab is told, once")
+    }
+
+    /// Nothing to lose, nothing to ask: the ordinary move goes straight through.
+    func testAMoveWithNothingToLoseIsNotAskedAbout() async {
+        let store = NSTemporaryDirectory() + "tinker-move-\(UUID().uuidString).sqlite"
+        defer { try? FileManager.default.removeItem(atPath: store) }
+        let environment = AppEnvironment(secrets: EphemeralSecretStore(), storePath: store)
+        await environment.load()
+        var there = ConnectionConfig(
+            name: "MySQL", dialect: .mysql, host: "127.0.0.1", port: 1, user: "nobody")
+        there.id = mysql
+        await environment.save(there)
+
+        let controller = QueryTabController(
+            connectionID: postgres, dialect: .postgresql, environment: environment)
+        var asked = false
+        controller.confirm = { _ in asked = true }
+        var reported: UUID?
+        controller.onConnectionChanged = { reported = $0 }
+
+        await controller.selectConnection(mysql)
+        XCTAssertFalse(asked)
+        XCTAssertEqual(controller.connectionID, mysql)
+        XCTAssertEqual(reported, mysql)
+    }
+
+    /// The dangerous half: disconnecting PostgreSQL used to close a tab that had been
+    /// running on MySQL for an hour, and disconnecting MySQL left it open.
+    func testDisconnectingClosesTheTabsOfTheConnectionTheyRunOn() {
+        let model = workspace()
+        let tab = WorkspaceTab(kind: .query, connectionID: postgres, title: "SQL 1")
+        model.open(tab)
+        tab.moveToConnection(mysql)
+        XCTAssertEqual(model.tabs(for: mysql).map(\.id), [tab.id])
+        XCTAssertTrue(model.tabs(for: postgres).isEmpty)
+        model.closeTabs(for: postgres)
+        XCTAssertEqual(model.tabs.count, 1, "the connection it left cannot close it")
+        model.closeTabs(for: mysql)
+        XCTAssertTrue(model.tabs.isEmpty, "the connection it runs on can")
+    }
 }
 
 /// The `.think` connections backup: what travels to another Mac, and what stays sealed.

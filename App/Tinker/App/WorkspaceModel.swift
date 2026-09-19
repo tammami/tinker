@@ -25,7 +25,10 @@ public final class WorkspaceTab: Identifiable {
 
     public let id = UUID()
     public let kind: Kind
-    public let connectionID: UUID
+    /// The connection this tab runs on. A query tab carries its own (SPEC §13.1a), so the
+    /// picker in its toolbar moves it here through ``moveToConnection(_:)``; every other
+    /// kind of tab is opened on one connection and stays there.
+    public private(set) var connectionID: UUID
     public var title: String
     /// The editor's text, for a query tab. Mirrored from the controller so a tab
     /// survives its controller being rebuilt.
@@ -45,6 +48,19 @@ public final class WorkspaceTab: Identifiable {
     }
 
     public var isQueryTab: Bool { if case .query = kind { true } else { false } }
+
+    /// Moves a query tab to another connection, after its controller has accepted the
+    /// change and given the old connection back.
+    ///
+    /// Mirrored here rather than left on the controller because the tab is the half that
+    /// lasts: `pruneControllers` throws controllers away, and everything that asks which
+    /// server a tab is on — the window title, the status bar, ⌘T, Disconnect, Export —
+    /// reads the tab. Only a query tab has a picker; the other kinds are keyed by the
+    /// object they were opened on and moving one would break that key.
+    public func moveToConnection(_ id: UUID) {
+        guard isQueryTab else { return }
+        connectionID = id
+    }
 
     public var tableRef: TableRef? {
         if case let .table(table) = kind { table } else { nil }

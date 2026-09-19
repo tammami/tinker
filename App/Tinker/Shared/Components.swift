@@ -543,6 +543,10 @@ struct BarPopUp<ID: Hashable>: NSViewRepresentable {
 
     let items: [Item]
     @Binding var selection: ID
+    /// Called just before the menu opens, for a list worth reading only when it is asked
+    /// for: a query tab fills its database pop-up here rather than waking the server when
+    /// the tab is created.
+    var onWillOpen: (() -> Void)? = nil
     @Environment(\.controlSize) private var controlSize
 
     func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
@@ -561,6 +565,7 @@ struct BarPopUp<ID: Hashable>: NSViewRepresentable {
 
     func updateNSView(_ popUp: NSPopUpButton, context: Context) {
         context.coordinator.selection = $selection
+        context.coordinator.onWillOpen = onWillOpen
         let size = Self.appKitSize(controlSize)
         if popUp.controlSize != size {
             popUp.controlSize = size
@@ -568,7 +573,10 @@ struct BarPopUp<ID: Hashable>: NSViewRepresentable {
         }
         // Items that arrive while the menu is open (a database list loading) wait until it
         // closes; rebuilding under the pointer would let the click land on the wrong row.
-        if context.coordinator.isMenuOpen {
+        // A menu that holds nothing but its placeholder is the exception: the list it was
+        // waiting for is what opening it asked for, and there is no row under the pointer
+        // to lose — making the user close and open the menu again to see it would be worse.
+        if context.coordinator.isMenuOpen, context.coordinator.items.count > 1 {
             context.coordinator.pending = (items, selection)
             return
         }
@@ -619,6 +627,8 @@ struct BarPopUp<ID: Hashable>: NSViewRepresentable {
     final class Coordinator: NSObject, NSMenuDelegate {
         var selection: Binding<ID>
         var items: [Item] = []
+        /// Called from `menuWillOpen`, so a list can be loaded the moment it is wanted.
+        var onWillOpen: (() -> Void)?
         /// True while the pop-up's menu is on screen.
         var isMenuOpen = false
         /// Items and selection that arrived while the menu was open, applied when it closes.
@@ -631,7 +641,10 @@ struct BarPopUp<ID: Hashable>: NSViewRepresentable {
             selection.wrappedValue = id
         }
 
-        func menuWillOpen(_ menu: NSMenu) { isMenuOpen = true }
+        func menuWillOpen(_ menu: NSMenu) {
+            isMenuOpen = true
+            onWillOpen?()
+        }
 
         func menuDidClose(_ menu: NSMenu) {
             isMenuOpen = false

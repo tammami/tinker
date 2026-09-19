@@ -371,7 +371,11 @@ public final class WorkspaceController {
             switch dialect {
             // A query tab on MySQL or SQLite belongs to the database its session is on.
             case .mysql, .sqlite: return query.sessionDatabase
-            case .postgresql: return environment.connections.first { $0.id == connectionID }?.database
+            // A PostgreSQL query tab is on the connection's own database unless it has
+            // been pointed at another one, which opened that database's own session.
+            case .postgresql:
+                return query.sessionCatalog
+                    ?? environment.connections.first { $0.id == connectionID }?.database
             }
         }
         let fold = { [weak self] in self?.sidebar.collapseSubtree(sidebarItemID) }

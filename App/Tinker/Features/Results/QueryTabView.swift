@@ -36,9 +36,29 @@ public struct QueryTabView: View {
     private var sessionDatabaseHelp: String {
         switch controller.dialect {
         case .mysql: "The database unqualified names resolve against (USE)"
-        case .postgresql: "The schema unqualified names resolve against (search_path)"
+        case .postgresql:
+            "The database and schema this tab runs on: another database opens its own connection, "
+                + "and the schema is what unqualified names resolve against (search_path)"
         case .sqlite: "The database file's one schema; unqualified names resolve in it"
         }
+    }
+
+    /// The session pop-up's rows. Until the list has been read — a tab is not worth a
+    /// connection until it is used — the pop-up holds one row saying so, and the same
+    /// stands in when the session is on nothing the list names.
+    private var sessionItems: [BarPopUp<QueryTabController.SessionChoiceID>.Item] {
+        var items = controller.sessionChoices.map {
+            BarPopUp.Item(id: $0.id, title: $0.title, icon: $0.icon)
+        }
+        let selected = controller.selectedSessionChoice
+        if !items.contains(where: { $0.id == selected }) {
+            items.insert(
+                BarPopUp.Item(
+                    id: selected, title: controller.isLoadingSessionChoices ? "Loading…" : "Choose…"),
+                at: 0
+            )
+        }
+        return items
     }
 
     public var body: some View {
@@ -64,8 +84,10 @@ public struct QueryTabView: View {
             }
             controller.sql = tab.sql
             controller.autoCommit = tab.autoCommit
-            await controller.loadSessionChoices()
-            await controller.loadCompletionSources()
+            // The connection pop-up needs nothing from any server. The database pop-up
+            // does, and waits for the tab to be used: its menu opened, a statement run, or
+            // a word typed. A tab that is only created no longer wakes a server.
+            controller.loadConnectionChoices()
         }
         .onChange(of: controller.sql) { _, new in tab.sql = new }
         // The rows on the map belong to one result: another result, or a re-run, puts
@@ -185,20 +207,25 @@ public struct QueryTabView: View {
                 selection: Binding(
                     get: { controller.connectionID },
                     set: { id in Task { await controller.selectConnection(id) } }
-                )
+                ),
+                onWillOpen: { controller.loadConnectionChoices() }
             )
             .frame(width: 170)
             .help("The connection this tab runs on")
 
             BarPopUp(
-                items: (controller.sessionDatabase == nil ? [BarPopUp.Item(id: "", title: "Choose…")] : [])
-                    + controller.availableDatabases.map { BarPopUp.Item(id: $0, title: $0) },
+                items: sessionItems,
                 selection: Binding(
-                    get: { controller.sessionDatabase ?? "" },
-                    set: { name in Task { await controller.selectDatabase(name) } }
-                )
+                    get: { controller.selectedSessionChoice },
+                    set: { id in Task { await controller.selectSessionChoice(id) } }
+                ),
+                // Asking for the list is what reads it, which is why a tab that was only
+                // opened never connects.
+                onWillOpen: {
+                    Task { await controller.loadSessionChoicesIfNeeded(retryAfterFailure: true) }
+                }
             )
-            .frame(width: 160)
+            .frame(width: 200)
             .help(sessionDatabaseHelp)
 
             BarDivider()

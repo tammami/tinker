@@ -504,3 +504,64 @@ struct EmptyLoader: GridDataLoader {
     func loadPage(_ request: PageRequest) async throws -> LoadedPage { LoadedPage(columns: [], rows: []) }
     func exactCount(filter: [FilterRule]) async throws -> Int64 { 0 }
 }
+
+/// What the query tab's session pop-up offers on each engine (SPEC §13.1a).
+///
+/// The pop-up is one list: on MySQL the databases, on PostgreSQL the databases with the
+/// one the tab sits on opened out into its schemas — the others cannot show theirs until
+/// they are chosen, because a schema list only comes from that database's own connection.
+@MainActor
+final class QuerySessionChoiceTests: XCTestCase {
+    private func choices(
+        _ dialect: SQLDialect, catalogs: [String] = [], schemas: [String] = [], catalog: String? = nil
+    ) -> [QueryTabController.SessionChoice] {
+        QueryTabController.sessionChoices(
+            dialect: dialect, catalogs: catalogs, schemas: schemas, catalog: catalog)
+    }
+
+    /// MySQL switches database with `USE`, so its databases are the whole list.
+    func testMySQLOffersItsDatabases() {
+        let rows = choices(.mysql, schemas: ["tinker_test", "amgm_aset"])
+        XCTAssertEqual(rows.map(\.title), ["tinker_test", "amgm_aset"])
+        XCTAssertEqual(rows.map(\.id.database), ["tinker_test", "amgm_aset"])
+        XCTAssertTrue(rows.allSatisfy { $0.id.schema.isEmpty }, "MySQL has no schema layer to name")
+    }
+
+    /// The complaint this answers: a PostgreSQL server with eight databases used to offer
+    /// only the schemas of the one the connection opens, so the pop-up read "public".
+    func testPostgreSQLOffersEveryDatabaseAndOpensTheCurrentOne() {
+        let rows = choices(
+            .postgresql, catalogs: ["amgm", "postgres", "tinker_test"],
+            schemas: ["public", "app"], catalog: "postgres")
+        XCTAssertEqual(rows.map(\.title), ["amgm", "postgres › public", "postgres › app", "tinker_test"])
+        XCTAssertEqual(
+            rows.first { $0.title == "postgres › app" }?.id,
+            QueryTabController.SessionChoiceID(database: "postgres", schema: "app"),
+            "a schema row carries both halves, so choosing it says which database it is in")
+        XCTAssertEqual(
+            rows.first { $0.title == "tinker_test" }?.id,
+            QueryTabController.SessionChoiceID(database: "tinker_test", schema: ""),
+            "a database that is not open yet is chosen whole; its schemas arrive with it")
+    }
+
+    /// Before the schemas have been read the current database is still a row of its own,
+    /// so the list never loses the database the tab is actually on.
+    func testTheCurrentDatabaseStaysListedBeforeItsSchemasArrive() {
+        let rows = choices(.postgresql, catalogs: ["postgres", "tinker_test"], catalog: "postgres")
+        XCTAssertEqual(rows.map(\.title), ["postgres", "tinker_test"])
+    }
+
+    /// Nothing read yet — a tab opened with ⌘T and left alone — offers nothing, which is
+    /// what lets the toolbar say "Choose…" instead of naming a database nobody picked.
+    func testAnUnusedTabOffersNothing() {
+        XCTAssertTrue(choices(.postgresql).isEmpty)
+        XCTAssertTrue(choices(.mysql).isEmpty)
+    }
+
+    /// SQLite has one schema in one file; the file's catalog is the only row.
+    func testSQLiteOffersItsOneSchema() {
+        let rows = choices(.sqlite, schemas: [SchemaRef.sqliteMainSchema])
+        XCTAssertEqual(rows.map(\.title), [SchemaRef.sqliteMainSchema])
+    }
+}
+

@@ -37,15 +37,34 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     /// The database (MySQL) or schema (PostgreSQL) statements resolve unqualified names
     /// against, so a query reads `SELECT * FROM t` rather than `SELECT * FROM db.t`.
     public private(set) var sessionDatabase: String?
+    /// PostgreSQL only: the database the tab's session is open on, as the server named it.
+    /// Another database is another connection — PostgreSQL cannot change it on an open
+    /// one — so this is what picks the session every statement runs through. Nil until
+    /// the pickers have been filled.
+    public private(set) var sessionCatalog: String?
     /// What the pickers offer.
     public private(set) var availableConnections: [ConnectionConfig] = []
     public private(set) var availableDatabases: [String] = []
+    /// PostgreSQL only: the server's databases, the other half of the session pop-up.
+    public private(set) var availableCatalogs: [String] = []
+    /// True once the session pop-up has been filled, which is the first thing a query tab
+    /// needs the server for.
+    public private(set) var hasLoadedSessionChoices = false
+    /// True while that read is in flight, so the pop-up can say it is loading.
+    public private(set) var isLoadingSessionChoices = false
+    /// True when the last attempt failed, so typing does not knock on a server that is
+    /// down every time the user pauses. Opening the pop-up or running asks again.
+    private var sessionChoicesFailed = false
     private let environment: AppEnvironment
     private var runTask: Task<Void, Never>?
     private var timerTask: Task<Void, Never>?
     /// The connection held while a transaction is open, so `COMMIT` reaches the same one.
     private var heldLease: ConnectionSession.Lease?
     private var heldConnection: (any SQLConnection)?
+    /// The session the held lease came from, kept rather than recomputed: a connection is
+    /// given back to the session it was taken from, whatever the tab has been pointed at
+    /// since.
+    private var heldSession: ConnectionSession?
     /// Tables of the schema or database the tab resolves names against, for autocomplete.
     private var completionTables: [CompletionCandidate] = []
     /// The other schemas (PostgreSQL) or databases (MySQL), offered as `name.` prefixes.
@@ -82,7 +101,15 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     /// The enum and SET columns of each editable result, by column name.
     @ObservationIgnored private var choices: [UUID: [String: ColumnChoices]] = [:]
 
-    var session: ConnectionSession? { environment.session(for: connectionID) }
+    /// The session the tab runs on: the connection's own, or — when a PostgreSQL tab has
+    /// been pointed at another database — that database's.
+    ///
+    /// The identity has to hold for as long as a lease does: a connection taken here is
+    /// given back here. It does, because `sessionCatalog` only ever changes through
+    /// ``openCatalog(_:schema:)`` and ``selectConnection(_:)``, which give the lease back
+    /// first, and because naming the database the main session is already on resolves to
+    /// that same main session.
+    var session: ConnectionSession? { environment.session(for: connectionID, database: sessionCatalog) }
 
     /// The connection's configuration as stored now; nil once it has been deleted.
     private var config: ConnectionConfig? { environment.connections.first { $0.id == connectionID } }
@@ -373,6 +400,10 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         // read holds nothing either, which is the point of not opening a transaction for a
         // read (ADR-0057).
         if !isInTransaction { await releaseHeldConnection() }
+        // The connection is awake now, so the pop-ups can say what the session holds —
+        // filling them was deferred while the tab sat unused. After the lease has gone
+        // back, so reading the list does not queue behind the statement's own connection.
+        await loadSessionChoicesIfNeeded(retryAfterFailure: true)
     }
 
     /// Runs one statement and appends its result. Returns true when it failed.
@@ -549,8 +580,9 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     private func noteHeldConnectionDropped(session: ConnectionSession) async {
         guard let heldLease else { return }
         let hadOpenTransaction = isInTransaction
-        await session.noteConnectionDropped(lease: heldLease, hadOpenTransaction: hadOpenTransaction)
+        await (heldSession ?? session).noteConnectionDropped(lease: heldLease, hadOpenTransaction: hadOpenTransaction)
         self.heldLease = nil
+        heldSession = nil
         heldConnection = nil
         isInTransaction = false
         statusText =
@@ -917,6 +949,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         // closes — so that COMMIT reaches the same connection the statements ran on.
         heldLease = lease
         heldConnection = connection
+        heldSession = session
         if opensTransaction {
             try await connection.beginTransaction()
             isInTransaction = true
@@ -1024,10 +1057,95 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
 
     // MARK: - The tab's session (SPEC §13.1a)
 
+    /// One row of the session pop-up. PostgreSQL carries both parts, because a database
+    /// and a schema are two different switches there; MySQL and SQLite leave `schema` empty.
+    public struct SessionChoiceID: Hashable, Sendable {
+        public var database: String
+        public var schema: String
+
+        public init(database: String, schema: String = "") {
+            self.database = database
+            self.schema = schema
+        }
+    }
+
+    /// A row of the session pop-up, ready to show.
+    public struct SessionChoice: Equatable, Sendable {
+        public let id: SessionChoiceID
+        public let title: String
+        public let icon: String
+    }
+
+    /// What the session pop-up offers: the databases on MySQL and SQLite; on PostgreSQL
+    /// every database of the server, with the one the tab sits on opened out into its
+    /// schemas. The others stay closed because their schemas live behind their own
+    /// connection — choosing one opens it and the list fills in.
+    public var sessionChoices: [SessionChoice] {
+        Self.sessionChoices(
+            dialect: dialect, catalogs: availableCatalogs, schemas: availableDatabases,
+            catalog: sessionCatalog
+        )
+    }
+
+    /// The rows themselves, as a rule rather than a state: what has been read decides what
+    /// the pop-up can offer, and that can be checked without a server.
+    static func sessionChoices(
+        dialect: SQLDialect, catalogs: [String], schemas: [String], catalog: String?
+    ) -> [SessionChoice] {
+        switch dialect {
+        case .mysql, .sqlite:
+            return schemas.map {
+                SessionChoice(id: SessionChoiceID(database: $0), title: $0, icon: Icon.database)
+            }
+        case .postgresql:
+            return catalogs.flatMap { database -> [SessionChoice] in
+                guard database == catalog, !schemas.isEmpty else {
+                    return [
+                        SessionChoice(id: SessionChoiceID(database: database), title: database, icon: Icon.database)
+                    ]
+                }
+                return schemas.map { schema in
+                    SessionChoice(
+                        id: SessionChoiceID(database: database, schema: schema),
+                        title: "\(database) › \(schema)", icon: Icon.schema
+                    )
+                }
+            }
+        }
+    }
+
+    /// The row the session pop-up shows as chosen.
+    public var selectedSessionChoice: SessionChoiceID {
+        switch dialect {
+        case .mysql, .sqlite: SessionChoiceID(database: sessionDatabase ?? "")
+        case .postgresql: SessionChoiceID(database: sessionCatalog ?? "", schema: sessionDatabase ?? "")
+        }
+    }
+
+    /// The connection pop-up's contents, which are already in memory: a tab can be opened
+    /// and left alone without a single packet going out.
+    public func loadConnectionChoices() {
+        availableConnections = environment.connections
+    }
+
+    /// Fills the session pop-up the first time something actually needs it — the pop-up
+    /// being opened, a statement being run, a word being completed. Creating the tab does
+    /// not, so ⌘T on an idle window leaves every server asleep.
+    ///
+    /// `retryAfterFailure` is for the deliberate acts: a pause in typing should not keep
+    /// knocking on a server that just refused, but opening the pop-up asks again.
+    public func loadSessionChoicesIfNeeded(retryAfterFailure: Bool = false) async {
+        guard !hasLoadedSessionChoices, !isLoadingSessionChoices else { return }
+        guard retryAfterFailure || !sessionChoicesFailed else { return }
+        await loadSessionChoices()
+    }
+
     /// Reads what the pickers should offer for the current connection.
     public func loadSessionChoices() async {
         availableConnections = environment.connections
-        guard let session = environment.session(for: connectionID) else { return }
+        guard let session else { return }
+        isLoadingSessionChoices = true
+        defer { isLoadingSessionChoices = false }
         do {
             _ = try await session.connect()
             switch dialect {
@@ -1036,13 +1154,21 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
                     try await $0.databases()
                 }.map(\.name)
             case .postgresql:
-                // The picker offers schemas, which is what an unqualified name resolves
-                // against on PostgreSQL.
-                let database =
-                    environment.connections
-                    .first { $0.id == connectionID }?.database ?? ""
-                availableDatabases = try await session.introspection(.schemas(database: database)) {
-                    try await $0.schemas(in: database)
+                // Both halves of the pop-up: the server's databases, and the schemas of
+                // the one this session is on — an unqualified name resolves against the
+                // search path, and a schema list can only come from its own database.
+                let onMainSession = sessionCatalog == nil
+                let databases = try await session.introspection(.databases) {
+                    try await $0.databases()
+                }
+                availableCatalogs = databases.map(\.name)
+                let current = databases.first { $0.isCurrent }?.name ?? session.config.database ?? ""
+                sessionCatalog = current
+                // What the connection's own session is on, so `AppEnvironment` can tell
+                // "another database" from this one.
+                if onMainSession { environment.currentDatabases[connectionID] = current }
+                availableDatabases = try await session.introspection(.schemas(database: current)) {
+                    try await $0.schemas(in: current)
                 }.filter { !$0.isSystem }.map(\.name)
             }
             if sessionDatabase == nil {
@@ -1053,9 +1179,64 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
                     case .postgresql: availableDatabases.first { $0 == "public" } ?? availableDatabases.first
                     }
             }
+            hasLoadedSessionChoices = true
+            sessionChoicesFailed = false
         } catch {
+            sessionChoicesFailed = true
             statusText = (error as? DBError)?.errorDescription ?? String(describing: error)
         }
+    }
+
+    /// Answers the session pop-up: another schema of the database the tab is on, or
+    /// another database — which on PostgreSQL means another connection.
+    public func selectSessionChoice(_ choice: SessionChoiceID) async {
+        guard !choice.database.isEmpty else { return }
+        switch dialect {
+        case .mysql, .sqlite:
+            await selectDatabase(choice.database)
+        case .postgresql:
+            if choice.database != sessionCatalog {
+                await openCatalog(choice.database, schema: choice.schema.isEmpty ? nil : choice.schema)
+            } else if !choice.schema.isEmpty, choice.schema != sessionDatabase {
+                await selectDatabase(choice.schema)
+            }
+        }
+    }
+
+    /// Points a PostgreSQL tab at another database of the same server.
+    ///
+    /// That database is a separate connection, so what this tab held on the old one goes
+    /// back first — with an open transaction rolled back — and everything read for the old
+    /// database is dropped. A server that refuses leaves the tab where it was, in its own
+    /// words.
+    private func openCatalog(_ database: String, schema: String?) async {
+        warmTask?.cancel()
+        await releaseHeldConnection()
+        let previousCatalog = sessionCatalog
+        let previousSchema = sessionDatabase
+        sessionCatalog = database
+        sessionDatabase = nil
+        availableDatabases = []
+        cachedColumns = [:]
+        completionGeneration &+= 1
+        guard let session else {
+            sessionCatalog = previousCatalog
+            sessionDatabase = previousSchema
+            return
+        }
+        do {
+            _ = try await session.connect()
+        } catch {
+            sessionCatalog = previousCatalog
+            sessionDatabase = previousSchema
+            statusText = (error as? DBError)?.errorDescription ?? String(describing: error)
+            await loadSessionChoices()
+            return
+        }
+        await loadSessionChoices()
+        if let schema, schema != sessionDatabase { await selectDatabase(schema) }
+        await loadCompletionSources()
+        statusText = "Using \(database)" + (sessionDatabase.map { " › \($0)" } ?? "")
     }
 
     /// Switches the tab to another database or schema, reporting what the server said if
@@ -1097,7 +1278,10 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         connectionID = id
         dialect = config.dialect
         sessionDatabase = nil
+        sessionCatalog = nil
         availableDatabases = []
+        availableCatalogs = []
+        hasLoadedSessionChoices = false
         results.removeAll()
         references.removeAll()
         choices.removeAll()
@@ -1152,10 +1336,11 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
 
     public func releaseHeldConnection() async {
         resolveMemoryCap(.stop)
-        guard let session, let heldLease else { return }
+        guard let heldSession, let heldLease else { return }
         if isInTransaction { await rollbackTransaction() }
-        await session.release(heldLease)
+        await heldSession.release(heldLease)
         self.heldLease = nil
+        self.heldSession = nil
         heldConnection = nil
     }
 
@@ -1375,6 +1560,15 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
             }
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled, let self else { return }
+            // Typing is the tab being used, so this is where a tab opened with ⌘T and then
+            // written in reaches the server for the first time: what the pop-ups offer and
+            // what the completion list draws on, both read once.
+            if !hasLoadedSessionChoices {
+                await loadSessionChoicesIfNeeded()
+                guard !Task.isCancelled else { return }
+                if hasLoadedSessionChoices { await loadCompletionSources() }
+                guard !Task.isCancelled else { return }
+            }
             let wanted =
                 mentions
                 ?? {

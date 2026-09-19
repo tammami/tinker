@@ -4,6 +4,32 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.9] - 2026-09-19
+
+### Added
+- **A query tab runs in any database of its PostgreSQL server.** The tab's second pop-up
+  used to offer only the schemas of the database the connection opens, so a server with
+  eight databases read "public" and nothing else. It is now one list of `database ›
+  schema`: every database of the server, with the one the tab sits on opened out into its
+  schemas. Choosing another opens that database's own session — PostgreSQL cannot change
+  database on an open connection — and the completion list, the history and the result
+  grids follow it there. MySQL keeps its list of databases, where `USE` is all it takes.
+
+### Changed
+- **A new query tab waits to be used before it connects.** ⌘T on an idle window took the
+  first stored connection and read its schemas straight away, waking a server nobody had
+  asked about. The tab now reaches out only when it is used: its pop-up opened, a
+  statement run, a word typed. Until then the database pop-up says "Choose…". The
+  connection pop-up still fills at once, because it needs nothing from any server.
+
+### Fixed
+- **The status bar names the database the tab in front runs in.** The window said
+  "postgres" while the tab ran in `tinker_test`: both the subtitle and the status bar read
+  the connection's own database. They now ask the tab, and fall back to the connection's
+  only when the tab has none of its own. A file connection keeps naming its file.
+- **A held connection goes back to the session it came from,** whatever the tab has been
+  pointed at since.
+
 ## [0.1.8] - 2026-09-18
 
 ### Added

@@ -42,7 +42,7 @@ public final class TableTabController: DataGridDelegate, WriteLogOwner {
     /// tab when it creates the controller, not by a view, so it is there before the tab
     /// has appeared. With none set (a headless run) the question is answered "yes".
     @ObservationIgnored public var confirm: ((DestructiveConfirmation) -> Void)?
-    /// One write at a time, requests during a write merged into the next (shared with the
+    /// One write at a time, in the order asked, each re-read before the next (shared with the
     /// query tab's result grids).
     private let writes = GridWriteQueue()
 
@@ -436,8 +436,8 @@ public final class TableTabController: DataGridDelegate, WriteLogOwner {
 
     /// The one gate every commit goes through — auto-commit, Retry, the toolbar's Commit
     /// and the ⌘⇧S sheet — so two never run at once. A scope asked for while a write is
-    /// on the server is merged into the next write; the page is re-read once, after the
-    /// queue drains, so an edit made during a write is neither lost nor written twice.
+    /// on the server waits for it and goes as the next write; the page is re-read after
+    /// each write, so the next one sees the rows as the server now holds them.
     @discardableResult
     private func enqueueWrite(_ scope: CommitScope) -> Task<Void, Never> {
         writes.enqueue(
@@ -569,8 +569,9 @@ public final class TableTabController: DataGridDelegate, WriteLogOwner {
     private func performRevert(_ record: WriteRecord) {
         writes.enqueue(
             .everything,
-            // Re-read from the log rather than trusting the captured copy: a scope merged
-            // in behind this one would otherwise run the same revert twice.
+            kind: "revert \(record.id)",
+            // Re-read from the log rather than trusting the captured copy: a second press
+            // merged in behind this one would otherwise run the same revert twice.
             hasPending: { [weak self] _ in
                 self?.writeLog.records.first { $0.id == record.id }?.canRevert ?? false
             },

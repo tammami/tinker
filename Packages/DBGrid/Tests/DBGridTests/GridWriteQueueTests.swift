@@ -2,8 +2,9 @@ import XCTest
 
 @testable import DBGrid
 
-/// The single-flight write gate both tabs share: one write at a time, requests during a
-/// write merged into the next, one re-read after the queue drains, a refusal stops it.
+/// The single-flight write gate both tabs share: one write at a time, in order, each
+/// followed by its own re-read; a request of the same kind as one still waiting merges
+/// into it, and a refusal stops the queue.
 @MainActor
 final class GridWriteQueueTests: XCTestCase {
     /// Records what the queue asked for, and answers as told.
@@ -51,8 +52,63 @@ final class GridWriteQueueTests: XCTestCase {
         await first.value
 
         XCTAssertEqual(recorder.performed, [.loadedRowsOnly, .everything])
-        XCTAssertEqual(recorder.drains, 1, "the grid is re-read once, after the merged writes")
+        XCTAssertEqual(
+            recorder.drains, 2,
+            "each write is followed by its own re-read, so the next one plans from the rows as they now are")
         XCTAssertFalse(queue.isWriting)
+    }
+
+    /// A burst of edits while a write is on the server is one more write, not one each.
+    func testRequestsOfOneKindWaitingTogetherAreMerged() async {
+        let queue = GridWriteQueue()
+        let recorder = Recorder()
+        var held = false
+        recorder.holdNext = { held = true }
+        let first = queue.enqueue(
+            .loadedRowsOnly, hasPending: { _ in true },
+            perform: { await recorder.perform($0) }, afterDrain: { recorder.drains += 1 })
+        while !held { await Task.yield() }
+        for scope in [CommitScope.loadedRowsOnly, .everything, .loadedRowsOnly] {
+            queue.enqueue(
+                scope, hasPending: { _ in true },
+                perform: { await recorder.perform($0) }, afterDrain: { recorder.drains += 1 })
+        }
+        recorder.release()
+        await first.value
+        XCTAssertEqual(recorder.performed, [.loadedRowsOnly, .everything])
+        XCTAssertEqual(recorder.drains, 2)
+    }
+
+    /// A put-back and an edit asked for during a write each run their own closures. The
+    /// edit used to be judged by the put-back's idea of what was pending, found nothing,
+    /// and was left unwritten.
+    func testAPutBackThenAnEditEachRunTheirOwnWrite() async {
+        let queue = GridWriteQueue()
+        let recorder = Recorder()
+        var held = false
+        recorder.holdNext = { held = true }
+        var ran: [String] = []
+        let first = queue.enqueue(
+            .loadedRowsOnly, hasPending: { _ in true },
+            perform: { await recorder.perform($0) }, afterDrain: { ran.append("reload") })
+        while !held { await Task.yield() }
+        queue.enqueue(
+            .everything, kind: "revert 1", hasPending: { _ in false },
+            perform: { _ in
+                ran.append("put back")
+                return true
+            }, afterDrain: { ran.append("reload") })
+        queue.enqueue(
+            .loadedRowsOnly, hasPending: { _ in true },
+            perform: { _ in
+                ran.append("edit")
+                return true
+            }, afterDrain: { ran.append("reload") })
+        recorder.release()
+        await first.value
+        XCTAssertEqual(
+            ran, ["reload", "reload", "edit", "reload"],
+            "the put-back found nothing to do and was skipped; the edit still ran, by its own check")
     }
 
     func testARefusedWriteStopsTheQueueAndDropsWhatWasMergedBehindIt() async {

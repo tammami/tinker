@@ -796,7 +796,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
 
     // MARK: - Auto-commit of result edits
 
-    /// One write at a time, requests during a write merged into the next (shared with the
+    /// One write at a time, in the order asked, each re-read before the next (shared with the
     /// table tab).
     private let writes = GridWriteQueue()
     /// True while a write of result edits is on the server.
@@ -819,7 +819,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
 
     /// The one gate every commit of result edits goes through — auto-commit, Retry, the
     /// ⌘⇧S sheet — so two never run at once and never beside a running statement, which
-    /// would share the held connection. The page is re-read once the queue drains.
+    /// would share the held connection. The page is re-read after each write.
     @discardableResult
     private func enqueueWrite(_ scope: CommitScope, on result: QueryResultTab?) -> Task<Void, Never> {
         if isRunning, !writes.isWriting {
@@ -827,10 +827,16 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
             writeAfterRun = GridWriteQueue.merge(writeAfterRun, scope)
             return runTask.map { task in Task { await task.value } } ?? Task {}
         }
-        guard let target = writeTarget ?? result, let grid = target.grid else { return Task {} }
+        // The result the edit was made in. Taking the one being written instead sent an
+        // edit to a second result through the first one's grid, which found nothing
+        // pending there and left it unwritten.
+        guard let target = result ?? writeTarget, let grid = target.grid else { return Task {} }
         writeTarget = target
-        return writes.enqueue(
+        let task = writes.enqueue(
             scope,
+            // Per result: a burst of edits to one is one more write; edits to two are two,
+            // each judged by its own grid.
+            kind: "edits \(target.id)",
             hasPending: { grid.edits.pendingStatementCount($0) > 0 },
             perform: { [weak self] scope in
                 let written = await self?.performCommitEdits(scope, on: target) ?? false
@@ -845,6 +851,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
                 self?.bumpRevision()
             }
         )
+        return task
     }
 
     /// A new row goes when the user leaves it; one left untouched holds nothing and is
@@ -2057,9 +2064,10 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     private func enqueueRevert(_ record: WriteRecord) {
         writes.enqueue(
             .everything,
+            kind: "revert \(record.id)",
             hasPending: { [weak self] _ in
-                // Re-read from the log rather than trusting the captured copy: a scope
-                // merged in behind this one would otherwise run the same revert twice.
+                // Re-read from the log rather than trusting the captured copy: a second
+                // press merged in behind this one would otherwise run the same revert twice.
                 self?.writeLog.records.first { $0.id == record.id }?.canRevert ?? false
             },
             perform: { [weak self] _ in await self?.performRevert(record) ?? false },

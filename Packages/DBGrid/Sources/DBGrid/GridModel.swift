@@ -237,6 +237,10 @@ public final class GridModel {
     /// For a query result: the columns that are the table's own; an expression or an
     /// alias has nothing to write back to. nil means every column.
     public var editableColumns: Set<String>?
+    /// For a query result: every column of that table that takes a value, whether the
+    /// query selected it or not. A deleted row is put back only when all of them were
+    /// loaded; nil means the grid shows the whole table, as a table tab does.
+    public var tableColumns: Set<String>?
 
     /// The table a commit writes to: the table shown, or the one a query reads.
     public var writableTable: TableRef? {
@@ -598,7 +602,8 @@ public final class GridModel {
         let loaded = loadedRowsByIdentity(snapshot)
         for identity in snapshot.deletions.sorted(by: { $0.sortKey < $1.sortKey }) {
             do {
-                statements.append(try planner.inverseOfDelete(loadedRow: loaded[identity] ?? [:]))
+                statements.append(
+                    try planner.inverseOfDelete(loadedRow: loaded[identity] ?? [:], tableColumns: tableColumns))
             } catch {
                 blocked.append(Self.reason(error))
             }

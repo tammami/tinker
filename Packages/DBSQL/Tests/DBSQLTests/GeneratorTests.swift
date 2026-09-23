@@ -20,6 +20,23 @@ final class DMLGeneratorTests: XCTestCase {
         XCTAssertTrue(statement.expectsSingleRow)
     }
 
+    /// A revert asks for the values its write left behind, so a row that has changed
+    /// again since matches nothing: NULL as `IS NULL`, a key column left to the identity.
+    func testUpdateCanInsistOnTheValuesTheRowStillHolds() throws {
+        let generator = DMLGenerator(dialect: .postgresql, table: users, identityColumns: ["id"])
+        let statement = try generator.update(
+            changes: ["name": .string("Ada"), "note": .string("old")],
+            originalIdentity: ["id": .int(7)],
+            expecting: ["id": .int(7), "name": .string("Grace"), "note": .null]
+        )
+        XCTAssertEqual(
+            statement.sql,
+            "UPDATE \"public\".\"users\" SET \"name\" = $1, \"note\" = $2 "
+                + "WHERE \"id\" = $3 AND \"name\" = $4 AND \"note\" IS NULL"
+        )
+        XCTAssertEqual(statement.parameters, [.string("Ada"), .string("old"), .int(7), .string("Grace")])
+    }
+
     func testUpdateWithCompositeKey() throws {
         let generator = DMLGenerator(
             dialect: .mysql,

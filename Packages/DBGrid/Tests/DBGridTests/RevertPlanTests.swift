@@ -30,6 +30,53 @@ final class RevertPlannerTests: XCTestCase {
         XCTAssertFalse(statement.sql.contains("\"note\""), "a column the edit never touched is left alone")
         XCTAssertEqual(statement.parameters.first, .string("Ada"), "the value as it was loaded")
         XCTAssertTrue(statement.expectsSingleRow, "it is checked like any other write")
+        XCTAssertTrue(statement.sql.hasSuffix("AND \"name\" = $3"), statement.sql)
+        XCTAssertEqual(
+            statement.parameters.last, .string(""),
+            "and only while the row still holds what the edit wrote, so a later change is not overwritten")
+    }
+
+    /// A value that cannot be found again with `=` is not asked for: a float the server
+    /// may have rounded, JSON, or `xml`, for which PostgreSQL has no `=` at all.
+    func testOnlyValuesThatCanBeMatchedAreAskedFor() throws {
+        let generator = DMLGenerator(dialect: .postgresql, table: table, identityColumns: ["id"])
+        let planner = RevertPlanner(
+            generator: generator, identityColumns: ["id"],
+            columns: [
+                ColumnMeta(id: 0, name: "id", nativeTypeName: "int4", kind: .int, isPrimaryKey: true),
+                ColumnMeta(id: 1, name: "score", nativeTypeName: "float8", kind: .double),
+                ColumnMeta(id: 2, name: "doc", nativeTypeName: "jsonb", kind: .json),
+                ColumnMeta(id: 3, name: "page", nativeTypeName: "xml", kind: .string),
+                ColumnMeta(id: 4, name: "gone", nativeTypeName: "text", kind: .string),
+            ])
+        let statement = try planner.inverseOfUpdate(
+            changes: [
+                "score": .double(1.1), "doc": .json("{}"), "page": .string("<a/>"), "gone": .null,
+            ],
+            loaded: [
+                "id": .int(7), "score": .double(2), "doc": .json("[]"), "page": .string("<b/>"),
+                "gone": .string("here"),
+            ],
+            originalIdentity: ["id": .int(7)])
+        let whereClause = statement.sql.components(separatedBy: " WHERE ").last ?? ""
+        XCTAssertEqual(whereClause, "\"id\" = $5 AND \"gone\" IS NULL", statement.sql)
+    }
+
+    /// A delete taken from a query that named some of the columns cannot be put back
+    /// whole, and is not offered; one from the whole row goes back without its
+    /// generated columns, which the server refuses a value for.
+    func testADeletedRowGoesBackOnlyWhenEveryColumnWasLoaded() throws {
+        XCTAssertThrowsError(
+            try planner().inverseOfDelete(
+                loadedRow: ["id": .int(7), "name": .string("Ada")], tableColumns: ["id", "name", "note"])
+        ) { error in
+            XCTAssertEqual(error as? RevertError, .valueNotLoaded("note"))
+        }
+        let statement = try planner().inverseOfDelete(
+            loadedRow: ["id": .int(7), "name": .string("Ada"), "note": .null, "shout": .string("ADA")],
+            tableColumns: ["id", "name", "note"])
+        XCTAssertTrue(statement.sql.contains("\"note\""))
+        XCTAssertFalse(statement.sql.contains("\"shout\""), "a column that is not the table's is left out")
     }
 
     /// An edit to the primary key moves the row; the inverse has to address it where the
@@ -148,6 +195,17 @@ final class GridModelRevertTests: XCTestCase {
         XCTAssertTrue(outcome.revert.isRevertible)
         XCTAssertEqual(outcome.revert.statements.first?.kind, .insert)
         XCTAssertTrue(outcome.revert.statements[0].parameters.contains(.int(1)))
+    }
+
+    /// A query result that shows some of a table's columns: its deleted row cannot be put
+    /// back whole, so the write is not offered as revertible at all.
+    func testADeleteFromAProjectionIsNotOfferedBack() async throws {
+        let model = await loadedModel()
+        model.tableColumns = Set(model.columns.map(\.name)).union(["not_selected"])
+        _ = model.markDeleted(rows: [1])
+        let outcome = try await model.commitRecordingRevert(using: ScriptedRunner(affected: [1]))
+        XCTAssertFalse(outcome.revert.isRevertible)
+        XCTAssertEqual(outcome.revert.blockedReason, RevertError.valueNotLoaded("not_selected").description)
     }
 
     /// A grid with no primary key cannot be written at all, so there is nothing to put

@@ -37,8 +37,10 @@ public struct RevertPlan: Sendable {
 /// Builds a ``RevertPlan`` for what a commit is about to write.
 ///
 /// Every inverse addresses its row by primary key with the values the row will have
-/// *after* the write, so it runs through the same one-row check a commit does: a row that
-/// changed again underneath the user fails loudly rather than being overwritten.
+/// *after* the write, so it runs through the same one-row check a commit does. An edit's
+/// inverse also asks for the values the edit wrote, where they can be compared: a row that
+/// changed again since — by a later write from this tab or by anyone else — then matches
+/// nothing and fails loudly rather than being overwritten.
 public struct RevertPlanner: Sendable {
     public let generator: DMLGenerator
     /// The columns that name a row, in key order.
@@ -66,7 +68,8 @@ public struct RevertPlanner: Sendable {
     }
 
     /// The inverse of one edited row: the loaded values of exactly the columns the edit
-    /// changed, written back to the row wherever the edit left it.
+    /// changed, written back to the row wherever the edit left it, and only while the row
+    /// still holds what the edit wrote.
     public func inverseOfUpdate(
         changes: [String: DBValue],
         loaded: [String: DBValue],
@@ -81,17 +84,44 @@ public struct RevertPlanner: Sendable {
         }
         return try generator.update(
             changes: restored,
-            originalIdentity: Self.identityAfter(originalIdentity, changes: changes, identityColumns: identityColumns)
+            originalIdentity: Self.identityAfter(originalIdentity, changes: changes, identityColumns: identityColumns),
+            expecting: changes.filter { canBeMatched(column: $0.key, value: $0.value) }
         )
     }
 
+    /// Whether a column's written value can be asked for again with `=`, and reliably found.
+    ///
+    /// Not a float, which the server may store rounded; not JSON, an array, `xml` or a type
+    /// the app does not model, for which PostgreSQL may have no `=` at all (`json`, `xml`,
+    /// `point`). Such a column is written back on the key alone, as a commit writes it.
+    func canBeMatched(column: String, value: DBValue) -> Bool {
+        let meta = columns.first { $0.name == column }
+        if meta?.nativeTypeName.lowercased() == "xml" { return false }
+        switch meta?.kind ?? value.kind {
+        case .null, .bool, .int, .uint, .decimal, .string, .bytes, .date, .time, .timestamp, .uuid: return true
+        case .double, .json, .array, .raw: return false
+        }
+    }
+
     /// The inverse of a deleted row: the whole row, back in, exactly as it was loaded.
-    public func inverseOfDelete(loadedRow: [String: DBValue]) throws -> GeneratedStatement {
+    ///
+    /// - Parameter tableColumns: every column of the table that takes a value, when the
+    ///   grid shows a projection of it. The row is put back only when all of them were
+    ///   loaded — an `INSERT` of the columns a `SELECT` happened to name would bring the
+    ///   row back with the rest as defaults and call that restored — and only they are
+    ///   written, so neither a generated column nor an expression goes into the insert.
+    public func inverseOfDelete(
+        loadedRow: [String: DBValue], tableColumns: Set<String>? = nil
+    ) throws -> GeneratedStatement {
         guard !loadedRow.isEmpty else { throw RevertError.rowNotLoaded }
         for name in identityColumns where loadedRow[name] == nil {
             throw RevertError.valueNotLoaded(name)
         }
-        return try generator.insert(values: loadedRow)
+        guard let tableColumns else { return try generator.insert(values: loadedRow) }
+        if let missing = tableColumns.sorted().first(where: { loadedRow[$0] == nil }) {
+            throw RevertError.valueNotLoaded(missing)
+        }
+        return try generator.insert(values: loadedRow.filter { tableColumns.contains($0.key) })
     }
 
     /// The inverse of a new row: a delete addressed by the key the server gave it.

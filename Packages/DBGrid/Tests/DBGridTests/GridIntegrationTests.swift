@@ -346,6 +346,75 @@ final class GridIntegrationTests: XCTestCase {
         }
     }
 
+    /// A write put back after the row changed again — by a later edit or by anyone
+    /// else — is refused rather than overwriting that change; put back while the row
+    /// still holds what was written, it restores the old value (ADR-0060).
+    func testARevertIsRefusedOnceTheRowHasChangedAgain() async throws {
+        try await withSession { session, server in
+            try await session.withLease { setup in
+                _ = try await setup.executeCollecting("DROP TABLE IF EXISTS grid_revert_probe")
+                _ = try await setup.executeCollecting(
+                    self.sql(
+                        server,
+                        pg: "CREATE TABLE grid_revert_probe (id integer PRIMARY KEY, name text, note text)",
+                        mysql: "CREATE TABLE grid_revert_probe (id INT PRIMARY KEY, name VARCHAR(50), note VARCHAR(50))",
+                        sqlite: "CREATE TABLE grid_revert_probe (id INTEGER PRIMARY KEY, name TEXT, note TEXT)")
+                )
+                _ = try await setup.executeCollecting(
+                    "INSERT INTO grid_revert_probe VALUES (1, 'original', 'kept'), (2, 'other', 'also kept')")
+            }
+            let table = self.table("grid_revert_probe", in: server)
+            let model = self.makeModel(session: session, table: table, identity: ["id"])
+            await model.load(page: 0)
+            let runner = SessionStatementRunner(session: session)
+
+            XCTAssertTrue(model.setValue(.string("first"), row: 0, column: 1))
+            let written = try await model.commitRecordingRevert(using: runner)
+            XCTAssertTrue(written.revert.isRevertible)
+
+            // Someone else writes the same cell again.
+            try await session.withLease { other in
+                _ = try await other.executeCollecting("UPDATE grid_revert_probe SET name = 'second' WHERE id = 1")
+            }
+            do {
+                _ = try await GridCommitter().commit(written.revert.statements, using: runner)
+                XCTFail("a revert over a newer change must not run")
+            } catch is GridCommitError {
+                // Refused by the one-row check, as a conflicting commit is.
+            }
+            let afterRefusal = try await session.withLease { connection in
+                try await connection.executeCollecting("SELECT name FROM grid_revert_probe WHERE id = 1")
+            }
+            XCTAssertEqual(afterRefusal.firstText, "second", "the newer change survives")
+
+            // Back to what the write left, and the revert goes through.
+            try await session.withLease { other in
+                _ = try await other.executeCollecting("UPDATE grid_revert_probe SET name = 'first' WHERE id = 1")
+            }
+            _ = try await GridCommitter().commit(written.revert.statements, using: runner)
+            let restored = try await session.withLease { connection in
+                try await connection.executeCollecting("SELECT name FROM grid_revert_probe WHERE id = 1")
+            }
+            XCTAssertEqual(restored.firstText, "original")
+
+            // A deleted row comes back whole, the column the grid did not change included.
+            await model.reload()
+            model.tableColumns = ["id", "name", "note"]
+            _ = model.markDeleted(rows: [1])
+            let deleted = try await model.commitRecordingRevert(using: runner)
+            XCTAssertTrue(deleted.revert.isRevertible)
+            _ = try await GridCommitter().commit(deleted.revert.statements, using: runner)
+            let back = try await session.withLease { connection in
+                try await connection.executeCollecting("SELECT note FROM grid_revert_probe WHERE id = 2")
+            }
+            XCTAssertEqual(back.firstText, "also kept")
+
+            try await session.withLease { cleanup in
+                _ = try await cleanup.executeCollecting("DROP TABLE grid_revert_probe")
+            }
+        }
+    }
+
     /// SPEC §12.6: a row changed by someone else since load must not be overwritten.
     func testConcurrentModificationFailsTheCommitAndWritesNothing() async throws {
         try await withSession { session, server in

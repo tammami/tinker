@@ -470,6 +470,9 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
                     if editing.key.allSatisfy(names.contains), sameTable {
                         grid.editTarget = editing.table
                         grid.editableColumns = editing.columns.intersection(names)
+                        // All of them, not just the ones selected: a deleted row can only
+                        // be put back whole (ADR-0060).
+                        grid.tableColumns = editing.columns
                         if !editing.choices.isEmpty { choices[result.id] = editing.choices }
                     } else {
                         grid.setIdentity(columns: [], kind: nil)

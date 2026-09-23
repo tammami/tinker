@@ -97,9 +97,13 @@ public struct DMLGenerator: Sendable {
     ///   - changes: new values, keyed by column name.
     ///   - originalIdentity: the identity columns' values **as loaded**, so a row that
     ///     changed underneath us fails the affected-row check instead of overwriting.
+    ///   - expected: values other columns must still hold for the row to be written, so
+    ///     a row whose value has changed again since matches nothing and fails that
+    ///     same check. Identity columns are left to `originalIdentity`.
     public func update(
         changes: [String: DBValue],
-        originalIdentity: [String: DBValue]
+        originalIdentity: [String: DBValue],
+        expecting expected: [String: DBValue] = [:]
     ) throws -> GeneratedStatement {
         guard !identityColumns.isEmpty else { throw DMLGeneratorError.noRowIdentity(table) }
         guard !changes.isEmpty else { throw DMLGeneratorError.noColumnsToWrite }
@@ -110,7 +114,12 @@ public struct DMLGenerator: Sendable {
             let value = changes[column] ?? .null
             return "\(Identifier.quote(column, dialect: dialect)) = \(parameters.bind(value))"
         }
-        let whereClause = try identityPredicate(originalIdentity, parameters: &parameters)
+        var whereClause = try identityPredicate(originalIdentity, parameters: &parameters)
+        for column in expected.keys.sorted() where !identityColumns.contains(column) {
+            let value = expected[column] ?? .null
+            let quoted = Identifier.quote(column, dialect: dialect)
+            whereClause += value.isNull ? " AND \(quoted) IS NULL" : " AND \(quoted) = \(parameters.bind(value))"
+        }
         let sql = "UPDATE \(qualifiedTable) SET \(assignments.joined(separator: ", ")) WHERE \(whereClause)"
         return GeneratedStatement(
             kind: .update, sql: sql, parameters: parameters.values,

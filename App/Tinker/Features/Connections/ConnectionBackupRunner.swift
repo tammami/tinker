@@ -115,20 +115,36 @@ extension WorkspaceController {
                 StoredGroup(path: group.path, isExpanded: group.isExpanded, sortOrder: group.sortOrder))
         }
         // Ids are kept, so every restored connection still points at the secret
-        // references its own passwords were filed under.
-        let wanted = Set((plan.added + plan.replaced).map(\.id))
+        // references its own passwords were filed under — and only those are written,
+        // exactly (`read` has refused anything pointing outside the file), and only for
+        // the connections being restored: a kept one keeps its own passwords.
+        let restoring = plan.added + plan.replaced
+        let restoringIDs = Set(restoring.map(\.id.uuidString))
+        let wanted = Set(restoring.flatMap(ConnectionBackupCodec.secretRefs(of:))).filter { ref in
+            ref.account.split(separator: ".").first.map { restoringIDs.contains(String($0)) } ?? false
+        }
         for config in plan.added + plan.replaced { await environment.save(config) }
         var restoredSecrets = 0
-        for secret in secrets {
-            guard wanted.contains(where: { secret.ref.account.hasPrefix($0.uuidString) }) else { continue }
+        var keychainFailure: (any Error)?
+        for secret in secrets where wanted.contains(secret.ref) {
             do {
                 try await environment.secrets.setSecret(secret.value, for: secret.ref)
                 restoredSecrets += 1
             } catch {
-                return .failure(error)
+                keychainFailure = keychainFailure ?? error
             }
         }
+        // A session keeps the settings it was opened with, so a replaced connection went
+        // on connecting to the old host, without the read-only lock the backup set, until
+        // the next launch. Dropping it is what a save in the connection editor does.
+        for config in plan.replaced {
+            await environment.invalidateSession(for: config.id)
+        }
         sidebar.rebuildRoots()
+        for config in plan.replaced {
+            await sidebar.refresh(connectionID: config.id)
+        }
+        if let keychainFailure { return .failure(keychainFailure) }
         var parts: [String] = []
         if !plan.added.isEmpty { parts.append("\(plan.added.count) added") }
         if !plan.replaced.isEmpty { parts.append("\(plan.replaced.count) replaced") }

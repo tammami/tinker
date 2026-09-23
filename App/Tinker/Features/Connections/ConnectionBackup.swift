@@ -1,6 +1,7 @@
 import CommonCrypto
 import CryptoKit
 import DBCore
+import DBStore
 import Foundation
 import UniformTypeIdentifiers
 
@@ -63,6 +64,9 @@ enum ConnectionBackupError: LocalizedError, Equatable {
     case wrongPassphrase
     case emptyPassphrase
     case nothingToBackUp
+    /// Readable, but not something this app would have written: key-derivation settings
+    /// out of range, or a connection pointing at a Keychain item that is not its own.
+    case damaged
 
     var errorDescription: String? {
         switch self {
@@ -76,6 +80,8 @@ enum ConnectionBackupError: LocalizedError, Equatable {
             "A backup needs a passphrase: it is what its passwords are sealed with."
         case .nothingToBackUp:
             "There are no connections to back up yet."
+        case .damaged:
+            "This backup is damaged or has been altered, so nothing in it is restored."
         }
     }
 }
@@ -95,6 +101,11 @@ actor ConnectionBackupCodec {
 
     /// Slow on purpose: the cost a guess has to pay. OWASP's figure for PBKDF2-SHA256.
     private static let rounds = 600_000
+    private static let kdfName = "pbkdf2-hmac-sha256"
+    /// What a file may ask PBKDF2 for. The count comes from the file, and unchecked it
+    /// could trap (a negative number, or one past `UInt32`) or hold the restore for an
+    /// hour; this build writes 600,000.
+    private static let acceptedRounds = 100_000 ... 10_000_000
 
     // MARK: - Writing
 
@@ -109,11 +120,12 @@ actor ConnectionBackupCodec {
         guard !connections.isEmpty else { throw ConnectionBackupError.nothingToBackUp }
         guard !passphrase.isEmpty else { throw ConnectionBackupError.emptyPassphrase }
         var salt = Data(count: 32)
-        salt.withUnsafeMutableBytes { buffer in
-            if let base = buffer.baseAddress {
-                _ = SecRandomCopyBytes(kSecRandomDefault, buffer.count, base)
-            }
+        let random = salt.withUnsafeMutableBytes { buffer -> OSStatus in
+            guard let base = buffer.baseAddress else { return errSecParam }
+            return SecRandomCopyBytes(kSecRandomDefault, buffer.count, base)
         }
+        // A salt of zeros would be the same for every backup; better no file than that.
+        guard random == errSecSuccess else { throw ConnectionBackupError.damaged }
         let key = Self.derive(passphrase: passphrase, salt: salt, rounds: Self.rounds)
         let plain = try Self.encoder.encode(secrets)
         let sealed = try AES.GCM.seal(
@@ -130,7 +142,7 @@ actor ConnectionBackupCodec {
             connections: connections,
             groups: groups,
             secrets: ConnectionBackupFile.SealedSecrets(
-                kdf: "pbkdf2-hmac-sha256", rounds: Self.rounds, salt: salt, box: box)
+                kdf: Self.kdfName, rounds: Self.rounds, salt: salt, box: box)
         )
         return try Self.encoder.encode(file)
     }
@@ -146,7 +158,31 @@ actor ConnectionBackupCodec {
         guard file.version <= ConnectionBackupFile.currentVersion else {
             throw ConnectionBackupError.tooNew(file.version)
         }
+        guard file.secrets.kdf == Self.kdfName, Self.acceptedRounds.contains(file.secrets.rounds),
+            file.secrets.salt.count >= 16
+        else { throw ConnectionBackupError.damaged }
+        // The connections are plain JSON, so an edited file could point one at another
+        // app's Keychain item — read on its first connect and sent to whatever host the
+        // file names — or have a restore write into one. Each may only point at a secret
+        // of a connection in this file, in this app's own service.
+        guard Self.pointsOnlyAtItsOwnSecrets(file.connections) else { throw ConnectionBackupError.damaged }
         return file
+    }
+
+    /// Whether every secret the connections refer to is one this app files for one of
+    /// them: `<id>.<field>` in its own Keychain service.
+    ///
+    /// Not necessarily the connection's own id: a connection duplicated by an earlier build
+    /// kept pointing at the original's SSH secrets, and a backup of it is still genuine.
+    nonisolated static func pointsOnlyAtItsOwnSecrets(_ connections: [ConnectionConfig]) -> Bool {
+        let services: Set<String> = [SecretRef.defaultService, SecretRef.legacyService]
+        let accounts = Set(
+            connections.flatMap { config in
+                SecretField.allCases.map { SecretRef.forConnection(config.id, field: $0.rawValue).account }
+            })
+        return connections.flatMap(secretRefs(of:)).allSatisfy {
+            services.contains($0.service) && accounts.contains($0.account)
+        }
     }
 
     /// Opens the sealed passwords. The header is authenticated as well as the box, so a

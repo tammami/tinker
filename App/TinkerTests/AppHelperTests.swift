@@ -874,6 +874,65 @@ final class ConnectionBackupTests: XCTestCase {
         XCTAssertThrowsError(try codec.read(Data("not json at all".utf8)))
     }
 
+    /// The file edited as JSON, the way a damaged or hostile copy would arrive.
+    private func edited(_ change: (inout [String: Any]) -> Void) async throws -> Data {
+        guard var json = try JSONSerialization.jsonObject(with: try await write()) as? [String: Any] else {
+            throw ConnectionBackupError.notABackup
+        }
+        change(&json)
+        return try JSONSerialization.data(withJSONObject: json)
+    }
+
+    /// The key-derivation settings come from the file: a count that would trap PBKDF2 or
+    /// keep it busy for an hour is refused before a passphrase is asked for.
+    func testUnreasonableKeyDerivationSettingsAreRefused() async throws {
+        let codec = ConnectionBackupCodec()
+        for rounds in [-1, 0, 3_000_000_000] {
+            let data = try await edited { json in
+                var secrets = json["secrets"] as? [String: Any] ?? [:]
+                secrets["rounds"] = rounds
+                json["secrets"] = secrets
+            }
+            XCTAssertThrowsError(try codec.read(data), "\(rounds) rounds") { error in
+                XCTAssertEqual(error as? ConnectionBackupError, .damaged)
+            }
+        }
+    }
+
+    /// A connection pointing at a Keychain item that is not its own — another app's, or
+    /// another connection's — would read it on connect and send it to the host the file
+    /// names. The whole file is refused.
+    func testAConnectionPointingAtAnotherSecretIsRefused() async throws {
+        let codec = ConnectionBackupCodec()
+        let foreignService = try await edited { json in
+            var connections = json["connections"] as? [[String: Any]] ?? []
+            connections[0]["passwordRef"] = ["service": "com.example.other-app", "account": "\(postgres.uuidString).password"]
+            json["connections"] = connections
+        }
+        XCTAssertThrowsError(try codec.read(foreignService)) { error in
+            XCTAssertEqual(error as? ConnectionBackupError, .damaged)
+        }
+        let outsideTheFile = try await edited { json in
+            var connections = json["connections"] as? [[String: Any]] ?? []
+            connections[0]["passwordRef"] = [
+                "service": SecretRef.defaultService, "account": "\(UUID().uuidString).password",
+            ]
+            json["connections"] = connections
+        }
+        XCTAssertThrowsError(try codec.read(outsideTheFile)) { error in
+            XCTAssertEqual(error as? ConnectionBackupError, .damaged)
+        }
+        XCTAssertTrue(
+            ConnectionBackupCodec.pointsOnlyAtItsOwnSecrets(connections()),
+            "what the editor files, jump hosts included, passes")
+        // A copy made by an earlier build still points at its original's SSH secret; that is a
+        // genuine backup and opens.
+        var copy = connections()[1]
+        copy.id = UUID()
+        copy.passwordRef = SecretRef.forConnection(copy.id, field: SecretField.password.rawValue)
+        XCTAssertTrue(ConnectionBackupCodec.pointsOnlyAtItsOwnSecrets(connections() + [copy]))
+    }
+
     /// A backup with no passphrase would be a password file; it is refused at the source.
     func testAPassphraseIsRequired() async throws {
         do {

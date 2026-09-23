@@ -90,19 +90,48 @@ public final class AppEnvironment {
         }
     }
 
-    /// Copies a connection, including its stored password, under a new identity.
+    /// Copies a connection, including its stored secrets, under a new identity.
+    ///
+    /// Every secret the copy uses is filed under its own id. The SSH password and key
+    /// passphrase used to stay pointed at the original's, so deleting the original —
+    /// which deletes its secrets — took the copy's SSH login with it.
     public func duplicate(_ config: ConnectionConfig) async {
         var copy = config
         copy.id = UUID()
         copy.name = "\(config.name) copy"
-        if let source = config.passwordRef,
-            let password = try? await secrets.secret(for: source)
-        {
-            let destination = SecretRef.forConnection(copy.id, field: SecretField.password.rawValue)
-            try? await secrets.setSecret(password, for: destination)
-            copy.passwordRef = destination
-        }
+        copy.passwordRef = await copySecret(config.passwordRef, to: copy.id, field: .password)
+        copy.ssh = await copySSH(config.ssh, to: copy.id)
         await save(copy)
+    }
+
+    /// The copy's own reference for `field`, holding the source's secret when it can be
+    /// read; nil when the source had none.
+    private func copySecret(_ source: SecretRef?, to id: UUID, field: SecretField) async -> SecretRef? {
+        guard let source else { return nil }
+        let destination = SecretRef.forConnection(id, field: field.rawValue)
+        if let value = try? await secrets.secret(for: source) {
+            try? await secrets.setSecret(value, for: destination)
+        }
+        return destination
+    }
+
+    /// The SSH settings with every secret in the chain, jump host included, re-filed.
+    private func copySSH(_ source: SSHConfig?, to id: UUID) async -> SSHConfig? {
+        guard var ssh = source else { return nil }
+        switch ssh.auth {
+        case let .password(ref):
+            ssh.auth = .password(
+                await copySecret(ref, to: id, field: .sshPassword)
+                    ?? SecretRef.forConnection(id, field: SecretField.sshPassword.rawValue))
+        case let .privateKey(path, passphrase):
+            ssh.auth = .privateKey(path: path, passphrase: await copySecret(passphrase, to: id, field: .sshPassphrase))
+        case .agent:
+            break
+        }
+        if let jump = ssh.jumpHost?.value {
+            ssh.jumpHost = await copySSH(jump, to: id).map { Box($0) }
+        }
+        return ssh
     }
 
     // MARK: - Folders

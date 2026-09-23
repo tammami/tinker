@@ -944,6 +944,36 @@ final class ConnectionBackupTests: XCTestCase {
     }
 
     /// Restoring the same backup twice does nothing the second time, unless asked.
+    /// A duplicated connection files every secret under its own id — the SSH password and
+    /// key passphrase included — so deleting the original, which deletes its secrets,
+    /// leaves the copy able to log in.
+    func testADuplicateKeepsItsSecretsWhenTheOriginalIsDeleted() async throws {
+        let store = NSTemporaryDirectory() + "tinker-duplicate-\(UUID().uuidString).sqlite"
+        defer { try? FileManager.default.removeItem(atPath: store) }
+        let keychain = EphemeralSecretStore()
+        let environment = AppEnvironment(secrets: keychain, storePath: store)
+        await environment.load()
+        let original = connections()[1]
+        await environment.save(original)
+        let values = ["my-password-b2", "my-ssh-password-c3", "my-key-passphrase-d4"]
+        for (ref, value) in zip(ConnectionBackupCodec.secretRefs(of: original), values) {
+            try await keychain.setSecret(value, for: ref)
+        }
+
+        await environment.duplicate(original)
+        guard let copy = environment.connections.first(where: { $0.id != original.id }) else {
+            return XCTFail("no copy was made")
+        }
+        XCTAssertTrue(
+            ConnectionBackupCodec.secretRefs(of: copy).allSatisfy { $0.account.hasPrefix(copy.id.uuidString) },
+            "every secret of the copy is its own")
+
+        await environment.delete(original)
+        var copied: [String?] = []
+        for ref in ConnectionBackupCodec.secretRefs(of: copy) { copied.append(try await keychain.secret(for: ref)) }
+        XCTAssertEqual(copied, values)
+    }
+
     func testTheRestorePlanMatchesConnectionsByIdentity() {
         let configs = connections()
         let fresh = ConnectionBackupCodec.plan(existing: [], incoming: configs, policy: .skip)

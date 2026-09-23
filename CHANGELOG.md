@@ -4,6 +4,47 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.11] - 2026-09-23
+
+### Changed
+- **A query tab moved to another connection is on that connection.** The window title, the
+  status bar, ⌘T, Disconnect, Close and Export all went on naming the connection the tab
+  was opened on. Moving a tab, or pointing a PostgreSQL tab at another database, now asks
+  first when it would roll back an open transaction or drop uncommitted edits, and cannot
+  happen while a statement is still running.
+- **A held transaction says whether it has anything to commit.** With auto-commit off, a
+  plain SELECT now shows TRANSACTION · NO WRITES rather than a warning about unsaved data;
+  its tooltip says what the server is still holding.
+
+### Fixed
+- **Put Back no longer overwrites a newer change.** Putting back an older write replaced
+  whatever had happened to the row since, by a later edit or by someone else; it is now
+  refused, as the confirmation always promised.
+- **A deleted row is put back whole, or not offered.** Undoing a delete from a query that
+  selected only some columns brought the row back with the rest at their defaults. It is
+  now offered only when every column was loaded, and generated columns are left to the
+  server.
+- **A script's `USE` or `search_path` stays in effect.** In `USE staging; DELETE FROM t`
+  the DELETE ran in the database the tab's picker named. The tab now follows a statement
+  that moves its session.
+- Put Back is not offered inside an open transaction, where it was marked done before
+  anything was committed, nor while a statement is running.
+- A write made on one connection or database can no longer be put back through another
+  after the tab has moved.
+- Resizing a column of a result with repeated column names (`SELECT * FROM a JOIN b`) no
+  longer closes the app.
+- The date picker no longer writes an unchanged value when closed with Return, no longer
+  writes into another row after the page is re-read, and shows a value in its own time
+  zone rather than the Mac's.
+- `WITH … SELECT … INTO` is treated as a write.
+- Restoring connections with the backup's settings takes effect at once instead of after
+  the next launch. A damaged or altered backup is refused rather than crashing the app or
+  reading another app's Keychain items.
+- A duplicated connection keeps its own SSH password and key passphrase when the original
+  is deleted.
+- The transaction badge no longer claims uncommitted changes after a transaction ended by
+  a typed COMMIT, an implicit commit or a lost connection.
+
 ## [0.1.10] - 2026-09-19
 
 ### Added

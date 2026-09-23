@@ -1663,6 +1663,12 @@ final class GridHeaderView: NSTableHeaderView {
             // it started is remembered so the coordinator can tell the two apart.
             MainActor.assumeIsolated { controller?.headerMouseDownLocation = event.locationInWindow }
             super.mouseDown(with: event)
+            // The gesture is over. A drag that moved a column never reaches `didClick`, so
+            // the press is forgotten here — left behind, it made the next press that comes
+            // without one (VoiceOver's) read as a drag and not sort. The dividers have
+            // moved with the column, and their cursor areas with them.
+            MainActor.assumeIsolated { controller?.headerMouseDownLocation = nil }
+            window?.invalidateCursorRects(for: self)
             return
         }
         MainActor.assumeIsolated { controller?.headerMouseDownLocation = nil }

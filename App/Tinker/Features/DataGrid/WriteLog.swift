@@ -13,7 +13,7 @@ public struct WriteRecord: Identifiable, Sendable {
     /// The statements that would put it back, empty when it cannot be put back.
     public let revert: [GeneratedStatement]
     /// Why it cannot be put back, when it cannot.
-    public let blockedReason: String?
+    public internal(set) var blockedReason: String?
     /// True once it has been taken back, so the button goes and the entry stays.
     public var isReverted = false
 
@@ -90,6 +90,17 @@ public final class WriteLog {
     public func markReverted(_ id: UUID) {
         guard let index = records.firstIndex(where: { $0.id == id }) else { return }
         records[index].isReverted = true
+    }
+
+    /// Keeps every entry but takes away the way back from each one still open, saying why.
+    ///
+    /// For a tab that now writes somewhere else: a revert names its table but not the
+    /// server or database it was written on, so run through the tab's new connection it
+    /// would change rows this log never saw.
+    public func blockReverts(because reason: String) {
+        for index in records.indices where records[index].canRevert {
+            records[index].blockedReason = reason
+        }
     }
 
     public func clear() { records.removeAll() }

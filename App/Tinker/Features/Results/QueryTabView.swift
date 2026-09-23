@@ -213,6 +213,9 @@ public struct QueryTabView: View {
                 onWillOpen: { controller.loadConnectionChoices() }
             )
             .frame(width: 170)
+            // Not while a statement or a write is on the connection: it would go on there
+            // while the tab named another.
+            .disabled(controller.isBusyOnConnection)
             .help("The connection this tab runs on")
 
             BarPopUp(
@@ -228,6 +231,7 @@ public struct QueryTabView: View {
                 }
             )
             .frame(width: 200)
+            .disabled(controller.isBusyOnConnection)
             .help(sessionDatabaseHelp)
 
             BarDivider()

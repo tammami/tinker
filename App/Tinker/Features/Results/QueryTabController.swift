@@ -50,8 +50,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     /// status bar, ⌘T, Disconnect and Export all read. Set by the workspace that creates
     /// the controller; a move the user declined never calls it.
     @ObservationIgnored public var onConnectionChanged: ((UUID) -> Void)?
-    /// Bumped when a move is declined, so the pop-up — which AppKit has already redrawn on
-    /// the connection that was clicked — is asked to show the one the tab is still on.
+    /// Bumped when a move is declined or refused, so the pop-ups — which AppKit has already
+    /// redrawn on the row that was clicked — are asked to show where the tab still is.
     public private(set) var connectionChoiceRevision = 0
     /// What the connection pop-up shows: the tab's connection, re-read after a declined
     /// move so the menu goes back to it rather than naming a server the tab never reached.
@@ -1158,7 +1158,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
 
     /// The row the session pop-up shows as chosen.
     public var selectedSessionChoice: SessionChoiceID {
-        switch dialect {
+        _ = connectionChoiceRevision
+        return switch dialect {
         case .mysql, .sqlite: SessionChoiceID(database: sessionDatabase ?? "")
         case .postgresql: SessionChoiceID(database: sessionCatalog ?? "", schema: sessionDatabase ?? "")
         }
@@ -1233,12 +1234,31 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     /// another database — which on PostgreSQL means another connection.
     public func selectSessionChoice(_ choice: SessionChoiceID) async {
         guard !choice.database.isEmpty else { return }
+        guard !isBusyOnConnection else {
+            refuseSwitchWhileBusy()
+            return
+        }
         switch dialect {
         case .mysql, .sqlite:
             await selectDatabase(choice.database)
         case .postgresql:
             if choice.database != sessionCatalog {
-                await openCatalog(choice.database, schema: choice.schema.isEmpty ? nil : choice.schema)
+                let schema = choice.schema.isEmpty ? nil : choice.schema
+                // Another database is another connection, so the switch gives this one
+                // back and rolls back what it held: the loss moving the tab asks about.
+                guard let confirm, let loss = workAtRisk else {
+                    await openCatalog(choice.database, schema: schema)
+                    return
+                }
+                confirm(
+                    DestructiveConfirmation(
+                        title: "Switch this tab to \(choice.database)?",
+                        message:
+                            "\(loss) Another database is another connection, so the one this tab holds goes back first.",
+                        confirmTitle: "Switch",
+                        action: { [weak self] in await self?.openCatalog(choice.database, schema: schema) },
+                        onCancel: { [weak self] in self?.connectionChoiceRevision &+= 1 }
+                    ))
             } else if !choice.schema.isEmpty, choice.schema != sessionDatabase {
                 await selectDatabase(choice.schema)
             }
@@ -1252,10 +1272,29 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     /// database is dropped. A server that refuses leaves the tab where it was, in its own
     /// words.
     private func openCatalog(_ database: String, schema: String?) async {
+        // Asked again here: the confirmation can be answered after a run has started.
+        guard !isBusyOnConnection else {
+            refuseSwitchWhileBusy()
+            return
+        }
         warmTask?.cancel()
         await releaseHeldConnection()
         let previousCatalog = sessionCatalog
         let previousSchema = sessionDatabase
+        // What was read and written in the old database stays with it. A result grid
+        // left on screen would write its edits through the new session — to this
+        // database's table of the same name, keyed by the other one's rows — and a revert
+        // names only schema and table. Both go before the session moves, so nothing can
+        // slip through while the new database connects.
+        results.removeAll()
+        references.removeAll()
+        choices.removeAll()
+        selectedResultID = nil
+        selection = GridSelection()
+        writeLog.blockReverts(
+            because:
+                "Written in database “\(previousCatalog ?? "the connection's own")”; this tab has since been pointed at “\(database)”."
+        )
         sessionCatalog = database
         sessionDatabase = nil
         availableDatabases = []
@@ -1319,6 +1358,12 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         guard id != connectionID,
             let config = environment.connections.first(where: { $0.id == id })
         else { return }
+        // A statement or a write still on the old connection would go on there while the
+        // tab named the new one, its lease handed back to the pool mid-flight.
+        guard !isBusyOnConnection else {
+            refuseSwitchWhileBusy()
+            return
+        }
         guard let confirm, let loss = workAtRisk else {
             await move(to: config)
             return
@@ -1364,6 +1409,17 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
             + "statement. Nothing it recognised as a write has run. " + held
     }
 
+    /// True while a statement or a write is on the tab's connection, when it cannot be
+    /// pointed elsewhere: the lease that work runs on would go back to the pool under it.
+    public var isBusyOnConnection: Bool { isRunning || isWritingEdits }
+
+    /// Says why a switch did not happen and puts both pop-ups back on where the tab is,
+    /// since AppKit has already drawn the row that was clicked.
+    private func refuseSwitchWhileBusy() {
+        statusText = "Wait for the running statement to finish, or cancel it, before switching"
+        connectionChoiceRevision &+= 1
+    }
+
     /// What moving or closing this tab would throw away, in the words the close prompt
     /// uses, or nil when there is nothing to lose.
     private var workAtRisk: String? {
@@ -1379,13 +1435,20 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     }
 
     private func move(to config: ConnectionConfig) async {
+        // Asked again here: the confirmation can be answered after a run has started.
+        guard !isBusyOnConnection else {
+            refuseSwitchWhileBusy()
+            return
+        }
         warmTask?.cancel()
+        let previousName = self.config?.name ?? "the previous connection"
+        // Releasing ends the transaction too, so the badge does not follow the tab to a
+        // server where nothing is open.
         await releaseHeldConnection()
-        // Whatever the old connection held is gone with it, including a rollback that
-        // could not be sent because the connection was already lost. The badge does not
-        // follow the tab to a server where nothing is open.
         isInTransaction = false
-        transactionHasWrites = false
+        // The log's reverts name a table, not a server: run on the new connection they
+        // would write to whatever table there has the same name.
+        writeLog.blockReverts(because: "Written on “\(previousName)”; this tab has moved to another connection.")
         connectionID = config.id
         onConnectionChanged?(config.id)
         dialect = config.dialect

@@ -293,6 +293,28 @@ final class WriteLogTests: XCTestCase {
         XCTAssertEqual(log.records.first?.summary, "write \(WriteLog.capacity + 9)", "newest first")
     }
 
+    /// A tab that now writes elsewhere keeps its history but loses the way back: a revert
+    /// names a table, not the server it was written on.
+    func testBlockingRevertsKeepsEveryEntryAndItsOwnReason() {
+        let log = WriteLog()
+        log.record(record("1 row added", revert: [], blocked: "the server did not report the new row's key"))
+        log.record(record("1 row updated"))
+        log.record(record("2 rows deleted"))
+        guard let reverted = log.undoable else { return XCTFail("nothing to undo") }
+        log.markReverted(reverted.id)
+
+        log.blockReverts(because: "moved")
+        XCTAssertNil(log.undoable, "nothing written on the old connection can be put back")
+        XCTAssertEqual(log.records.count, 3, "the history stays")
+        XCTAssertEqual(log.records.first { $0.summary == "1 row updated" }?.blockedReason, "moved")
+        XCTAssertEqual(
+            log.records.first { $0.summary == "1 row added" }?.blockedReason,
+            "the server did not report the new row's key", "an entry keeps the reason it already had")
+        XCTAssertNil(
+            log.records.first { $0.summary == "2 rows deleted" }?.blockedReason,
+            "one already put back says so, not that it moved")
+    }
+
     /// Emptying a cell that held something is a deletion; typing in an empty one is not.
     func testOnlyAnEditThatEmptiesAFilledCellIsAskedAbout() {
         XCTAssertTrue(TableTabController.clearsAValue(old: .string("Aspal"), new: .string("")))
@@ -745,6 +767,113 @@ final class MovedTabConnectionTests: XCTestCase {
         XCTAssertFalse(asked)
         XCTAssertEqual(controller.connectionID, mysql)
         XCTAssertEqual(reported, mysql)
+    }
+
+    /// A statement still running on the old connection would go on there — its lease
+    /// handed back to the pool under it — while the tab named the new one.
+    func testAMoveWhileAStatementRunsIsRefused() async {
+        let store = NSTemporaryDirectory() + "tinker-move-\(UUID().uuidString).sqlite"
+        defer { try? FileManager.default.removeItem(atPath: store) }
+        let environment = AppEnvironment(secrets: EphemeralSecretStore(), storePath: store)
+        await environment.load()
+        var there = ConnectionConfig(
+            name: "MySQL", dialect: .mysql, host: "127.0.0.1", port: 1, user: "nobody")
+        there.id = mysql
+        await environment.save(there)
+
+        let controller = QueryTabController(
+            connectionID: postgres, dialect: .postgresql, environment: environment)
+        var reported: UUID?
+        controller.onConnectionChanged = { reported = $0 }
+        controller.isRunning = true
+
+        await controller.selectConnection(mysql)
+        XCTAssertEqual(controller.connectionID, postgres, "the tab stays where its statement runs")
+        XCTAssertNil(reported)
+        XCTAssertEqual(controller.connectionChoiceRevision, 1, "and the pop-up is put back on it")
+
+        await controller.selectSessionChoice(.init(database: "other"))
+        XCTAssertNil(controller.sessionCatalog, "the database pop-up waits too")
+    }
+
+    /// On PostgreSQL another database is another connection, so switching to one gives
+    /// the held connection back and rolls back its transaction: asked about like a move.
+    /// Results read in the old database go with it — their edits, written through the new
+    /// session, would land in the new database's table of the same name.
+    func testSwitchingAPostgreSQLTabToAnotherDatabaseAsksAndLeavesTheOldResultsBehind() async {
+        let store = NSTemporaryDirectory() + "tinker-catalog-\(UUID().uuidString).sqlite"
+        defer { try? FileManager.default.removeItem(atPath: store) }
+        let environment = AppEnvironment(secrets: EphemeralSecretStore(), storePath: store)
+        await environment.load()
+        var here = ConnectionConfig(
+            name: "PostgreSQL", dialect: .postgresql, host: "127.0.0.1", port: 1, user: "nobody",
+            database: "app")
+        here.id = postgres
+        await environment.save(here)
+
+        let controller = QueryTabController(
+            connectionID: postgres, dialect: .postgresql, environment: environment)
+        var asked: DestructiveConfirmation?
+        controller.confirm = { asked = $0 }
+        controller.isInTransaction = true
+        await controller.selectSessionChoice(.init(database: "other"))
+        XCTAssertNotNil(asked, "a switch that would roll back a transaction asks first")
+        XCTAssertNil(controller.sessionCatalog, "and does not switch while it is asking")
+        asked?.onCancel?()
+        XCTAssertEqual(controller.connectionChoiceRevision, 1, "declining puts the pop-up back")
+
+        controller.isInTransaction = false
+        controller.results = [QueryResultTab(label: "SELECT", statement: "SELECT * FROM t")]
+        controller.writeLog.record(
+            WriteRecord(
+                summary: "1 row updated",
+                revert: [
+                    GeneratedStatement(
+                        kind: .update, sql: "UPDATE t SET a = $1 WHERE id = $2",
+                        parameters: [.string("Ada"), .int(1)],
+                        table: TableRef(database: "app", schema: "public", name: "t"), expectsSingleRow: true)
+                ]))
+        asked = nil
+        await controller.selectSessionChoice(.init(database: "other"))
+        XCTAssertNil(asked, "nothing to lose, nothing to ask")
+        XCTAssertTrue(controller.results.isEmpty, "rows read in the old database are not left to edit")
+        XCTAssertNil(controller.writeLog.undoable, "nor its writes to put back through the new one")
+    }
+
+    /// The write log's reverts name a table but not a server: after a move they would run
+    /// on the new connection, against whatever table there has that name.
+    func testAMoveTakesAwayTheWayBackFromWritesOnTheConnectionItLeft() async {
+        let store = NSTemporaryDirectory() + "tinker-move-\(UUID().uuidString).sqlite"
+        defer { try? FileManager.default.removeItem(atPath: store) }
+        let environment = AppEnvironment(secrets: EphemeralSecretStore(), storePath: store)
+        await environment.load()
+        var here = ConnectionConfig(
+            name: "PostgreSQL", dialect: .postgresql, host: "127.0.0.1", port: 1, user: "nobody")
+        here.id = postgres
+        var there = ConnectionConfig(
+            name: "MySQL", dialect: .mysql, host: "127.0.0.1", port: 1, user: "nobody")
+        there.id = mysql
+        await environment.save(here)
+        await environment.save(there)
+
+        let controller = QueryTabController(
+            connectionID: postgres, dialect: .postgresql, environment: environment)
+        controller.writeLog.record(
+            WriteRecord(
+                summary: "1 row updated",
+                revert: [
+                    GeneratedStatement(
+                        kind: .update, sql: "UPDATE t SET a = $1 WHERE id = $2",
+                        parameters: [.string("Ada"), .int(1)],
+                        table: TableRef(database: "app", schema: "public", name: "t"), expectsSingleRow: true)
+                ]))
+        XCTAssertNotNil(controller.writeLog.undoable)
+
+        await controller.selectConnection(mysql)
+        XCTAssertEqual(controller.connectionID, mysql)
+        XCTAssertNil(controller.writeLog.undoable, "nothing written on PostgreSQL is put back through MySQL")
+        XCTAssertEqual(controller.writeLog.records.count, 1, "but the tab still says what it wrote")
+        XCTAssertTrue(controller.writeLog.latest?.blockedReason?.contains("PostgreSQL") ?? false)
     }
 
     /// The dangerous half: disconnecting PostgreSQL used to close a tab that had been

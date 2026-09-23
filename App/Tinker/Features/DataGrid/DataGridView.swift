@@ -1057,6 +1057,9 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
             let model = delegate?.gridReferencePicker(row: row, column: column)
         else { return }
         let rect = tableView.frameOfCell(atColumn: position, row: row)
+        // The row is found again by identity when the choice is made: the page can be
+        // re-read while the picker is open, and the position would then name another row.
+        let identity = self.model.rowIdentity(row)
         let popover = NSPopover()
         popover.behavior = .transient
         // `popover` is captured weakly: the popover owns the hosting controller, which
@@ -1066,12 +1069,14 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
             model: model,
             onChoose: { [weak self, weak popover] key in
                 popover?.close()
-                self?.delegate?.gridDidPickReference(row: row, column: column, key: key)
+                guard let self, let target = currentRow(of: identity, openedAt: row) else { return }
+                delegate?.gridDidPickReference(row: target, column: column, key: key)
             },
             onSetNull: { [weak self, weak popover] in
                 popover?.close()
-                self?.delegate?.gridDidCommitEdit(row: row, column: column, text: "")
-                self?.delegate?.gridDidRequestSetNull()
+                guard let self, let target = currentRow(of: identity, openedAt: row) else { return }
+                delegate?.gridDidCommitEdit(row: target, column: column, text: "")
+                delegate?.gridDidRequestSetNull()
             },
             onCancel: { [weak popover] in popover?.close() }
         )
@@ -1121,7 +1126,8 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         func add(_ title: String, text: String, isCurrent: Bool) {
             let item = NSMenuItem(title: title, action: #selector(pickChoice(_:)), keyEquivalent: "")
             item.target = self
-            item.representedObject = ChoicePick(row: row, column: column, text: text)
+            item.representedObject = ChoicePick(
+                row: row, identity: model.rowIdentity(row), column: column, text: text)
             if isCurrent {
                 item.state = .on
                 ticked = item
@@ -1137,8 +1143,10 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
     }
 
     @objc private func pickChoice(_ sender: NSMenuItem) {
-        guard let pick = sender.representedObject as? ChoicePick else { return }
-        delegate?.gridDidCommitEdit(row: pick.row, column: pick.column, text: pick.text)
+        guard let pick = sender.representedObject as? ChoicePick,
+            let row = currentRow(of: pick.identity, openedAt: pick.row)
+        else { return }
+        delegate?.gridDidCommitEdit(row: row, column: pick.column, text: pick.text)
     }
 
     private var choicesPopover: NSPopover?
@@ -1699,6 +1707,8 @@ final class GridHeaderView: NSTableHeaderView {
 /// The cell a value picked from an enum menu goes to.
 private struct ChoicePick {
     let row: Int
+    /// The row the menu was opened on, to find it again if the page moved meanwhile.
+    let identity: RowIdentity?
     let column: Int
     let text: String
 }

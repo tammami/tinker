@@ -581,10 +581,10 @@ final class GridIntegrationTests: XCTestCase {
                 pg: "\"org_id\" = $2 AND \"user_id\" = $3",
                 mysql: "`org_id` = ? AND `user_id` = ?",
                 sqlite: "\"org_id\" = ? AND \"user_id\" = ?")
-            XCTAssertTrue(
-                compositeStatements[0].sql.contains(expectedPredicate),
-                compositeStatements[0].sql
-            )
+            // Unwrapped rather than indexed: with the server unreachable the list is empty,
+            // and a trap here took the whole test process down with it.
+            let compositeSQL = try XCTUnwrap(compositeStatements.first).sql
+            XCTAssertTrue(compositeSQL.contains(expectedPredicate), compositeSQL)
             // A composite key cannot drive a keyset cursor.
             XCTAssertEqual(composite.strategy(forPage: 100), .offset)
 
@@ -598,7 +598,7 @@ final class GridIntegrationTests: XCTestCase {
             XCTAssertEqual(uuidStatements.count, 1)
             // PostgreSQL has a `uuid` type; MySQL stores one as `char(36)`. Either way the
             // WHERE clause binds the row's own identifier, not a rewritten form of it.
-            let boundKey = try XCTUnwrap(uuidStatements[0].parameters.last)
+            let boundKey = try XCTUnwrap(uuidStatements.first?.parameters.last)
             XCTAssertEqual(boundKey.text, "11111111-1111-1111-1111-111111111111")
             if server.engine == .postgresql {
                 guard case .uuid = boundKey else {

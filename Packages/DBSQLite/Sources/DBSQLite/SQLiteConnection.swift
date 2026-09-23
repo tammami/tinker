@@ -257,7 +257,8 @@ public actor SQLiteConnection: SQLConnection {
 
         do {
             let outcome = try await runStatements(sql, parameters: parameters, channel: channel)
-            let keyword = SQLStatement(text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil).leadingKeyword
+            let keyword = SQLStatement(text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil, dialect: .sqlite)
+                .leadingKeyword
             if keyword == "PRAGMA" || keyword == "ATTACH" || keyword == "DETACH" { sessionMutated = true }
             try await channel.send(
                 .complete(
@@ -469,7 +470,7 @@ public actor SQLiteConnection: SQLConnection {
     /// True for a statement whose changed-row count means something: INSERT, UPDATE,
     /// DELETE, REPLACE, or a WITH that leads to one of them.
     static func isRowWrite(_ sql: String) -> Bool {
-        let statement = SQLStatement(text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil)
+        let statement = SQLStatement(text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil, dialect: .sqlite)
         switch statement.leadingKeyword {
         case "INSERT", "UPDATE", "DELETE", "REPLACE": return true
         case "WITH": return !statement.isProbablyReadOnly

@@ -219,7 +219,7 @@ public actor MySQLSQLConnection: SQLConnection {
     /// A PostgreSQL-style command tag, so the UI can report both engines the same way.
     static func tag(sql: String, metadata: MySQLQueryMetadata?, rowCount: Int) -> String {
         let keyword = SQLStatement(
-            text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil
+            text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil, dialect: .mysql
         ).leadingKeyword
         guard let metadata else { return keyword.isEmpty ? "OK" : keyword }
         if keyword == "SELECT" || keyword == "SHOW" || keyword == "WITH" {
@@ -351,7 +351,7 @@ public actor MySQLSQLConnection: SQLConnection {
     /// notes a statement that changed session state for the reset on release.
     private func noteTransactionKeyword(in sql: String) {
         let keyword = SQLStatement(
-            text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil
+            text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil, dialect: .mysql
         ).leadingKeyword
         switch keyword {
         case "BEGIN", "START": transactionOpen = true

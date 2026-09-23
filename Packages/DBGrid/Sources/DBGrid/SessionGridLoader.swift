@@ -83,7 +83,7 @@ public struct QueryGridLoader: GridDataLoader {
 
     /// True for statements a subquery can hold.
     public static func isPageable(_ sql: String, dialect: SQLDialect) -> Bool {
-        let statement = SQLStatement(text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil)
+        let statement = SQLStatement(text: sql, utf16Range: 0 ..< 0, startLine: 1, terminator: nil, dialect: dialect)
         switch statement.leadingKeyword {
         case "SELECT", "WITH", "VALUES":
             break

@@ -941,6 +941,9 @@ final class MySQLValueDecoderTests: XCTestCase {
             MySQLSQLConnection.tag(sql: "DELETE FROM t", metadata: nil, rowCount: 0),
             "DELETE"
         )
+        XCTAssertEqual(
+            MySQLSQLConnection.tag(sql: "# why\nDELETE FROM t", metadata: nil, rowCount: 0), "DELETE",
+            "a MySQL `#` comment is read as one")
     }
 
 }

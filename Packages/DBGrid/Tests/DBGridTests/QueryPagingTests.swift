@@ -9,6 +9,7 @@ final class QueryPagingTests: XCTestCase {
         XCTAssertTrue(QueryGridLoader.isPageable("SELECT * FROM t", dialect: .postgresql))
         XCTAssertTrue(QueryGridLoader.isPageable("  with x as (select 1) select * from x", dialect: .mysql))
         XCTAssertTrue(QueryGridLoader.isPageable("VALUES (1), (2)", dialect: .postgresql))
+        XCTAssertTrue(QueryGridLoader.isPageable("# why\nSELECT * FROM t", dialect: .mysql), "read in its own dialect")
         XCTAssertTrue(QueryGridLoader.isPageable("TABLE t", dialect: .postgresql))
         XCTAssertFalse(QueryGridLoader.isPageable("TABLE t", dialect: .mysql))
         XCTAssertFalse(QueryGridLoader.isPageable("SHOW TABLES", dialect: .mysql))

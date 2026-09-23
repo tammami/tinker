@@ -370,9 +370,11 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
             return
         }
         let text = TableOperations.explain(statement.text, analyze: analyze, dialect: dialect)
+        // In the tab's dialect: read as PostgreSQL, a MySQL `#` comment hid the keyword
+        // and an EXPLAIN ANALYZE of a write could pass as a read.
         let explained = SQLStatement(
             text: text, utf16Range: statement.utf16Range,
-            startLine: statement.startLine, terminator: statement.terminator
+            startLine: statement.startLine, terminator: statement.terminator, dialect: dialect
         )
         start([explained])
     }

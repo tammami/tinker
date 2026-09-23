@@ -20,6 +20,23 @@ final class DMLGeneratorTests: XCTestCase {
         XCTAssertTrue(statement.expectsSingleRow)
     }
 
+    /// A row put back keeps its key even where the key is `GENERATED ALWAYS`: PostgreSQL
+    /// needs to be told, the other engines take the value as given.
+    func testAnInsertCanKeepTheKeyTheRowHad() throws {
+        let postgres = try DMLGenerator(dialect: .postgresql, table: users, identityColumns: ["id"])
+            .insert(values: ["id": .int(7), "name": .string("Ada")], overridingSystemValue: true)
+        XCTAssertTrue(
+            postgres.sql.hasPrefix(
+                "INSERT INTO \"public\".\"users\" (\"id\", \"name\") OVERRIDING SYSTEM VALUE VALUES"),
+            postgres.sql)
+        let mysql = try DMLGenerator(dialect: .mysql, table: users, identityColumns: ["id"])
+            .insert(values: ["id": .int(7)], overridingSystemValue: true)
+        XCTAssertFalse(mysql.sql.contains("OVERRIDING"), mysql.sql)
+        let plain = try DMLGenerator(dialect: .postgresql, table: users, identityColumns: ["id"])
+            .insert(values: ["id": .int(7)])
+        XCTAssertFalse(plain.sql.contains("OVERRIDING"), "an ordinary insert is left alone")
+    }
+
     /// A revert asks for the values its write left behind, so a row that has changed
     /// again since matches nothing: NULL as `IS NULL`, a key column left to the identity.
     func testUpdateCanInsistOnTheValuesTheRowStillHolds() throws {

@@ -241,6 +241,9 @@ public final class GridModel {
     /// query selected it or not. A deleted row is put back only when all of them were
     /// loaded; nil means the grid shows the whole table, as a table tab does.
     public var tableColumns: Set<String>?
+    /// The table's auto-increment (serial, identity) columns, when known, so a new row's
+    /// key is read from the number MySQL reports only when that number is the key.
+    public var autoIncrementColumns: Set<String>?
 
     /// The table a commit writes to: the table shown, or the one a query reads.
     public var writableTable: TableRef? {
@@ -583,7 +586,9 @@ public final class GridModel {
         let statements = try edits.statements(using: generator, snapshot: snapshot)
         // Built here, while the rows still hold the values the write is about to replace:
         // the page is re-read afterwards and by then the old values are gone.
-        let planner = RevertPlanner(generator: generator, identityColumns: identityColumns, columns: columns)
+        let planner = RevertPlanner(
+            generator: generator, identityColumns: identityColumns, columns: columns,
+            autoIncrementColumns: autoIncrementColumns)
         let undoing = revertOfLoadedRows(snapshot, planner: planner)
         let result = try await GridCommitter().commit(statements, using: runner)
         let revert = revertAddingInserts(undoing, snapshot: snapshot, result: result, planner: planner)
@@ -637,7 +642,8 @@ public final class GridModel {
                 supplied: insert.values,
                 returnedRow: index < result.insertedRows.count ? result.insertedRows[index] : nil,
                 returnedColumns: result.insertedColumns,
-                lastInsertID: index < result.insertLastIDs.count ? result.insertLastIDs[index] : nil)
+                lastInsertID: index < result.insertLastIDs.count ? result.insertLastIDs[index] : nil,
+                autoIncrementColumns: planner.autoIncrementColumns)
             guard let identity else {
                 blocked.append("the server did not report the new row's key")
                 continue

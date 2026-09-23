@@ -524,6 +524,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
                         // All of them, not just the ones selected: a deleted row can only
                         // be put back whole (ADR-0060).
                         grid.tableColumns = editing.columns
+                        grid.autoIncrementColumns = editing.autoIncrement
                         if !editing.choices.isEmpty { choices[result.id] = editing.choices }
                     } else {
                         grid.setIdentity(columns: [], kind: nil)
@@ -717,7 +718,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         for table: TableRef?, session: ConnectionSession
     ) async -> (
         table: TableRef, key: [String], keyKind: DBValueKind?, columns: Set<String>, tableOID: String,
-        choices: [String: ColumnChoices]
+        choices: [String: ColumnChoices], autoIncrement: Set<String>
     )? {
         guard let table else { return nil }
         guard
@@ -736,7 +737,10 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         guard let key, !key.isEmpty else { return nil }
         let keyKind = key.count == 1 ? columns.first { $0.name == key[0] }?.kind : nil
         let editable = Set(columns.filter { !$0.isGenerated }.map(\.name))
-        return (table, key, keyKind, editable, "\(table.schema).\(table.name)", ColumnChoices.byName(columns))
+        return (
+            table, key, keyKind, editable, "\(table.schema).\(table.name)", ColumnChoices.byName(columns),
+            Set(columns.filter(\.isAutoIncrement).map(\.name))
+        )
     }
 
     // MARK: - Editing a result

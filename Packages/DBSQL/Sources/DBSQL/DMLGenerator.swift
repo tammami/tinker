@@ -144,7 +144,14 @@ public struct DMLGenerator: Sendable {
     ///
     /// PostgreSQL and SQLite append `RETURNING *` so the new row can be shown without a
     /// second round trip; MySQL reads `lastInsertID` from the OK packet instead.
-    public func insert(values: [String: DBValue], returnRow: Bool = true) throws -> GeneratedStatement {
+    ///
+    /// `overridingSystemValue` puts a row back with the key it had: PostgreSQL refuses an
+    /// explicit value for a `GENERATED ALWAYS AS IDENTITY` column without it, and on any
+    /// other table the clause changes nothing. Ignored by the other engines, which take
+    /// the value as given.
+    public func insert(
+        values: [String: DBValue], returnRow: Bool = true, overridingSystemValue: Bool = false
+    ) throws -> GeneratedStatement {
         let returning = returnRow && Self.supportsReturning(dialect) ? " RETURNING *" : ""
         guard !values.isEmpty else {
             // An all-defaults row is still a legitimate insert.
@@ -161,7 +168,8 @@ public struct DMLGenerator: Sendable {
         let columns = values.keys.sorted()
         let columnList = columns.map { Identifier.quote($0, dialect: dialect) }.joined(separator: ", ")
         let placeholders = columns.map { parameters.bind(values[$0] ?? .null) }.joined(separator: ", ")
-        let sql = "INSERT INTO \(qualifiedTable) (\(columnList)) VALUES (\(placeholders))" + returning
+        let overriding = overridingSystemValue && dialect == .postgresql ? " OVERRIDING SYSTEM VALUE" : ""
+        let sql = "INSERT INTO \(qualifiedTable) (\(columnList))\(overriding) VALUES (\(placeholders))" + returning
         return GeneratedStatement(
             kind: .insert, sql: sql, parameters: parameters.values,
             table: table, expectsSingleRow: true

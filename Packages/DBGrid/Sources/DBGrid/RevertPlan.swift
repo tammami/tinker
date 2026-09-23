@@ -45,13 +45,20 @@ public struct RevertPlanner: Sendable {
     public let generator: DMLGenerator
     /// The columns that name a row, in key order.
     public let identityColumns: [String]
-    /// Every column of the table, so a deleted row can be put back whole.
+    /// The columns the grid shows, so a written value's type is known.
     public let columns: [ColumnMeta]
+    /// The table's auto-increment (serial, identity) columns, when known: what decides
+    /// whether the number MySQL reports for a new row is that row's key.
+    public let autoIncrementColumns: Set<String>?
 
-    public init(generator: DMLGenerator, identityColumns: [String], columns: [ColumnMeta]) {
+    public init(
+        generator: DMLGenerator, identityColumns: [String], columns: [ColumnMeta],
+        autoIncrementColumns: Set<String>? = nil
+    ) {
         self.generator = generator
         self.identityColumns = identityColumns
         self.columns = columns
+        self.autoIncrementColumns = autoIncrementColumns
     }
 
     /// The identity a row will have once `changes` have been written: the values it was
@@ -117,11 +124,15 @@ public struct RevertPlanner: Sendable {
         for name in identityColumns where loadedRow[name] == nil {
             throw RevertError.valueNotLoaded(name)
         }
-        guard let tableColumns else { return try generator.insert(values: loadedRow) }
+        // The row goes back with the key it had, identity column or not.
+        guard let tableColumns else {
+            return try generator.insert(values: loadedRow, overridingSystemValue: true)
+        }
         if let missing = tableColumns.sorted().first(where: { loadedRow[$0] == nil }) {
             throw RevertError.valueNotLoaded(missing)
         }
-        return try generator.insert(values: loadedRow.filter { tableColumns.contains($0.key) })
+        return try generator.insert(
+            values: loadedRow.filter { tableColumns.contains($0.key) }, overridingSystemValue: true)
     }
 
     /// The inverse of a new row: a delete addressed by the key the server gave it.
@@ -136,25 +147,35 @@ public struct RevertPlanner: Sendable {
     /// returned (`INSERT … RETURNING`) or, where the server returns nothing, from the
     /// generated key it reported and the values the user supplied.
     ///
-    /// MySQL reports one number, which names the row only when a single auto-increment
-    /// column is the key; the rest of a composite key has to come from the row itself.
+    /// MySQL reports one number, the value its auto-increment column took, so it names a
+    /// key column only when that column is the auto-increment one — a `code` key beside a
+    /// separate auto-increment `id` is not the number. A `0` typed into an auto-increment
+    /// column asks MySQL for the next value, so it is the reported number, not the 0,
+    /// that names the row. Where the auto-increment columns are not known, a single-column
+    /// key is assumed to be one, as it usually is.
     public static func insertedIdentity(
         identityColumns: [String],
         supplied: [String: DBValue],
         returnedRow: [DBValue]?,
         returnedColumns: [ColumnMeta],
-        lastInsertID: Int64?
+        lastInsertID: Int64?,
+        autoIncrementColumns: Set<String>? = nil
     ) -> [String: DBValue]? {
         var identity: [String: DBValue] = [:]
         for name in identityColumns {
+            let typed = supplied[name].flatMap { $0.isNull ? nil : $0 }
+            let takesTheReportedNumber =
+                autoIncrementColumns.map { $0.contains(name) } ?? (identityColumns.count == 1)
             if let returnedRow, let index = returnedColumns.firstIndex(where: { $0.name == name }),
                 index < returnedRow.count
             {
                 identity[name] = returnedRow[index]
-            } else if let supplied = supplied[name], !supplied.isNull {
-                identity[name] = supplied
-            } else if identityColumns.count == 1, let lastInsertID, lastInsertID > 0 {
+            } else if takesTheReportedNumber, typed == nil || typed?.text == "0", let lastInsertID,
+                lastInsertID > 0
+            {
                 identity[name] = .int(lastInsertID)
+            } else if let typed {
+                identity[name] = typed
             } else {
                 return nil
             }

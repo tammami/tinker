@@ -111,6 +111,7 @@ final class RevertPlannerTests: XCTestCase {
             loadedRow: ["id": .int(7), "name": .string("Ada"), "note": .null])
         XCTAssertEqual(statement.kind, .insert)
         XCTAssertTrue(statement.sql.contains("\"note\""), "every column comes back, NULLs included")
+        XCTAssertTrue(statement.sql.contains("OVERRIDING SYSTEM VALUE"), "with the key it had, identity or not")
         XCTAssertThrowsError(try planner().inverseOfDelete(loadedRow: [:])) { error in
             XCTAssertEqual(error as? RevertError, .rowNotLoaded)
         }
@@ -152,6 +153,30 @@ final class RevertPlannerTests: XCTestCase {
             identityColumns: ["tenant", "id"], supplied: ["tenant": .int(1)], returnedRow: nil,
             returnedColumns: [], lastInsertID: 88)
         XCTAssertNil(composite, "one number cannot name a two-column key")
+    }
+
+    /// MySQL's number is the value of its auto-increment column, and names a key column
+    /// only when that column is the auto-increment one.
+    func testTheReportedNumberNamesOnlyTheAutoIncrementColumn() {
+        let notTheKey = RevertPlanner.insertedIdentity(
+            identityColumns: ["code"], supplied: [:], returnedRow: nil, returnedColumns: [], lastInsertID: 17,
+            autoIncrementColumns: ["id"])
+        XCTAssertNil(notTheKey, "a `code` key beside an auto-increment `id` is not the number")
+
+        let typedZero = RevertPlanner.insertedIdentity(
+            identityColumns: ["id"], supplied: ["id": .int(0)], returnedRow: nil, returnedColumns: [],
+            lastInsertID: 31, autoIncrementColumns: ["id"])
+        XCTAssertEqual(typedZero, ["id": .int(31)], "a 0 asks MySQL for the next value, which is the key")
+
+        let composite = RevertPlanner.insertedIdentity(
+            identityColumns: ["tenant", "id"], supplied: ["tenant": .int(1)], returnedRow: nil,
+            returnedColumns: [], lastInsertID: 88, autoIncrementColumns: ["id"])
+        XCTAssertEqual(composite, ["tenant": .int(1), "id": .int(88)], "the rest of the key comes from the row")
+
+        let typedKey = RevertPlanner.insertedIdentity(
+            identityColumns: ["code"], supplied: ["code": .string("A-1")], returnedRow: nil, returnedColumns: [],
+            lastInsertID: 17, autoIncrementColumns: ["id"])
+        XCTAssertEqual(typedKey, ["code": .string("A-1")])
     }
 }
 

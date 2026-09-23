@@ -189,6 +189,7 @@ public final class TableTabController: DataGridDelegate, WriteLogOwner {
             // What a deleted row is put back with: every column but the generated ones,
             // which the server refuses a value for (ADR-0060).
             model.tableColumns = Set(columns.filter { !$0.isGenerated }.map(\.name))
+            model.autoIncrementColumns = Set(columns.filter(\.isAutoIncrement).map(\.name))
             // A table tab pages; a result set streams (SPEC §12.7).
             model.isPaged = true
             model.sort = preferences.sort.map {

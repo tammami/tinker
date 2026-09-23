@@ -357,7 +357,8 @@ final class GridIntegrationTests: XCTestCase {
                     self.sql(
                         server,
                         pg: "CREATE TABLE grid_revert_probe (id integer PRIMARY KEY, name text, note text)",
-                        mysql: "CREATE TABLE grid_revert_probe (id INT PRIMARY KEY, name VARCHAR(50), note VARCHAR(50))",
+                        mysql:
+                            "CREATE TABLE grid_revert_probe (id INT PRIMARY KEY, name VARCHAR(50), note VARCHAR(50))",
                         sqlite: "CREATE TABLE grid_revert_probe (id INTEGER PRIMARY KEY, name TEXT, note TEXT)")
                 )
                 _ = try await setup.executeCollecting(
@@ -411,6 +412,46 @@ final class GridIntegrationTests: XCTestCase {
 
             try await session.withLease { cleanup in
                 _ = try await cleanup.executeCollecting("DROP TABLE grid_revert_probe")
+            }
+        }
+    }
+
+    /// A deleted row whose key the server generates goes back with the key it had —
+    /// on PostgreSQL even when the key is `GENERATED ALWAYS AS IDENTITY`, which refuses
+    /// an explicit value unless told to take it.
+    func testADeletedRowWithAGeneratedKeyGoesBackWithItsKey() async throws {
+        try await withSession { session, server in
+            try await session.withLease { setup in
+                _ = try await setup.executeCollecting("DROP TABLE IF EXISTS grid_identity_probe")
+                _ = try await setup.executeCollecting(
+                    self.sql(
+                        server,
+                        pg:
+                            "CREATE TABLE grid_identity_probe (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name text)",
+                        mysql: "CREATE TABLE grid_identity_probe (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(50))",
+                        sqlite: "CREATE TABLE grid_identity_probe (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)")
+                )
+                _ = try await setup.executeCollecting(
+                    "INSERT INTO grid_identity_probe (name) VALUES ('first'), ('second')")
+            }
+            let table = self.table("grid_identity_probe", in: server)
+            let model = self.makeModel(session: session, table: table, identity: ["id"])
+            await model.load(page: 0)
+            model.tableColumns = ["id", "name"]
+            model.autoIncrementColumns = ["id"]
+            let runner = SessionStatementRunner(session: session)
+
+            _ = model.markDeleted(rows: [0])
+            let deleted = try await model.commitRecordingRevert(using: runner)
+            XCTAssertTrue(deleted.revert.isRevertible)
+            _ = try await GridCommitter().commit(deleted.revert.statements, using: runner)
+            let back = try await session.withLease { connection in
+                try await connection.executeCollecting("SELECT name FROM grid_identity_probe WHERE id = 1")
+            }
+            XCTAssertEqual(back.firstText, "first", "the row is back under the key it had")
+
+            try await session.withLease { cleanup in
+                _ = try await cleanup.executeCollecting("DROP TABLE grid_identity_probe")
             }
         }
     }

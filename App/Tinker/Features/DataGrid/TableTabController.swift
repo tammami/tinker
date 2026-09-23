@@ -940,7 +940,9 @@ public final class TableTabController: DataGridDelegate, WriteLogOwner {
     public func gridStoredColumnWidths() -> [String: Double] { columnWidths }
 
     public func gridDidChangeColumnWidths(_ widths: [String: Double]) {
-        columnWidths = widths
+        // Merged, not replaced: the grid reports the columns it shows, and a hidden column
+        // lost the width it had the moment any other was resized.
+        columnWidths.merge(widths) { _, new in new }
         // Column dragging fires continuously; persist once the user stops.
         saveWidthsTask?.cancel()
         saveWidthsTask = Task { [weak self] in

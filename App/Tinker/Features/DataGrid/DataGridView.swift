@@ -472,10 +472,13 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
 
     func reportColumnWidths() {
         guard let tableView else { return }
+        // Keyed by name, and a query result can repeat one (`SELECT * FROM a JOIN b` has
+        // two `id`s): the first keeps its width rather than the dictionary trapping.
         let widths = Dictionary(
-            uniqueKeysWithValues: tableView.tableColumns
+            tableView.tableColumns
                 .filter { $0.identifier != Self.rowNumberColumnID }
-                .map { ($0.identifier.rawValue, Double($0.width)) })
+                .map { ($0.identifier.rawValue, Double($0.width)) },
+            uniquingKeysWith: { first, _ in first })
         delegate?.gridDidChangeColumnWidths(widths)
     }
 

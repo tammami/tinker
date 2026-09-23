@@ -134,6 +134,27 @@ final class StatementSplitterTests: XCTestCase {
         XCTAssertFalse(statement("DROP TABLE t").isProbablyReadOnly)
     }
 
+    /// A SELECT that locks what it reads, or calls a built-in that changes something, is
+    /// not a read: on production it is held in a transaction until Commit like a write.
+    func testASelectThatLocksOrChangesSomethingIsNotARead() {
+        func statement(_ sql: String, _ dialect: SQLDialect = .postgresql) -> SQLStatement {
+            StatementSplitter.split(sql, dialect: dialect)[0]
+        }
+        XCTAssertFalse(statement("SELECT * FROM t WHERE id = 1 FOR UPDATE").isProbablyReadOnly)
+        XCTAssertFalse(statement("SELECT * FROM t FOR NO KEY UPDATE SKIP LOCKED").isProbablyReadOnly)
+        XCTAssertFalse(statement("select * from t for share").isProbablyReadOnly)
+        XCTAssertFalse(statement("SELECT * FROM t LOCK IN SHARE MODE", .mysql).isProbablyReadOnly)
+        XCTAssertFalse(statement("SELECT nextval('orders_id_seq')").isProbablyReadOnly)
+        XCTAssertFalse(statement("SELECT setval('orders_id_seq', 1)").isProbablyReadOnly)
+        XCTAssertFalse(statement("SELECT pg_terminate_backend(pid) FROM pg_stat_activity").isProbablyReadOnly)
+        XCTAssertFalse(statement("WITH x AS (SELECT 1) SELECT nextval('s') FROM x").isProbablyReadOnly)
+        XCTAssertTrue(statement("SELECT substring(name FROM 1 FOR 3) FROM t").isProbablyReadOnly)
+        XCTAssertTrue(statement("SELECT count(*), max(id) FROM t").isProbablyReadOnly)
+        XCTAssertTrue(statement("SELECT 'nextval(' AS text").isProbablyReadOnly, "a string is not a call")
+        XCTAssertTrue(
+            statement("# nextval(x) for update\nSELECT 1", .mysql).isProbablyReadOnly, "a MySQL comment is a comment")
+    }
+
     func testExplainAnalyzeIsAsMuchOfAWriteAsWhatItExplains() {
         func statement(_ sql: String) -> SQLStatement { StatementSplitter.split(sql, dialect: .postgresql)[0] }
         XCTAssertTrue(statement("EXPLAIN SELECT 1").isProbablyReadOnly)

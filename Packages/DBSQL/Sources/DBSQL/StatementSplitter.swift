@@ -65,8 +65,9 @@ public struct SQLStatement: Sendable, Hashable, Identifiable {
             // `WITH … SELECT … INTO new_table` creates a table as surely as its plain
             // `SELECT … INTO` does.
             return !containsKeyword(in: ["INSERT", "UPDATE", "DELETE", "MERGE", "INTO"], topLevelOnly: false)
+                && !locksRowsOrCallsAWrite
         case "SELECT":
-            return !containsKeyword(in: ["INTO"], topLevelOnly: true)
+            return !containsKeyword(in: ["INTO"], topLevelOnly: true) && !locksRowsOrCallsAWrite
         default:
             return readOnlyKeywords.contains(keyword)
         }
@@ -148,9 +149,46 @@ public struct SQLStatement: Sendable, Hashable, Identifiable {
 
     /// Whether any of `words` appears as a keyword token, outside strings and comments;
     /// with `topLevelOnly`, only outside parentheses.
+    /// True for a SELECT that is not a read however it starts: one that locks the rows it
+    /// reads (`FOR UPDATE`, `FOR SHARE`, MySQL's `LOCK IN SHARE MODE`), whose locks the
+    /// next statement relies on being held, or one that calls a built-in known to change
+    /// something (`nextval`, `setval`, `pg_terminate_backend`…).
+    ///
+    /// A function the user wrote cannot be told apart from a pure one by its name, so
+    /// `SELECT purge_orders()` still reads as a read; only the engines' own are known.
+    var locksRowsOrCallsAWrite: Bool {
+        let tokens = SQLTokenizer.tokenize(text, dialect: dialect).filter {
+            $0.kind != .whitespace && $0.kind != .comment
+        }
+        for (index, token) in tokens.enumerated() where token.kind == .keyword || token.kind == .identifier {
+            let word = token.text.uppercased()
+            guard index + 1 < tokens.count else { break }
+            let next = tokens[index + 1]
+            let nextWord = next.text.uppercased()
+            if word == "FOR", ["UPDATE", "SHARE", "NO", "KEY"].contains(nextWord) { return true }
+            if word == "LOCK", nextWord == "IN" { return true }
+            if next.kind == .punctuation, next.text == "(", Self.changingFunctions.contains(token.text.lowercased()) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Built-in functions that change the database or the server when called: sequences,
+    /// backends, configuration, large objects, advisory locks, other databases.
+    static let changingFunctions: Set<String> = [
+        "nextval", "setval", "pg_terminate_backend", "pg_cancel_backend", "pg_reload_conf",
+        "pg_rotate_logfile", "pg_switch_wal", "pg_create_restore_point", "lo_unlink", "lo_import",
+        "lo_export", "lo_create", "pg_advisory_lock", "pg_advisory_lock_shared", "pg_advisory_xact_lock",
+        "pg_advisory_xact_lock_shared", "pg_try_advisory_lock", "pg_try_advisory_xact_lock", "dblink_exec",
+        "get_lock", "release_lock", "release_all_locks",
+    ]
+
     func containsKeyword(in words: Set<String>, topLevelOnly: Bool) -> Bool {
         var depth = 0
-        for token in SQLTokenizer.tokenize(text, dialect: .postgresql) {
+        // In the statement's own dialect: read as PostgreSQL, a MySQL `#` comment was
+        // scanned as code.
+        for token in SQLTokenizer.tokenize(text, dialect: dialect) {
             switch token.kind {
             case .punctuation:
                 if token.text == "(" { depth += 1 }

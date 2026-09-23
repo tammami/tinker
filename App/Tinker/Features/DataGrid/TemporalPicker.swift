@@ -7,11 +7,18 @@ import SwiftUI
 struct TemporalPickerView: View {
     let kind: DBValueKind
     let text: String
+    /// The column stores an instant (PostgreSQL `timestamptz`, `timetz`): a value picked
+    /// for an empty cell carries the Mac's offset, so it is the time the user meant.
+    var zoneAware = false
     let onApply: (String) -> Void
 
     @State private var date = Date()
     @State private var fraction = ""
     @State private var offset = ""
+    /// Set when the cell's text could not be read, to the stand-in date the calendar then
+    /// shows. Use stays off until something is picked: writing the stand-in would replace
+    /// a value the picker never understood with today.
+    @State private var unreadAt: Date?
 
     private var components: DatePickerComponents {
         switch kind {
@@ -41,6 +48,9 @@ struct TemporalPickerView: View {
                 Button("Use") { onApply(TemporalText.render(date, kind: kind, fraction: fraction, offset: offset)) }
                     .controlSize(.small)
                     .buttonStyle(.borderedProminent)
+                    .disabled(unreadAt == date)
+                    .help(
+                        unreadAt == date ? "The cell's value is not one the calendar can read; pick a date first" : "")
             }
         }
         // In the value's own zone: the text `02:00+07` is parsed and written back in +07,
@@ -56,8 +66,14 @@ struct TemporalPickerView: View {
             date = parts.date
             fraction = parts.fraction
             offset = parts.offset
+            unreadAt = nil
         } else {
-            date = Date()
+            // Nothing of the last value carries over to a stand-in.
+            let now = Date()
+            date = now
+            fraction = ""
+            offset = text.isEmpty && zoneAware && kind != .date ? TemporalText.offsetText(for: .current, at: now) : ""
+            unreadAt = text.isEmpty ? nil : now
         }
     }
 }
@@ -70,6 +86,7 @@ struct TemporalPickerView: View {
 struct CellTemporalEditorView: View {
     let kind: DBValueKind
     let columnName: String
+    var zoneAware = false
     let onCommit: (String) -> Void
     let onCancel: () -> Void
 
@@ -77,11 +94,12 @@ struct CellTemporalEditorView: View {
     @FocusState private var isFocused: Bool
 
     init(
-        kind: DBValueKind, columnName: String, text: String,
+        kind: DBValueKind, columnName: String, text: String, zoneAware: Bool = false,
         onCommit: @escaping (String) -> Void, onCancel: @escaping () -> Void
     ) {
         self.kind = kind
         self.columnName = columnName
+        self.zoneAware = zoneAware
         self.onCommit = onCommit
         self.onCancel = onCancel
         _draft = State(initialValue: text)
@@ -112,7 +130,7 @@ struct CellTemporalEditorView: View {
                 Button("Set") { onCommit(draft) }
                     .controlSize(.small)
             }
-            TemporalPickerView(kind: kind, text: draft) { picked in
+            TemporalPickerView(kind: kind, text: draft, zoneAware: zoneAware) { picked in
                 draft = picked
                 onCommit(picked)
             }

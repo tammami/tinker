@@ -663,13 +663,28 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
     /// browsing an existing one still opens an editor deliberately, with Return or a
     /// double-click.
     func beginEditingIfInsertRow() {
+        let focus = (row: selection.focusRow, column: selection.focusColumn)
+        if let opened = autoOpenedCell, opened != focus { autoOpenedCell = nil }
         guard selection.focusRow < model.displayRowCount,
             Self.opensForTyping(
                 selection: selection, isEditable: model.isEditable, hasEditor: inlineEditor != nil,
                 isPendingInsertRow: model.isPendingInsertRow(selection.focusRow))
         else { return }
+        // A calendar or a list of choices opens by itself once per cell. Closed, it stays
+        // closed until the focus moves on; it used to come straight back on the next
+        // update, and again after every Cancel.
+        if model.columns.indices.contains(focus.column),
+            Self.inlineEditorKind(
+                for: model.columns[focus.column].kind, hasChoices: delegate?.gridChoices(focus.column) != nil) != .text
+        {
+            guard autoOpenedCell == nil else { return }
+            autoOpenedCell = focus
+        }
         beginEditingFocusedCell()
     }
+
+    /// The cell of a new row whose calendar or choice list last opened by itself.
+    private var autoOpenedCell: (row: Int, column: Int)?
 
     /// The rule, apart from the table view so it can be tested: one cell of a row being
     /// added, on an editable grid, with nothing already open.
@@ -1157,6 +1172,7 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         // hosting controller, which owns this view, which owns these closures.
         let view = CellTemporalEditorView(
             kind: meta.kind, columnName: meta.name, text: text,
+            zoneAware: TemporalText.isZoneAware(nativeType: meta.nativeTypeName),
             onCommit: { [weak self, weak popover] picked in
                 popover?.close()
                 guard let self else { return }

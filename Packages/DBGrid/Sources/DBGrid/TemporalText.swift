@@ -92,6 +92,27 @@ public enum TemporalText {
         return TimeZone(secondsFromGMT: sign * (hours * 3600 + minutes * 60))
     }
 
+    /// The offset `zone` is at on `date`, spelled the way PostgreSQL prints one: `+07`,
+    /// or `+05:30` when there are minutes.
+    public static func offsetText(for zone: TimeZone, at date: Date) -> String {
+        let seconds = zone.secondsFromGMT(for: date)
+        let sign = seconds < 0 ? "-" : "+"
+        let hours = abs(seconds) / 3600
+        let minutes = abs(seconds) % 3600 / 60
+        let text = sign + String(format: "%02d", hours)
+        return minutes == 0 ? text : text + String(format: ":%02d", minutes)
+    }
+
+    /// Whether a column stores an instant, so text written without an offset is read in
+    /// the session's time zone rather than the one the user meant. PostgreSQL's type
+    /// names only: its `timestamptz` and `timetz` take an offset in their input, while
+    /// MySQL's TIMESTAMP does only from 8.0.19 and MariaDB's not at all, so those are
+    /// left as they are.
+    public static func isZoneAware(nativeType: String) -> Bool {
+        let type = nativeType.lowercased()
+        return type == "timestamptz" || type == "timetz" || type.contains("with time zone")
+    }
+
     public static func isTemporal(_ kind: DBValueKind) -> Bool {
         kind == .date || kind == .time || kind == .timestamp
     }

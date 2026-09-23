@@ -255,7 +255,10 @@ private struct RowFormField: View {
             // typed and then clicked away from was dropped without a word.
             .onChange(of: isFocused) { _, focused in if !focused { commitIfChanged() } }
         if isPickerShown, isEditable, TemporalText.isTemporal(column.kind) {
-            TemporalPickerView(kind: column.kind, text: draft) { picked in
+            TemporalPickerView(
+                kind: column.kind, text: draft,
+                zoneAware: TemporalText.isZoneAware(nativeType: column.nativeTypeName)
+            ) { picked in
                 draft = picked
                 isPickerShown = false
                 onCommit(picked)

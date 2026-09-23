@@ -4,6 +4,40 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.12] - 2026-09-23
+
+### Changed
+- **A connections backup seals its connections too.** A backup written now carries a sealed
+  copy of the connections and folders beside the passwords, and a restore refuses one whose
+  readable part has been edited — a host pointed elsewhere, TLS turned off. Backups from
+  0.1.10 and 0.1.11 still open.
+- **`SELECT … FOR UPDATE` and friends count as writes.** A SELECT that locks the rows it
+  reads, or calls a built-in that changes something (`nextval`, `setval`,
+  `pg_terminate_backend`…), is held in a transaction on production and refused on a
+  read-only connection, like any other write.
+
+### Fixed
+- **Edits made while a write was on the server are no longer lost or undone wrongly.** An
+  edit made during a Put Back could be left unwritten, and Undo of a quick second edit to the
+  same cell could restore the value from before the first. Writes now run in order, each
+  re-read before the next.
+- Undoing a delete works when the key is `GENERATED ALWAYS AS IDENTITY` (PostgreSQL), and on
+  MySQL a new row's key is taken from the reported number only when the key is the
+  auto-increment column.
+- A query tab gives its connection back after turning a result page or writing an edit,
+  so a few tabs paging through results no longer hold the whole pool.
+- A backup no longer leaves out passwords the Keychain refused to give; it says which. A
+  restore names the connections it could not finish, keeps your folders under "Keep mine",
+  and does not let a SQLite connection create an empty file at a path this Mac lacks.
+- The date picker gives an empty `timestamptz` the Mac's offset, no longer writes today over
+  a value it cannot read, and on a new row stays closed once closed.
+- An enum menu or a foreign-key picker writes to the row it was opened on, even if the page
+  was re-read meanwhile.
+- A hidden column keeps its width when another is resized; a heading sorts again after a
+  column has been dragged.
+- A MySQL `#` comment no longer hides a statement's first keyword from EXPLAIN, the pager or
+  the driver.
+
 ## [0.1.11] - 2026-09-23
 
 ### Changed

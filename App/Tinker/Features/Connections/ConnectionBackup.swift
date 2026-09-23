@@ -22,7 +22,12 @@ struct ConnectionBackupFile: Codable, Sendable {
     static let formatName = "tinker.connections"
     /// The version this build writes. A file from a later version is refused rather than
     /// half-read.
-    static let currentVersion = 1
+    ///
+    /// 1 (0.1.10) sealed the passwords alone, bound to the connections' ids: the hosts,
+    /// users and settings beside them could be edited without the passphrase. 2 seals a
+    /// copy of the connections and folders with the passwords, and a restore refuses a
+    /// file whose readable part no longer matches it. Both are read.
+    static let currentVersion = 2
 
     var format: String
     var version: Int
@@ -55,6 +60,21 @@ struct ConnectionBackupFile: Codable, Sendable {
         var ref: SecretRef
         var value: String
     }
+
+    /// What a version 2 box holds: the passwords, and the connections and folders as they
+    /// were written, so an edit to the readable copy is found once the box is opened.
+    struct SealedContents: Codable, Sendable {
+        var secrets: [StoredSecret]
+        var connections: [ConnectionConfig]
+        var groups: [BackupGroup]
+    }
+
+    /// The two fields read before anything else, so a file from a newer version is told
+    /// apart from one that is not a backup at all.
+    struct Header: Decodable {
+        var format: String?
+        var version: Int?
+    }
 }
 
 /// What can go wrong reading a backup, in words that say what to do about it.
@@ -65,8 +85,14 @@ enum ConnectionBackupError: LocalizedError, Equatable {
     case emptyPassphrase
     case nothingToBackUp
     /// Readable, but not something this app would have written: key-derivation settings
-    /// out of range, or a connection pointing at a Keychain item that is not its own.
+    /// out of range, a connection pointing at a Keychain item that is not its own, or
+    /// connections that are not the ones sealed with the passwords.
     case damaged
+    /// Larger than any set of connections could be.
+    case tooLarge
+    /// The Keychain refused to give up these connections' secrets (a denied prompt), so
+    /// a backup would have left their passwords out without saying so.
+    case secretsUnreadable([String])
 
     var errorDescription: String? {
         switch self {
@@ -82,6 +108,11 @@ enum ConnectionBackupError: LocalizedError, Equatable {
             "There are no connections to back up yet."
         case .damaged:
             "This backup is damaged or has been altered, so nothing in it is restored."
+        case .tooLarge:
+            "This file is far larger than a connections backup could be, so it is not opened."
+        case let .secretsUnreadable(names):
+            "The Keychain did not give up the passwords of \(names.joined(separator: ", ")), "
+                + "so no backup was written. Allow Tinker when macOS asks, then try again."
         }
     }
 }
@@ -106,16 +137,22 @@ actor ConnectionBackupCodec {
     /// could trap (a negative number, or one past `UInt32`) or hold the restore for an
     /// hour; this build writes 600,000.
     private static let acceptedRounds = 100_000 ... 10_000_000
+    /// Thousands of connections come to a few megabytes; a file past this is not one.
+    static let largestFile = 32 * 1024 * 1024
 
     // MARK: - Writing
 
     /// Seals `secrets` under `passphrase` and returns the file's bytes.
+    ///
+    /// `version` is for tests: an older version is written the way the build that wrote
+    /// it did, so the reading side can be shown to still open it.
     func write(
         connections: [ConnectionConfig],
         groups: [ConnectionBackupFile.BackupGroup],
         secrets: [ConnectionBackupFile.StoredSecret],
         passphrase: String,
-        app: String
+        app: String,
+        version: Int = ConnectionBackupFile.currentVersion
     ) throws -> Data {
         guard !connections.isEmpty else { throw ConnectionBackupError.nothingToBackUp }
         guard !passphrase.isEmpty else { throw ConnectionBackupError.emptyPassphrase }
@@ -127,16 +164,19 @@ actor ConnectionBackupCodec {
         // A salt of zeros would be the same for every backup; better no file than that.
         guard random == errSecSuccess else { throw ConnectionBackupError.damaged }
         let key = Self.derive(passphrase: passphrase, salt: salt, rounds: Self.rounds)
-        let plain = try Self.encoder.encode(secrets)
+        let plain =
+            version >= 2
+            ? try Self.encoder.encode(
+                ConnectionBackupFile.SealedContents(secrets: secrets, connections: connections, groups: groups))
+            : try Self.encoder.encode(secrets)
         let sealed = try AES.GCM.seal(
             plain, using: key,
-            authenticating: Self.authenticatedHeader(
-                version: ConnectionBackupFile.currentVersion, connections: connections)
+            authenticating: Self.authenticatedHeader(version: version, connections: connections)
         )
         guard let box = sealed.combined else { throw ConnectionBackupError.notABackup }
         let file = ConnectionBackupFile(
             format: ConnectionBackupFile.formatName,
-            version: ConnectionBackupFile.currentVersion,
+            version: version,
             createdAt: Date(),
             app: app,
             connections: connections,
@@ -152,11 +192,17 @@ actor ConnectionBackupCodec {
     /// Parses the file without needing the passphrase, which is what lets the restore
     /// sheet say what is inside before asking for one.
     nonisolated func read(_ data: Data) throws -> ConnectionBackupFile {
-        guard let file = try? Self.decoder.decode(ConnectionBackupFile.self, from: data),
-            file.format == ConnectionBackupFile.formatName
+        guard data.count <= Self.largestFile else { throw ConnectionBackupError.tooLarge }
+        // Format and version first: a file from a newer Tinker may carry a field or a case
+        // this one cannot decode, and should say "newer", not "not a backup".
+        guard let header = try? Self.decoder.decode(ConnectionBackupFile.Header.self, from: data),
+            header.format == ConnectionBackupFile.formatName, let version = header.version
         else { throw ConnectionBackupError.notABackup }
-        guard file.version <= ConnectionBackupFile.currentVersion else {
-            throw ConnectionBackupError.tooNew(file.version)
+        guard version <= ConnectionBackupFile.currentVersion else {
+            throw ConnectionBackupError.tooNew(version)
+        }
+        guard let file = try? Self.decoder.decode(ConnectionBackupFile.self, from: data) else {
+            throw ConnectionBackupError.notABackup
         }
         guard file.secrets.kdf == Self.kdfName, Self.acceptedRounds.contains(file.secrets.rounds),
             file.secrets.salt.count >= 16
@@ -186,36 +232,52 @@ actor ConnectionBackupCodec {
     }
 
     /// Opens the sealed passwords. The header is authenticated as well as the box, so a
-    /// secrets blob lifted from another backup cannot be pasted into this one.
+    /// secrets blob lifted from another backup cannot be pasted into this one; from
+    /// version 2 the box also holds the connections and folders, and a readable part that
+    /// no longer matches them is refused as altered.
     func secrets(in file: ConnectionBackupFile, passphrase: String) throws -> [ConnectionBackupFile.StoredSecret] {
         guard !passphrase.isEmpty else { throw ConnectionBackupError.emptyPassphrase }
         let key = Self.derive(passphrase: passphrase, salt: file.secrets.salt, rounds: file.secrets.rounds)
+        let plain: Data
         do {
             let sealed = try AES.GCM.SealedBox(combined: file.secrets.box)
-            let plain = try AES.GCM.open(
+            plain = try AES.GCM.open(
                 sealed, using: key,
                 authenticating: Self.authenticatedHeader(version: file.version, connections: file.connections)
             )
-            return try Self.decoder.decode([ConnectionBackupFile.StoredSecret].self, from: plain)
         } catch {
-            // A wrong passphrase and a tampered file fail the same way, and the person can
+            // A wrong passphrase and a tampered box fail the same way, and the person can
             // only act on one of them.
             throw ConnectionBackupError.wrongPassphrase
         }
+        guard file.version >= 2 else {
+            guard let secrets = try? Self.decoder.decode([ConnectionBackupFile.StoredSecret].self, from: plain) else {
+                throw ConnectionBackupError.damaged
+            }
+            return secrets
+        }
+        guard let contents = try? Self.decoder.decode(ConnectionBackupFile.SealedContents.self, from: plain),
+            contents.connections == file.connections, contents.groups == file.groups
+        else { throw ConnectionBackupError.damaged }
+        return contents.secrets
     }
 
     // MARK: - The pieces a backup is made of
 
     /// Every secret reference a connection carries: its password, its SSH password or key
     /// passphrase, and the same again for every jump host behind it.
+    ///
+    /// Each once: the connection editor gives a jump host the same reference as the host
+    /// in front of it, and counting it twice wrote it twice and overstated the count.
     nonisolated static func secretRefs(of config: ConnectionConfig) -> [SecretRef] {
         var refs: [SecretRef] = []
-        if let passwordRef = config.passwordRef { refs.append(passwordRef) }
+        func add(_ ref: SecretRef) { if !refs.contains(ref) { refs.append(ref) } }
+        if let passwordRef = config.passwordRef { add(passwordRef) }
         var ssh = config.ssh
         while let current = ssh {
             switch current.auth {
-            case let .password(ref): refs.append(ref)
-            case let .privateKey(_, passphrase): if let passphrase { refs.append(passphrase) }
+            case let .password(ref): add(ref)
+            case let .privateKey(_, passphrase): if let passphrase { add(passphrase) }
             case .agent: break
             }
             ssh = current.jumpHost?.value

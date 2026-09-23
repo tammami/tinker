@@ -1,6 +1,7 @@
 import DBCore
 import DBGrid
 import DBSQL
+import DBSQLite
 import DBStore
 import DBTunnel
 import XCTest
@@ -1073,7 +1074,9 @@ final class ConnectionBackupTests: XCTestCase {
         let codec = ConnectionBackupCodec()
         let foreignService = try await edited { json in
             var connections = json["connections"] as? [[String: Any]] ?? []
-            connections[0]["passwordRef"] = ["service": "com.example.other-app", "account": "\(postgres.uuidString).password"]
+            connections[0]["passwordRef"] = [
+                "service": "com.example.other-app", "account": "\(postgres.uuidString).password",
+            ]
             json["connections"] = connections
         }
         XCTAssertThrowsError(try codec.read(foreignService)) { error in
@@ -1172,6 +1175,67 @@ final class ConnectionBackupTests: XCTestCase {
             ],
             "the jump host's key passphrase is the third")
         XCTAssertTrue(ConnectionBackupCodec.secretRefs(of: connections()[0]).count == 1)
+
+        // The editor gives a jump host the host's own reference; it is one secret.
+        var shared = connections()[1]
+        let hostRef = SecretRef.forConnection(mysql, field: SecretField.sshPassword.rawValue)
+        shared.ssh = SSHConfig(
+            host: "gateway.example", port: 22, user: "ops", auth: .password(hostRef),
+            jumpHost: SSHConfig(host: "bastion.example", port: 22, user: "ops", auth: .password(hostRef)))
+        XCTAssertEqual(ConnectionBackupCodec.secretRefs(of: shared).filter { $0 == hostRef }.count, 1)
+    }
+
+    /// A backup written by 0.1.10 (format 1) still opens and gives back its passwords.
+    func testABackupFromTheFirstFormatStillOpens() async throws {
+        let codec = ConnectionBackupCodec()
+        let configs = connections()
+        let data = try await codec.write(
+            connections: configs, groups: groups, secrets: secrets(for: configs),
+            passphrase: "correct horse battery staple", app: "Tinker 0.1.10 (19)", version: 1)
+        let file = try codec.read(data)
+        XCTAssertEqual(file.version, 1)
+        let opened = try await codec.secrets(in: file, passphrase: "correct horse battery staple")
+        XCTAssertEqual(opened.count, 4)
+    }
+
+    /// From format 2 the connections are sealed with the passwords: a host edited in the
+    /// readable part — pointing the production connection somewhere else — is refused
+    /// once the passphrase opens the box, and nothing is restored.
+    func testAnEditedConnectionIsRefusedOnceTheBoxIsOpened() async throws {
+        let codec = ConnectionBackupCodec()
+        let data = try await edited { json in
+            var connections = json["connections"] as? [[String: Any]] ?? []
+            connections[1]["host"] = "attacker.example"
+            json["connections"] = connections
+        }
+        let file = try codec.read(data)
+        XCTAssertEqual(file.connections[1].host, "attacker.example", "the readable part reads as edited")
+        do {
+            _ = try await codec.secrets(in: file, passphrase: "correct horse battery staple")
+            XCTFail("an edited backup must not give up its passwords")
+        } catch let error as ConnectionBackupError {
+            XCTAssertEqual(error, .damaged)
+        }
+    }
+
+    /// A file from a newer Tinker may hold what this one cannot decode; it says "newer",
+    /// not "not a backup".
+    func testANewerFileSaysSoEvenWhenItCannotBeDecoded() {
+        let newer = Data(#"{"format":"tinker.connections","version":99,"connections":"something new"}"#.utf8)
+        XCTAssertThrowsError(try ConnectionBackupCodec().read(newer)) { error in
+            XCTAssertEqual(error as? ConnectionBackupError, .tooNew(99))
+        }
+    }
+
+    /// A SQLite connection set to create its file arrives without that setting: at a path
+    /// that does not exist on this Mac it would make an empty database instead of failing.
+    func testARestoredSQLiteConnectionDoesNotCreateItsFile() {
+        var sqlite = ConnectionConfig(
+            name: "Local file", dialect: .sqlite, host: "/Users/someone/app.sqlite", port: 0, user: "")
+        sqlite.options[SQLiteDriver.OptionKey.createIfMissing] = "true"
+        XCTAssertNil(WorkspaceController.forThisMac(sqlite).options[SQLiteDriver.OptionKey.createIfMissing])
+        let postgres = connections()[0]
+        XCTAssertEqual(WorkspaceController.forThisMac(postgres), postgres)
     }
 
     /// The name a backup is offered under carries its date, so a folder of them sorts.

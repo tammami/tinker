@@ -15,8 +15,9 @@ struct ConnectionRestoreRequest: Identifiable, Sendable {
 /// written until the person has one they can repeat.
 struct BackUpConnectionsSheet: View {
     let connectionCount: Int
-    /// Runs the save panel and writes the file, reporting where it went.
-    let onBackUp: (String) async -> Result<String, any Error>
+    /// Runs the save panel and writes the file, reporting where it went; nil when the
+    /// panel was cancelled and nothing was written.
+    let onBackUp: (String) async -> Result<String?, any Error>
     let onDismiss: () -> Void
 
     @State private var passphrase = ""
@@ -66,12 +67,15 @@ struct BackUpConnectionsSheet: View {
             Spacer()
             Button(summary == nil ? "Cancel" : "Done", role: summary == nil ? .cancel : nil, action: onDismiss)
                 .keyboardShortcut(.cancelAction)
+                // Closing does not stop the work under way; it only hides what it did.
+                .disabled(isWorking)
             if summary == nil {
                 Button("Choose Location…") { backUp() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canBackUp || isWorking)
             }
         }
+        .interactiveDismissDisabled(isWorking)
     }
 
     private func backUp() {
@@ -79,7 +83,8 @@ struct BackUpConnectionsSheet: View {
         failure = nil
         Task {
             switch await onBackUp(passphrase) {
-            case let .success(message): summary = message
+            // A cancelled save panel wrote nothing; the sheet stays for another try.
+            case let .success(message): if let message { summary = message }
             case let .failure(error):
                 failure = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
             }
@@ -159,12 +164,15 @@ struct RestoreConnectionsSheet: View {
             Spacer()
             Button(summary == nil ? "Cancel" : "Done", role: summary == nil ? .cancel : nil, action: onDismiss)
                 .keyboardShortcut(.cancelAction)
+                // Closing does not stop the work under way; it only hides what it did.
+                .disabled(isWorking)
             if summary == nil {
                 Button("Restore") { restore() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(passphrase.isEmpty || isWorking || plan.isEmpty)
             }
         }
+        .interactiveDismissDisabled(isWorking)
     }
 
     /// What the buttons are about to do, in the same words the result will use.

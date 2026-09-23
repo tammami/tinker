@@ -232,6 +232,9 @@ public final class WorkspaceModel {
     /// the other holds a file that has been opened and is waiting to be restored.
     public var isBackUpConnectionsPresented = false
     var pendingConnectionRestore: ConnectionRestoreRequest?
+    /// True while a restore is writing, so another backup opened meanwhile does not
+    /// replace its sheet.
+    var isRestoringConnections = false
     public var isSettingsPresented = false
     /// On by default: a table tab is for finding rows, and a filter behind a shortcut is
     /// a filter most people never find.

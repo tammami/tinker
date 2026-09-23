@@ -127,6 +127,9 @@ final class StatementSplitterTests: XCTestCase {
         XCTAssertTrue(statement("SELECT 1").isProbablyReadOnly)
         XCTAssertTrue(statement("WITH x AS (SELECT 1) SELECT * FROM x").isProbablyReadOnly)
         XCTAssertFalse(statement("WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x").isProbablyReadOnly)
+        XCTAssertFalse(
+            statement("WITH x AS (SELECT 1) SELECT * INTO copy FROM x").isProbablyReadOnly,
+            "a WITH that ends in SELECT INTO creates a table")
         XCTAssertFalse(statement("UPDATE t SET a = 1").isProbablyReadOnly)
         XCTAssertFalse(statement("DROP TABLE t").isProbablyReadOnly)
     }

@@ -62,7 +62,9 @@ public struct SQLStatement: Sendable, Hashable, Identifiable {
             guard let explained = explainedStatement else { return true }
             return explained.runs ? explained.statement.isProbablyReadOnly : true
         case "WITH":
-            return !containsKeyword(in: ["INSERT", "UPDATE", "DELETE", "MERGE"], topLevelOnly: false)
+            // `WITH … SELECT … INTO new_table` creates a table as surely as its plain
+            // `SELECT … INTO` does.
+            return !containsKeyword(in: ["INSERT", "UPDATE", "DELETE", "MERGE", "INTO"], topLevelOnly: false)
         case "SELECT":
             return !containsKeyword(in: ["INTO"], topLevelOnly: true)
         default:

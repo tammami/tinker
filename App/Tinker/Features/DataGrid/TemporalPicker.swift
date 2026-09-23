@@ -43,6 +43,10 @@ struct TemporalPickerView: View {
                     .buttonStyle(.borderedProminent)
             }
         }
+        // In the value's own zone: the text `02:00+07` is parsed and written back in +07,
+        // and a calendar in the Mac's zone would show — and pick — the day it is here
+        // rather than the day the cell says.
+        .environment(\.timeZone, TemporalText.zone(for: offset) ?? .current)
         .onAppear { load() }
         .onChange(of: text) { _, _ in load() }
     }

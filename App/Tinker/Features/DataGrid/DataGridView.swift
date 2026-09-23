@@ -1150,6 +1150,7 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         let meta = model.columns[column]
         let current = model.value(row: row, column: column)
         let text = current.map { $0.isNull ? "" : ($0.text ?? "") } ?? ""
+        let identity = model.rowIdentity(row)
         let popover = NSPopover()
         popover.behavior = .transient
         // Weakly captured, as the reference picker's closures are: the popover owns the
@@ -1158,8 +1159,14 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
             kind: meta.kind, columnName: meta.name, text: text,
             onCommit: { [weak self, weak popover] picked in
                 popover?.close()
-                self?.delegate?.gridDidCommitEdit(row: row, column: column, text: picked)
-                self?.takeFocusBack()
+                guard let self else { return }
+                // ↩ in the field it opened with is closing it, not an edit: the text the
+                // server gave back would otherwise be written over itself — a pointless
+                // UPDATE, which MySQL answers with 0 rows and the commit then refuses.
+                if picked != text, let target = currentRow(of: identity, openedAt: row) {
+                    delegate?.gridDidCommitEdit(row: target, column: column, text: picked)
+                }
+                takeFocusBack()
             },
             onCancel: { [weak self, weak popover] in
                 popover?.close()
@@ -1174,6 +1181,18 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
     }
 
     private var temporalPopover: NSPopover?
+
+    /// Where the row a popover was opened on is now, or nil when it has gone.
+    ///
+    /// The page can be re-read while a popover is open — an earlier write landing, a
+    /// trigger re-sorting the rows — and a position taken at opening would then name
+    /// another row, whose own key the write would find. A row with no identity (one
+    /// being added, or a grid that cannot be written) keeps its position.
+    private func currentRow(of identity: RowIdentity?, openedAt row: Int) -> Int? {
+        guard let identity else { return row < model.displayRowCount ? row : nil }
+        if row < model.displayRowCount, model.rowIdentity(row) == identity { return row }
+        return (0 ..< model.displayRowCount).first { model.rowIdentity($0) == identity }
+    }
 
     /// Returns the keyboard to the grid after a popover editor closes, so the arrow keys
     /// move the selection again rather than landing on a view that has gone.

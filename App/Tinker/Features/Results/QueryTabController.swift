@@ -92,6 +92,13 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     /// given back to the session it was taken from, whatever the tab has been pointed at
     /// since.
     private var heldSession: ConnectionSession?
+    /// What the held connection was last pointed at, so the tab's choice is sent again
+    /// only when it changed. Sent before every statement, it undid what a script had just
+    /// done for itself: in `USE staging; DELETE FROM t` the DELETE ran in the database the
+    /// picker named, not in `staging`.
+    @ObservationIgnored private var heldSessionDatabase: String?
+    /// Set when a statement pointed the session elsewhere, so the list of tables follows.
+    @ObservationIgnored private var sessionMovedByStatement = false
     /// Tables of the schema or database the tab resolves names against, for autocomplete.
     private var completionTables: [CompletionCandidate] = []
     /// The other schemas (PostgreSQL) or databases (MySQL), offered as `name.` prefixes.
@@ -431,6 +438,45 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         // filling them was deferred while the tab sat unused. After the lease has gone
         // back, so reading the list does not queue behind the statement's own connection.
         await loadSessionChoicesIfNeeded(retryAfterFailure: true)
+        if sessionMovedByStatement {
+            sessionMovedByStatement = false
+            await loadCompletionSources()
+        }
+    }
+
+    /// The database (MySQL) or schema (PostgreSQL) a statement points the session at,
+    /// when it does exactly that: `USE name`, or `SET search_path` to one schema. A path
+    /// of several schemas, `SET LOCAL`, or anything else is nil — the picker cannot name
+    /// it, and the held connection keeps what the statement set without being told.
+    static func sessionTarget(of sql: String, dialect: SQLDialect) -> String? {
+        var text = sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        while text.hasSuffix(";") { text = String(text.dropLast()).trimmingCharacters(in: .whitespaces) }
+        let pattern: String
+        switch dialect {
+        case .mysql:
+            pattern = #"^USE\s+(?:`((?:[^`]|``)+)`|([A-Za-z0-9_$]+))$"#
+        case .postgresql:
+            pattern =
+                #"^SET\s+(?:SESSION\s+)?search_path\s*(?:TO|=)\s*(?:"((?:[^"]|"")+)"|([A-Za-z_][A-Za-z0-9_$]*)|'([^',"]+)')$"#
+        case .sqlite:
+            return nil
+        }
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+            let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text))
+        else { return nil }
+        let groups = (1 ..< match.numberOfRanges).compactMap { index -> (Int, String)? in
+            guard let range = Range(match.range(at: index), in: text) else { return nil }
+            return (index, String(text[range]))
+        }
+        guard let (group, name) = groups.first else { return nil }
+        switch (dialect, group) {
+        case (.mysql, 1): return name.replacingOccurrences(of: "``", with: "`")
+        case (.postgresql, 1): return name.replacingOccurrences(of: "\"\"", with: "\"")
+        // An unquoted PostgreSQL name is folded to lower case, as the server folds it;
+        // `DEFAULT` is the server's own path, not a schema of that name.
+        case (.postgresql, 2): return name.lowercased() == "default" ? nil : name.lowercased()
+        default: return name
+        }
     }
 
     /// Runs one statement and appends its result. Returns true when it failed.
@@ -582,6 +628,14 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
                     sql: SQLRedactor.redactSecrets(statement.text), startedAt: startedAt, duration: duration,
                     rowCount: Int64(rowTotal), succeeded: true
                 ))
+            // `USE staging` or `SET search_path TO staging` moved the session: the tab
+            // follows it, so the picker and the status bar name where the next statement
+            // runs, and a later lease is pointed there too.
+            if let moved = Self.sessionTarget(of: statement.text, dialect: dialect), moved != sessionDatabase {
+                sessionDatabase = moved
+                heldSessionDatabase = moved
+                sessionMovedByStatement = true
+            }
             isInTransaction = await connection.isInTransaction
             bumpRevision()
             return false
@@ -614,6 +668,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         self.heldLease = nil
         heldSession = nil
         heldConnection = nil
+        heldSessionDatabase = nil
         isInTransaction = false
         statusText =
             hadOpenTransaction
@@ -962,7 +1017,10 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         let opensTransaction = Self.opensTransaction(
             autoCommit: autoCommit, isProduction: isProduction, statementWrites: writes)
         if let heldConnection {
-            try await applySessionDatabase(on: heldConnection)
+            if heldSessionDatabase != sessionDatabase {
+                try await applySessionDatabase(on: heldConnection)
+                heldSessionDatabase = sessionDatabase
+            }
             await session.applyReadOnlyGuard(to: heldConnection)
             // Auto-commit was turned off after this connection was taken, or this is the
             // first write on a production connection: either way the transaction starts
@@ -976,6 +1034,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         }
         let (lease, connection) = try await session.lease()
         try await applySessionDatabase(on: connection)
+        heldSessionDatabase = sessionDatabase
         // The lease is kept either way — released by `releaseHeldConnection` when the tab
         // closes — so that COMMIT reaches the same connection the statements ran on.
         heldLease = lease
@@ -1331,6 +1390,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         do {
             if let heldConnection {
                 try await applySessionDatabase(on: heldConnection)
+                heldSessionDatabase = name
             } else {
                 // Held for the whole switch. The `defer` that released the lease used to sit
                 // inside this branch, so the `USE` ran on a connection already back in the
@@ -1526,6 +1586,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         self.heldLease = nil
         self.heldSession = nil
         heldConnection = nil
+        heldSessionDatabase = nil
         // Whatever the connection held is gone with it, including a rollback that could
         // not be sent because the connection was already lost: the pool rolls back or
         // drops it. Left set, the badge would offer Commit for a transaction that no

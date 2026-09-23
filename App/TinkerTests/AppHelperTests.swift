@@ -343,6 +343,24 @@ final class TransactionOpeningTests: XCTestCase {
         XCTAssertFalse(opens(autoCommit: true, production: true, writes: false))
     }
 
+    /// A script that moves its own session keeps it: the tab follows `USE` and a
+    /// one-schema `search_path`, and leaves anything it cannot name alone.
+    func testTheStatementsThatMoveTheSessionAreRecognised() {
+        func target(_ sql: String, _ dialect: SQLDialect) -> String? {
+            QueryTabController.sessionTarget(of: sql, dialect: dialect)
+        }
+        XCTAssertEqual(target("USE staging", .mysql), "staging")
+        XCTAssertEqual(target("use `odd``name`;", .mysql), "odd`name")
+        XCTAssertNil(target("USE staging", .postgresql))
+        XCTAssertNil(target("SELECT 1", .mysql))
+        XCTAssertEqual(target("SET search_path TO Staging", .postgresql), "staging", "folded, as the server folds it")
+        XCTAssertEqual(target("set search_path = \"Mixed\";", .postgresql), "Mixed")
+        XCTAssertEqual(target("SET SESSION search_path TO 'audit'", .postgresql), "audit")
+        XCTAssertNil(target("SET search_path TO staging, public", .postgresql), "a path the picker cannot name")
+        XCTAssertNil(target("SET LOCAL search_path TO staging", .postgresql), "gone at the end of the transaction")
+        XCTAssertNil(target("SET search_path TO DEFAULT", .postgresql))
+    }
+
     /// A put-back commits as it lands and is logged as done. Inside a transaction it would
     /// be logged before anything was committed, so it waits; beside a running statement
     /// it would share the connection.

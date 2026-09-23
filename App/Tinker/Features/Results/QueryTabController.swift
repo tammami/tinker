@@ -855,7 +855,36 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
                 self?.bumpRevision()
             }
         )
+        releaseWhenIdle(after: task)
         return task
+    }
+
+    /// Page reads under way on the held connection.
+    @ObservationIgnored private var pageReads = 0
+
+    /// Gives the lease back once nothing needs it: no transaction to keep, and no
+    /// statement, write or page read on it. A page change or a write used to take a lease
+    /// and keep it until the next run, so a few tabs paging through results held the
+    /// whole pool and the sidebar waited on them (ADR-0057).
+    private func releaseIfIdle() async {
+        guard heldLease != nil, pageReads == 0, !isRunning, !isWritingEdits, !isInTransaction else { return }
+        await releaseHeldConnection()
+    }
+
+    /// The same, once a queue of writes has finished.
+    private func releaseWhenIdle(after task: Task<Void, Never>) {
+        Task { [weak self] in
+            await task.value
+            await self?.releaseIfIdle()
+        }
+    }
+
+    /// Runs a read of result pages, then gives the lease back if nothing else needs it.
+    private func readingPages(_ body: () async -> Void) async {
+        pageReads += 1
+        await body()
+        pageReads -= 1
+        await releaseIfIdle()
     }
 
     /// A new row goes when the user leaves it; one left untouched holds nothing and is
@@ -946,9 +975,11 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
 
     /// Re-reads every paged result, so rows show what the server holds now.
     private func reloadPagedResults() async {
-        for result in results {
-            guard let grid = result.grid, grid.isPaged else { continue }
-            await grid.reload()
+        await readingPages {
+            for result in results {
+                guard let grid = result.grid, grid.isPaged else { continue }
+                await grid.reload()
+            }
         }
         bumpRevision()
     }
@@ -989,7 +1020,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
             bumpRevision()
         }
         // Pending edits survive the page change: they are keyed by row identity (ADR-0047).
-        await move()
+        await readingPages { await move() }
     }
 
     public func goToFirstPage() async { await goToPage(0) }
@@ -999,7 +1030,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     /// Jumping to the end counts the rows, the one place a `COUNT` over the query is worth it.
     public func goToLastPage() async {
         guard let result = selectedResult, let grid = result.grid, grid.isPaged else { return }
-        let total = await grid.exactRowCount()
+        var total: Int64?
+        await readingPages { total = await grid.exactRowCount() }
         result.exactTotal = total
         guard let total, total > 0 else { return }
         await goToPage(Int((total - 1) / Int64(grid.pageSize)))
@@ -2066,7 +2098,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     /// or beside a statement on the tab's held connection, and `isWritingEdits` is true
     /// while it is on the wire.
     private func enqueueRevert(_ record: WriteRecord) {
-        writes.enqueue(
+        let task = writes.enqueue(
             .everything,
             kind: "revert \(record.id)",
             hasPending: { [weak self] _ in
@@ -2077,6 +2109,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
             perform: { [weak self] _ in await self?.performRevert(record) ?? false },
             afterDrain: { [weak self] in await self?.reloadPagedResults() }
         )
+        releaseWhenIdle(after: task)
     }
 
     @discardableResult

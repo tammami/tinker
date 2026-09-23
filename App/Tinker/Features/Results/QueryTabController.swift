@@ -24,7 +24,12 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     public var selection = GridSelection()
     public private(set) var revision = 0
     public var autoCommit = true
-    public var isInTransaction = false
+    public var isInTransaction = false {
+        // A transaction that has ended — Commit, Rollback, a COMMIT typed as a statement,
+        // MySQL's implicit commit on DDL, a lost connection — takes its writes with it; the
+        // next one starts empty rather than inheriting the louder badge.
+        didSet { if !isInTransaction { transactionHasWrites = false } }
+    }
     /// Whether the open transaction has anything to commit.
     ///
     /// A transaction held because auto-commit is off starts empty: every statement joins
@@ -1458,6 +1463,11 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         self.heldLease = nil
         self.heldSession = nil
         heldConnection = nil
+        // Whatever the connection held is gone with it, including a rollback that could
+        // not be sent because the connection was already lost: the pool rolls back or
+        // drops it. Left set, the badge would offer Commit for a transaction that no
+        // longer exists, and the next run would keep a lease for it.
+        isInTransaction = false
     }
 
     private func startTimer() {

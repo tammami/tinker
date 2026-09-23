@@ -288,7 +288,8 @@ public struct QueryTabView: View {
                 }
                 if let undoable = controller.writeLog.undoable, undoable.id == latest.id {
                     Button("Undo") { controller.revert(undoable) }
-                        .help("Put back what this write replaced (⌘Z)")
+                        .disabled(controller.putBackRefusal != nil)
+                        .help(controller.putBackRefusal ?? "Put back what this write replaced (⌘Z)")
                 }
             }
 

@@ -68,7 +68,8 @@ struct WriteLogPopover: View {
             if record.canRevert {
                 Button("Put Back") { owner.revert(record) }
                     .controlSize(.small)
-                    .disabled(owner.isWritingNow)
+                    .disabled(owner.isWritingNow || owner.putBackRefusal != nil)
+                    .help(owner.putBackRefusal ?? "Put back what this write replaced")
             }
         }
         .padding(.horizontal, DesignTokens.Spacing.md)

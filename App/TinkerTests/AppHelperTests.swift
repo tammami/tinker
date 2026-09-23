@@ -343,6 +343,26 @@ final class TransactionOpeningTests: XCTestCase {
         XCTAssertFalse(opens(autoCommit: true, production: true, writes: false))
     }
 
+    /// A put-back commits as it lands and is logged as done. Inside a transaction it would
+    /// be logged before anything was committed, so it waits; beside a running statement
+    /// it would share the connection.
+    func testAWriteIsNotPutBackInsideATransactionOrBesideARun() async {
+        let store = NSTemporaryDirectory() + "tinker-putback-\(UUID().uuidString).sqlite"
+        defer { try? FileManager.default.removeItem(atPath: store) }
+        let environment = AppEnvironment(secrets: EphemeralSecretStore(), storePath: store)
+        await environment.load()
+        let controller = QueryTabController(connectionID: UUID(), dialect: .postgresql, environment: environment)
+        XCTAssertNil(controller.putBackRefusal)
+        controller.isInTransaction = true
+        XCTAssertNotNil(controller.putBackRefusal)
+        controller.isInTransaction = false
+        controller.autoCommit = false
+        XCTAssertNotNil(controller.putBackRefusal)
+        controller.autoCommit = true
+        controller.isRunning = true
+        XCTAssertNotNil(controller.putBackRefusal)
+    }
+
     /// A write on production still waits for Commit, which is what the badge promises.
     func testAWriteOnProductionIsHeldUntilItIsCommitted() {
         XCTAssertTrue(opens(autoCommit: true, production: true, writes: true))

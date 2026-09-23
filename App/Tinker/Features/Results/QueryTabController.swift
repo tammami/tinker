@@ -1940,13 +1940,37 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     }
 
     public func gridCanUndo() -> Bool {
-        !isWritingEdits && ((selectedResult?.grid?.canUndo ?? false) || writeLog.undoable != nil)
+        !isWritingEdits
+            && ((selectedResult?.grid?.canUndo ?? false) || (writeLog.undoable != nil && putBackRefusal == nil))
     }
 
     /// What this tab has written through its result grids, and the way back from each.
     public let writeLog = WriteLog()
 
     public var isWritingNow: Bool { isWritingEdits }
+
+    /// Why a write cannot be put back right now, or nil when it can.
+    ///
+    /// A put-back is a write of its own that commits as it lands, and is logged as done.
+    /// Inside a transaction it would join it under a savepoint and be marked done before
+    /// anything was committed — a Rollback would then bring the write back while the log
+    /// said it was gone. Beside a running statement it would share the held connection.
+    public var putBackRefusal: String? {
+        if isBusyOnConnection { return "Wait for the running statement to finish before putting a write back." }
+        if isProduction {
+            return "A production tab holds every write until Commit, so a write is not put back here; "
+                + "edit the rows again instead."
+        }
+        if isInTransaction {
+            return "Commit or roll back this tab's transaction first: a write put back inside it "
+                + "would only stay put back if the transaction were committed."
+        }
+        if !autoCommit {
+            return "Turn auto-commit on to put a write back: with it off, the put-back would wait "
+                + "in a transaction for a Commit."
+        }
+        return nil
+    }
 
     /// Takes back the newest write that still can be.
     public func revertLastWrite() {
@@ -1955,17 +1979,15 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     }
 
     /// Runs the statements that put one write back, with the same one-row checks a commit
-    /// uses. On a production connection it asks first, as every other write does.
+    /// uses. Never on a production connection, which holds every write in a transaction
+    /// until Commit: see ``putBackRefusal``.
     public func revert(_ record: WriteRecord) {
-        guard record.canRevert, !isWritingEdits else { return }
-        guard isProduction, let confirm, let config else {
-            enqueueRevert(record)
+        guard record.canRevert else { return }
+        if let putBackRefusal {
+            statusText = putBackRefusal
             return
         }
-        confirm(
-            GridEditPrompts.revertWrite(summary: record.summary, table: config.name) { [weak self] in
-                self?.enqueueRevert(record)
-            })
+        enqueueRevert(record)
     }
 
     /// Through the same gate a commit goes through, so a revert never runs beside a write

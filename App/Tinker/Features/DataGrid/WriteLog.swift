@@ -56,7 +56,15 @@ public protocol WriteLogOwner: AnyObject, Observable {
     var writeLog: WriteLog { get }
     /// True while a write is on the server, when nothing may be taken back.
     var isWritingNow: Bool { get }
+    /// Why nothing may be taken back right now for another reason, in the user's words.
+    var putBackRefusal: String? { get }
     func revert(_ record: WriteRecord)
+}
+
+extension WriteLogOwner {
+    /// A table tab writes each put-back on a connection of its own, so only a write on
+    /// the server holds it up.
+    public var putBackRefusal: String? { nil }
 }
 
 /// What a tab has written since it was opened, newest first.

@@ -4,6 +4,19 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.13] - 2026-09-24
+
+### Added
+- **A welcome window on first launch.** Tinker now greets a new install with its penguin
+  and three ways in, one click each: connect to a PostgreSQL, MySQL or MariaDB server, open
+  a SQLite file, or restore connections from a backup made on another Mac. Beneath them are
+  what Tinker promises about passwords and writes, and the crash-report opt-in. It shows
+  once, only while there are no connections yet.
+
+### Fixed
+- Turning on crash reports during the first run takes effect at once, not only after the
+  next launch.
+
 ## [0.1.12] - 2026-09-23
 
 ### Changed

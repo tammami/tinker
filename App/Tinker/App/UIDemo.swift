@@ -24,6 +24,12 @@ enum UIDemo {
         requestedScene?.split(separator: "+").contains("help") ?? false
     }
 
+    /// `--ui-demo firstrun` shows the first-run sheet whatever the store holds; the
+    /// workspace view presents it, since the sheet's state lives there.
+    static var wantsFirstRun: Bool {
+        requestedScene?.split(separator: "+").contains("firstrun") ?? false
+    }
+
     /// The schema a tree row stands for: a schema row's own, or a MySQL or SQLite
     /// database's pseudo-schema.
     static let logger = Logger(label: "tinker.demo")
@@ -42,6 +48,8 @@ enum UIDemo {
         let sidebar = controller.sidebar
         let workspace = controller.workspace
         let wanted = scene.split(separator: "+").map(String.init)
+        // The first-run sheet needs no connection, so the scene opens none.
+        if wanted == ["firstrun"] { return }
         // A named connection may be chosen with `--ui-demo-connection <name>`.
         let arguments = CommandLine.arguments
         var config = environment.connections.first
@@ -461,8 +469,6 @@ enum UIDemo {
                         await table.applyFilter(table.filterRules)
                     }
                 }
-            case "firstrun":
-                break
             default:
                 break
             }

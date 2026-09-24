@@ -61,6 +61,15 @@ struct TinkerApp: App {
             SettingsView(settings: settings, crashReporter: crashReporter, updater: updater)
         }
 
+        // The welcome, on first launch only; drawn in the brand's own world, so no title bar.
+        Window("Welcome to \(Product.name)", id: FirstRunView.windowID) {
+            FirstRunView(environment: environment, crashReporter: crashReporter)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+        .commandsRemoved()
+
         // The Help menu's own window: pages ship in the binary, no Help book to index.
         Window("\(Product.name) Help", id: HelpView.windowID) {
             HelpView()

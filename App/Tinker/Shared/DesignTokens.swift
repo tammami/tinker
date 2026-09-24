@@ -136,6 +136,37 @@ public enum DesignTokens {
         public static let body: CGFloat = 13
         /// A hero number or glyph on an empty state.
         public static let hero: CGFloat = 28
+        /// The welcome window's headline, the one display-size line in the app.
+        public static let display: CGFloat = 34
+        /// The welcome window's tagline under the headline.
+        public static let lede: CGFloat = 15
+    }
+
+    /// The brand world: the welcome window's palette and proportions, taken from the
+    /// low-poly penguin in the app icon. Nothing else in the app is drawn in these; the
+    /// working UI keeps to system semantic colours.
+    public enum Brand {
+        /// The night the penguin stands in: the canvas at its top and at its foot.
+        public static let midnight = Color(nsColor: NSColor(hex: 0x060D22))
+        public static let navy = Color(nsColor: NSColor(hex: 0x0C1E47))
+        /// The penguin's back, deep to bright.
+        public static let cobalt = Color(nsColor: NSColor(hex: 0x2563EB))
+        public static let glacier = Color(nsColor: NSColor(hex: 0x38BDF8))
+        /// The penguin's chest.
+        public static let ice = Color(nsColor: NSColor(hex: 0xD6E6F5))
+        /// The beak and feet; used once, as a warm spark in the aurora.
+        public static let beak = Color(nsColor: NSColor(hex: 0xF97316))
+
+        /// The welcome window's content size, below its hidden title bar.
+        public static let welcomeWidth: CGFloat = 820
+        public static let welcomeHeight: CGFloat = 516
+        /// The penguin standing at the top of the welcome window.
+        public static let heroIcon: CGFloat = 132
+        /// A start tile: three side by side fill the welcome window between its margins.
+        public static let tileHeight: CGFloat = 148
+        public static let tileCornerRadius: CGFloat = 14
+        /// An engine badge on a start tile.
+        public static let tileBadge: CGFloat = 30
     }
 
     public enum Fonts {

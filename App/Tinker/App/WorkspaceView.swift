@@ -8,7 +8,6 @@ import UniformTypeIdentifiers
 public struct WorkspaceView: View {
     @State private var controller: WorkspaceController
     @State private var columnVisibility = NavigationSplitViewVisibility.all
-    @State private var isFirstRunPresented = false
     @Environment(\.openWindow) private var openWindow
     /// What the displayed connection's wire looks like, read once it is connected.
     @State private var transport: TransportSummary?
@@ -90,8 +89,10 @@ public struct WorkspaceView: View {
             sidebar.rebuildRoots()
             for config in environment.connections { sidebar.watchState(of: config.id) }
             // Shown once, and only when there is nothing to connect to yet.
-            let seen = await environment.setting("firstRun.seen", default: false)
-            if !seen, environment.connections.isEmpty { isFirstRunPresented = true }
+            let seen = await environment.setting(FirstRunView.seenSettingKey, default: false)
+            if (!seen && environment.connections.isEmpty) || UIDemo.wantsFirstRun {
+                openWindow(id: FirstRunView.windowID)
+            }
             await UIDemo.apply(to: controller)
             if UIDemo.wantsHelpWindow { openWindow(id: HelpView.windowID) }
         }
@@ -278,18 +279,6 @@ public struct WorkspaceView: View {
                 onDismiss: { workspace.pendingConnectionRestore = nil }
             )
         }
-        .sheet(isPresented: $isFirstRunPresented) {
-            FirstRunView(
-                onAddConnection: { workspace.presentNewConnection() },
-                onDismiss: {
-                    isFirstRunPresented = false
-                    Task { await environment.setSetting(true, for: "firstRun.seen") }
-                },
-                onSetDiagnostics: { enabled in
-                    Task { await environment.setSetting(enabled, for: CrashReporter.optInSettingKey) }
-                }
-            )
-        }
     }
 
     /// Puts text in the front editor, or opens a new tab with it.
@@ -464,7 +453,7 @@ public struct WorkspaceView: View {
                 EmptyStateView(
                     icon: Icon.connection,
                     title: "No connections yet",
-                    message: "Add a PostgreSQL or MySQL server to start browsing tables and running queries."
+                    message: "Add a PostgreSQL, MySQL or SQLite database to start browsing tables and running queries."
                 ) {
                     Button {
                         workspace.presentNewConnection()

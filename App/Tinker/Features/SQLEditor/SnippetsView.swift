@@ -120,12 +120,16 @@ public struct SnippetsView: View {
         if let current = draft {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                 HStack(spacing: DesignTokens.Spacing.sm) {
-                    TextField("Name", text: Binding(get: { current.name }, set: { draft?.name = $0 }))
+                    // The bindings read `draft` itself, never `current`: `current` is the
+                    // value from the last render, and a field handed that back after a
+                    // keystroke takes it as a new value, replaces its text and throws the
+                    // caret to the end — typing then lands somewhere else.
+                    TextField("Name", text: Binding(get: { draft?.name ?? "" }, set: { draft?.name = $0 }))
                         .textFieldStyle(.roundedBorder)
                     Picker(
                         "Engine",
                         selection: Binding(
-                            get: { current.dialect ?? "" },
+                            get: { draft?.dialect ?? "" },
                             set: { draft?.dialect = $0.isEmpty ? nil : $0 }
                         )
                     ) {
@@ -137,13 +141,19 @@ public struct SnippetsView: View {
                     .labelsHidden()
                     .frame(width: 130)
                 }
-                TextEditor(text: Binding(get: { current.body }, set: { draft?.body = $0 }))
-                    .font(.system(.body, design: .monospaced))
-                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius)
-                            .strokeBorder(Color.primary.opacity(0.1))
-                    )
+                // The SQL editor itself, as in a query tab. It leaves the focus where it is
+                // (`isFront: false`), so picking a snippet in the list keeps the arrow keys
+                // in the list.
+                SQLEditorView(
+                    text: Binding(get: { draft?.body ?? "" }, set: { draft?.body = $0 }),
+                    dialect: current.dialect.flatMap(SQLDialect.init(rawValue:)) ?? dialect,
+                    isFront: false
+                )
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius))
+                .overlay(
+                    RoundedRectangle(cornerRadius: DesignTokens.Metrics.smallCornerRadius)
+                        .strokeBorder(Color.primary.opacity(0.1))
+                )
                 HStack {
                     Text("Preview: ")
                         .font(.caption).foregroundStyle(.secondary)

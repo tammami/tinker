@@ -88,6 +88,10 @@ public struct ColumnDefinition: Sendable, Hashable, Codable, Identifiable {
     public var defaultExpression: String?
     /// PostgreSQL identity, MySQL `AUTO_INCREMENT`.
     public var isAutoIncrement: Bool
+    /// PostgreSQL: `ALWAYS` or `BY DEFAULT` when ``isAutoIncrement`` is an identity; nil
+    /// for a serial column (whose `nextval` default does the work) and on other engines.
+    /// A new identity with none set is `BY DEFAULT`, the lenient kind.
+    public var identityGeneration: IdentityGeneration?
     /// A generated column's expression. `nil` for an ordinary column.
     public var generatedExpression: String?
     /// MySQL stores a generated column when true, computes it on read when false.
@@ -107,6 +111,7 @@ public struct ColumnDefinition: Sendable, Hashable, Codable, Identifiable {
         isNullable: Bool = true,
         defaultExpression: String? = nil,
         isAutoIncrement: Bool = false,
+        identityGeneration: IdentityGeneration? = nil,
         generatedExpression: String? = nil,
         isGeneratedStored: Bool = true,
         characterSet: String? = nil,
@@ -120,6 +125,7 @@ public struct ColumnDefinition: Sendable, Hashable, Codable, Identifiable {
         self.isNullable = isNullable
         self.defaultExpression = defaultExpression
         self.isAutoIncrement = isAutoIncrement
+        self.identityGeneration = identityGeneration
         self.generatedExpression = generatedExpression
         self.isGeneratedStored = isGeneratedStored
         self.characterSet = characterSet
@@ -135,6 +141,7 @@ public struct ColumnDefinition: Sendable, Hashable, Codable, Identifiable {
             && isNullable == other.isNullable
             && defaultExpression == other.defaultExpression
             && isAutoIncrement == other.isAutoIncrement
+            && identityGeneration == other.identityGeneration
             && generatedExpression == other.generatedExpression
             && isGeneratedStored == other.isGeneratedStored
             && characterSet == other.characterSet
@@ -294,6 +301,7 @@ extension TableDefinition {
                     isNullable: column.isNullable,
                     defaultExpression: column.defaultExpression,
                     isAutoIncrement: column.isAutoIncrement,
+                    identityGeneration: column.identityGeneration,
                     generatedExpression: nil,
                     characterSet: column.characterSet,
                     collation: column.collation,

@@ -169,7 +169,7 @@ enum UIDemo {
                         }
                     }
                 }
-            case "structure", "structure-enum":
+            case "structure", "structure-enum", "structure-identity":
                 UserDefaults.standard.set(true, forKey: "uiDemo.structure")
                 // The enum scene wants a table that has one; `users` in the demo data does.
                 let chosen = item == "structure-enum" ? tables.first { $0.name == "users" } ?? preferred : preferred
@@ -191,6 +191,16 @@ enum UIDemo {
                         }
                         // Brought to the front, so a capture of the window finds it on screen.
                         NSApp.activate(ignoringOtherApps: true)
+                        // The identity scene shows an integer column's Identity choices, editing
+                        // (nothing is written until Save).
+                        if item == "structure-identity",
+                            let integer = columns.first(where: {
+                                ColumnDetailPanel.isInteger(ColumnTypeSpec.parse($0.type).base)
+                            })
+                        {
+                            table.structure.selectedColumnID = integer.id
+                            table.structure.isEditing = true
+                        }
                         if item == "structure-enum" {
                             table.structure.isEditing = true
                             try? await Task.sleep(for: .milliseconds(600))

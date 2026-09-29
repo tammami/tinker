@@ -175,8 +175,13 @@ enum UIDemo {
                         }
                     }
                 }
-            case "structure", "structure-enum", "structure-identity":
+            case "structure", "structure-enum", "structure-identity", "structure-fk":
                 UserDefaults.standard.set(true, forKey: "uiDemo.structure")
+                // The foreign key scene opens on its pane, editing (nothing is written
+                // until the preview is run).
+                if item == "structure-fk" {
+                    UserDefaults.standard.set(StructureView.Pane.foreignKeys.rawValue, forKey: "uiDemo.structurePane")
+                }
                 // The enum scene wants a table that has one; `users` in the demo data does.
                 let chosen = item == "structure-enum" ? tables.first { $0.name == "users" } ?? preferred : preferred
                 if let chosen {
@@ -206,6 +211,10 @@ enum UIDemo {
                         {
                             table.structure.selectedColumnID = integer.id
                             table.structure.isEditing = true
+                        }
+                        if item == "structure-fk" {
+                            table.structure.isEditing = true
+                            table.structure.selectedForeignKeyID = table.structure.edited?.foreignKeys.first?.id
                         }
                         if item == "structure-enum" {
                             table.structure.isEditing = true
@@ -280,6 +289,22 @@ enum UIDemo {
             case "bigquery":
                 let tab = controller.newQueryTab(connectionID: config.id, sql: "SELECT * FROM big_table ORDER BY id;")
                 if let query = controller.queryController(for: tab) {
+                    try? await Task.sleep(for: .milliseconds(400))
+                    query.run(all: true)
+                }
+            case "chart-big":
+                // The case that used to crawl: a wide result of a million rows, every label
+                // its own, opened straight on the Chart pane.
+                UserDefaults.standard.set(true, forKey: "uiDemo.chart")
+                let bigTab = controller.newQueryTab(
+                    connectionID: config.id, sql: "SELECT * FROM big_table ORDER BY id;")
+                if let query = controller.queryController(for: bigTab) {
+                    await query.loadSessionChoices()
+                    if config.dialect == .postgresql {
+                        await query.selectSessionChoice(.init(database: database.title, schema: "public"))
+                    } else {
+                        await query.selectDatabase(database.title)
+                    }
                     try? await Task.sleep(for: .milliseconds(400))
                     query.run(all: true)
                 }

@@ -240,7 +240,7 @@ public final class SidebarModel {
 
     /// Loads a node's children if they have not been read yet.
     public func loadChildrenIfNeeded(_ item: SidebarItem) async {
-        guard childCache[item.id] == nil, !loading.contains(item.id) else { return }
+        guard childCache[item.id] == nil || stale.contains(item.id), !loading.contains(item.id) else { return }
         await loadChildren(of: item)
     }
 
@@ -282,15 +282,52 @@ public final class SidebarModel {
         }
     }
 
-    /// Drops every cached level for a connection and reloads what is expanded.
+    /// Re-reads a connection's tree: every open level again, from the connection down.
+    ///
+    /// What is on screen stays until its replacement arrives, so a refresh after a DROP or
+    /// a TRUNCATE does not empty the tree while it waits. Levels that were loaded but are
+    /// not open are forgotten, so opening them later reads the server.
+    ///
+    /// Refreshes of one connection never overlap. Several table operations in a row each
+    /// ask for one; an ask that arrives while one is running is folded into a single
+    /// further pass, and every caller returns once the tree reflects its change.
     public func refresh(connectionID: UUID) async {
-        for session in environment.sessions(for: connectionID) { await session.invalidateIntrospection() }
-        childCache = childCache.filter { !$0.key.contains(connectionID.uuidString) }
-        rebuildRoots()
-        for id in expanded where id.contains(connectionID.uuidString) {
-            if let item = find(id: id) { await loadChildren(of: item) }
+        pendingRefreshes.insert(connectionID)
+        if let running = refreshes[connectionID] {
+            await running.value
+            return
         }
+        let task = Task { [weak self] in
+            while let self, self.pendingRefreshes.remove(connectionID) != nil {
+                await self.performRefresh(connectionID)
+            }
+            // Cleared in the same step that found nothing pending, so a new ask can never
+            // see a finished task and wait on it in vain.
+            self?.refreshes[connectionID] = nil
+        }
+        refreshes[connectionID] = task
+        await task.value
+    }
+
+    private var refreshes: [UUID: Task<Void, Never>] = [:]
+    private var pendingRefreshes: Set<UUID> = []
+    /// Cached levels read before the refresh that is running; each is replaced as it is
+    /// re-read, and whatever is still here at the end is dropped.
+    private var stale: Set<SidebarItem.ID> = []
+
+    private func performRefresh(_ connectionID: UUID) async {
+        for session in environment.sessions(for: connectionID) { await session.invalidateIntrospection() }
+        let marker = connectionID.uuidString
+        let previous = Set(childCache.keys.filter { $0.contains(marker) })
+        stale.formUnion(previous)
+        // Loading the connection loads every open level beneath it, parents before
+        // children (see `loadChildren`).
+        if expanded.contains(marker), let item = find(id: marker) { await loadChildren(of: item) }
+        let leftover = stale.intersection(previous)
+        stale.subtract(previous)
+        childCache = childCache.filter { !leftover.contains($0.key) }
         rebuildRoots()
+        applyCachedChildren()
     }
 
     public func find(id: SidebarItem.ID) -> SidebarItem? {
@@ -308,12 +345,17 @@ public final class SidebarModel {
 
     // MARK: - Loading
 
+    /// Reads a node's children, then those of every child that is open, so a branch that
+    /// was open before a refresh or a reconnect comes back open *and filled*. Without this
+    /// a database row stayed open with nothing under it until it was closed and reopened.
     private func loadChildren(of item: SidebarItem) async {
         loading.insert(item.id)
         defer { loading.remove(item.id) }
+        var loaded: [SidebarItem] = []
         do {
             let children = try await children(of: item)
             childCache[item.id] = children
+            loaded = children
         } catch {
             let message = (error as? DBError)?.errorDescription ?? String(describing: error)
             childCache[item.id] = [
@@ -325,8 +367,13 @@ public final class SidebarModel {
                 )
             ]
         }
+        stale.remove(item.id)
         rebuildRoots()
         applyCachedChildren()
+        for child in loaded where child.isExpandable && expanded.contains(child.id) && !loading.contains(child.id) {
+            guard childCache[child.id] == nil || stale.contains(child.id) else { continue }
+            await loadChildren(of: child)
+        }
     }
 
     /// Walks the tree replacing placeholder children with what has been loaded.

@@ -47,15 +47,39 @@ public struct ChartPlot: Sendable, Hashable {
     public let rowsUsed: Int
     /// Rows the result says it has.
     public let rowsTotal: Int
+    /// Rows that could be read at all, whether or not their measure was empty.
+    public let rowsRead: Int
+    /// What was done to bring the points within what a chart can draw; nil when every
+    /// point is drawn.
+    public let reduction: ChartReduction?
+    /// Points a pie cannot draw — zero and negative values — and so left out.
+    public let excluded: Int
 
-    public init(points: [ChartPoint], rowsUsed: Int, rowsTotal: Int) {
+    public init(
+        points: [ChartPoint], rowsUsed: Int, rowsTotal: Int, rowsRead: Int? = nil,
+        reduction: ChartReduction? = nil, excluded: Int = 0
+    ) {
         self.points = points
         self.rowsUsed = rowsUsed
         self.rowsTotal = rowsTotal
+        self.rowsRead = max(rowsRead ?? rowsUsed, rowsUsed)
+        self.reduction = reduction
+        self.excluded = excluded
     }
 
     /// True when what was drawn is not the whole result.
-    public var isPartial: Bool { rowsUsed < rowsTotal }
+    public var isPartial: Bool { rowsRead < rowsTotal }
+}
+
+/// How a plot was brought within its budget of marks.
+public enum ChartReduction: Sendable, Hashable {
+    /// The `shown` largest of `of` categories. `merged` of the rest were added up into
+    /// one "Other" point; zero when they were left out instead.
+    case top(shown: Int, of: Int, merged: Int)
+    /// A line thinned to `shown` of `of` points, keeping each stretch's peak and trough.
+    case downsampled(shown: Int, of: Int)
+    /// Every n-th point of a scatter: `shown` of `of`.
+    case sampled(shown: Int, of: Int)
 }
 
 /// One plotted point.
@@ -67,12 +91,15 @@ public struct ChartPoint: Sendable, Hashable, Identifiable {
     /// space its points by value rather than by position.
     public let x: Double?
     public let value: Double
+    /// True for the point that stands for every category past the budget.
+    public let isOther: Bool
 
-    public init(id: Int, label: String, x: Double?, value: Double) {
+    public init(id: Int, label: String, x: Double?, value: Double, isOther: Bool = false) {
         self.id = id
         self.label = label
         self.x = x
         self.value = value
+        self.isOther = isOther
     }
 }
 
@@ -82,9 +109,10 @@ public struct ChartPoint: Sendable, Hashable, Identifiable {
 /// drawing it as a bar is meaningless, so a column the server calls a primary key, or one
 /// named like a key, is offered as a label and never as a value.
 public enum ChartSpec {
-    /// Rows beyond this are not plotted: past a few thousand marks a chart is a smear, and
-    /// drawing them costs more than reading them.
-    public static let pointLimit = 5_000
+    /// Rows beyond this are not read. Reading is cheap — adding a row to its category's
+    /// total costs a dictionary lookup — so this is generous; what is *drawn* is bounded
+    /// separately, by ``ChartBudget``, because a mark costs thousands of times more.
+    public static let rowLimit = 100_000
 
     /// True for a column that identifies a row rather than measuring anything.
     public static func isIdentifier(_ column: ColumnMeta) -> Bool {
@@ -140,7 +168,7 @@ public enum ChartSpec {
         switch value {
         case let .int(number): Double(number)
         case let .uint(number): Double(number)
-        case let .double(number): number
+        case let .double(number): finite(number)
         case let .decimal(text): finite(Double(text))
         case let .bool(flag): flag ? 1 : 0
         case let .string(text): finite(Double(text))
@@ -168,7 +196,7 @@ public enum ChartSpec {
         xOf: (Int) -> Double?,
         valueOf: (Int) -> Double?
     ) -> ChartPlot {
-        let rows = min(rowCount, pointLimit)
+        let rows = min(rowCount, rowLimit)
         guard rows > 0 else { return ChartPlot(points: [], rowsUsed: 0, rowsTotal: rowCount) }
         guard aggregate != .none else {
             let points = (0 ..< rows).compactMap { row -> ChartPoint? in

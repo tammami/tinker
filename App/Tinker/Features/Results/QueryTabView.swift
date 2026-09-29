@@ -21,7 +21,9 @@ public struct QueryTabView: View {
     @State private var chartKind: ChartKind = .bar
     @State private var chartCategory = -1
     @State private var chartValue = -1
-    @State private var chartAggregate: ChartAggregate = .none
+    /// Nil until the reader picks one; the chart chooses what the labels call for.
+    @State private var chartAggregate: ChartAggregate?
+    @State private var chartCategoryLimit = ChartBudget.defaultCategories
 
     /// The connection pop-up's items: folder-qualified titles, so two connections called
     /// the same — one per folder — read apart.
@@ -332,6 +334,7 @@ public struct QueryTabView: View {
         mapRows = nil
         chartCategory = -1
         chartValue = -1
+        chartAggregate = nil
         // The new result may not offer the pane the old one was showing; a segmented
         // control with no matching tag draws with nothing selected.
         if !visiblePanes.contains(resultPane) { resultPane = .result }
@@ -372,7 +375,8 @@ public struct QueryTabView: View {
                 kind: $chartKind,
                 categoryColumn: $chartCategory,
                 valueColumn: $chartValue,
-                aggregate: $chartAggregate
+                aggregate: $chartAggregate,
+                categoryLimit: $chartCategoryLimit
             )
         } else {
             EmptyStateView(

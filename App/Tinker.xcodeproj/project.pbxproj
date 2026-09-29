@@ -430,7 +430,7 @@
 				CODE_SIGN_ENTITLEMENTS = Tinker/Resources/Tinker.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 26;
+				CURRENT_PROJECT_VERSION = 27;
 				DEVELOPMENT_TEAM = F843PPA65P;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -444,7 +444,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.17;
+				MARKETING_VERSION = 0.1.18;
 				PRODUCT_BUNDLE_IDENTIFIER = com.thinkfree.Tinker;
 				PRODUCT_NAME = Tinker;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -463,7 +463,7 @@
 				CODE_SIGN_ENTITLEMENTS = Tinker/Resources/Tinker.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 26;
+				CURRENT_PROJECT_VERSION = 27;
 				DEVELOPMENT_TEAM = F843PPA65P;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -477,7 +477,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.17;
+				MARKETING_VERSION = 0.1.18;
 				PRODUCT_BUNDLE_IDENTIFIER = com.thinkfree.Tinker;
 				PRODUCT_NAME = Tinker;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;

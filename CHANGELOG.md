@@ -4,6 +4,26 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.18] - 2026-09-29
+
+### Added
+- **Stop a running structure change.** While the review sheet executes, Cancel becomes
+  Stop, which asks the server to end the statement (`KILL QUERY` on MySQL,
+  `pg_cancel_backend` on PostgreSQL) instead of only closing the sheet. The failure is
+  reported in the server's own words; PostgreSQL rolls the run back, and MySQL says which
+  statements had already committed.
+- **Live status while it runs.** The sheet shows the elapsed time, what the server says the
+  statement is doing (“copy to tmp table”, “Waiting for table metadata lock”, “Waiting for
+  lock (relation)”), and a percentage when the server estimates one: MariaDB's progress,
+  MySQL's `performance_schema` stages, PostgreSQL index builds.
+- **Map: all rows or just the selection.** A switch above the map moves between every row
+  on the page and the rows that were selected when the map opened.
+
+### Fixed
+- The map showed nothing when the points were close together: the grouped markers had no
+  look of their own. Groups now appear as numbered markers, and clicking one zooms to its
+  points.
+
 ## [0.1.17] - 2026-09-29
 
 ### Fixed

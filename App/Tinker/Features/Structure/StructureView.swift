@@ -78,6 +78,15 @@ public struct StructureView: View {
         // The type pop-up is on every row, so the schema's own types are read with the
         // table rather than when a column is selected.
         .task(id: controller.table.id) { await controller.loadUserTypesIfNeeded() }
+        // The type list is this server's: a type it does not have is not offered.
+        .task(id: controller.table.id) { await controller.loadServerVersionIfNeeded() }
+        .onAppear {
+            // `--ui-demo structure-fk` opens on a pane other than Columns.
+            if let name = UserDefaults.standard.string(forKey: "uiDemo.structurePane") {
+                UserDefaults.standard.removeObject(forKey: "uiDemo.structurePane")
+                if let wanted = Pane(rawValue: name) { pane = wanted }
+            }
+        }
         // A refresh reads the server again but never throws away what the user has typed.
         .refreshable { await controller.load(force: true, keepingEdits: true) }
         .sheet(isPresented: isPreviewPresented) {
@@ -127,7 +136,11 @@ public struct StructureView: View {
             if showsActions {
                 if controller.isEditing {
                     let count = controller.pendingStatements.count
-                    if count > 0 {
+                    let incomplete = controller.incompleteForeignKeys
+                    if let first = incomplete.first {
+                        Badge(text: "Foreign key \(first) is incomplete", color: .red)
+                            .help("Choose its table and a referenced column for each of its columns")
+                    } else if count > 0 {
                         Badge(text: "\(count) statement\(count == 1 ? "" : "s")", color: .orange)
                     } else {
                         Text("No changes").font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
@@ -143,14 +156,16 @@ public struct StructureView: View {
                         Label("Preview…", systemImage: Icon.source)
                     }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
-                    .disabled(!controller.hasPendingChanges)
+                    .disabled(!controller.hasPendingChanges || !incomplete.isEmpty)
                     .buttonStyle(.borderedProminent)
                     .fixedSize()
 
                     // Done never drops work silently: with statements pending it shows
                     // them, and leaves editing only once they have run.
                     Button("Done") {
-                        if controller.hasPendingChanges {
+                        if !incomplete.isEmpty {
+                            pane = .foreignKeys
+                        } else if controller.hasPendingChanges {
                             finishAfterRun = true
                             isPreviewPresented.wrappedValue = true
                         } else {
@@ -249,7 +264,7 @@ struct StructureGrid<Row: Identifiable, Content: View>: View {
 }
 
 /// A cell that fills its column, so every row lines up under its heading.
-private struct Cell<Content: View>: View {
+struct Cell<Content: View>: View {
     let width: CGFloat?
     @ViewBuilder let content: Content
 
@@ -265,7 +280,7 @@ struct ColumnsPane: View {
     @Bindable var controller: StructureController
 
     /// Key, Name, Type, Length, Decimals, Not null, Auto, Default, Comment.
-    private let widths: [CGFloat?] = [30, 170, 140, 64, 68, 60, 46, 140, nil]
+    private let widths: [CGFloat?] = [30, 170, 230, 64, 68, 60, 46, 140, nil]
 
     private var selectedIndex: Int? { controller.selectedColumnIndex }
     /// The column whose text field has keyboard focus. A click inside a field goes to
@@ -353,13 +368,17 @@ struct ColumnsPane: View {
     }
 
     private var defaultType: String {
-        controller.dialect == .mysql ? "varchar(255)" : "text"
+        switch controller.dialect {
+        case .mysql: "varchar(255)"
+        case .postgresql: "text"
+        case .sqlite: "TEXT"
+        }
     }
 
     private func row(_ column: ColumnDefinition, _ index: Int) -> some View {
         let isSelected = column.id == controller.selectedColumnID
         let spec = ColumnTypeSpec.parse(column.type)
-        let choice = ColumnTypeCatalog.choice(named: spec.base, dialect: controller.dialect)
+        let choice = controller.typeChoice(named: spec.base)
         return HStack(spacing: 0) {
             Cell(width: widths[0]) {
                 Button {
@@ -382,7 +401,7 @@ struct ColumnsPane: View {
                 field(index, column.id, \.name, placeholder: "name")
             }
             Cell(width: widths[2]) {
-                typePicker(index, spec: spec)
+                typePicker(index, column: column, spec: spec)
             }
             Cell(width: widths[3]) {
                 numberField(
@@ -440,7 +459,7 @@ struct ColumnsPane: View {
                     )
                 )
                 .labelsHidden()
-                .disabled(!controller.isEditing)
+                .disabled(!controller.isEditing || choice?.isCreationOnly == true)
                 .accessibilityLabel("\(column.name) auto increment")
             }
             Cell(width: widths[7]) {
@@ -458,27 +477,32 @@ struct ColumnsPane: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    /// The base type from the dialect's list; a type the list does not carry stays as
-    /// itself at the top, so nothing is ever rewritten just by being shown.
+    /// The base type from the server's list, under the documentation's headings; a type
+    /// the list does not carry stays as itself at the top, so nothing is ever rewritten
+    /// just by being shown.
     @ViewBuilder
-    private func typePicker(_ index: Int, spec: ColumnTypeSpec) -> some View {
-        let choices = ColumnTypeCatalog.choices(for: controller.dialect)
+    private func typePicker(_ index: Int, column: ColumnDefinition, spec: ColumnTypeSpec) -> some View {
+        // `serial` is shorthand a column is created with, not a type one can be altered to.
+        let isExisting = controller.isExistingColumn(column.id)
+        let choices = controller.typeChoices.filter { !$0.isCreationOnly || !isExisting }
         // The schema's own types sit above the built-in list: an enum the database
         // declares is as real a choice as `text`, and the catalogue cannot know it.
         let declared = controller.userTypes.map(\.name)
-        let base = spec.base.lowercased()
-        let known = choices.contains { $0.name == base } || declared.contains { $0.lowercased() == base }
+        let ownType = declared.first { $0.lowercased() == spec.base.lowercased() }
+        let current = choices.first { $0.name.lowercased() == spec.base.lowercased() }
+            ?? choices.first { $0.answers(to: spec.base) }
+        let selected = ownType ?? current?.name ?? spec.base
         BarPopUp(
-            items: (known ? [] : [BarPopUp.Item(id: spec.base, title: spec.base)])
-                + declared.map { BarPopUp.Item(id: $0, title: $0) }
-                + choices.map { BarPopUp.Item(id: $0.name, title: $0.name) },
+            items: (ownType == nil && current == nil ? [BarPopUp.Item(id: spec.base, title: spec.base)] : [])
+                + declared.map { BarPopUp.Item(id: $0, title: $0, section: "Types of this schema") }
+                + choices.map { BarPopUp.Item(id: $0.name, title: $0.title, section: $0.group, help: $0.summary) },
             selection: Binding(
-                get: { known ? base : spec.base },
+                get: { selected },
                 set: { newBase in
+                    guard newBase != selected else { return }
+                    let choice = choices.first { $0.name == newBase }
                     updateType(index) { spec in
-                        guard spec.base.lowercased() != newBase.lowercased() else { return }
                         spec.base = newBase
-                        let choice = ColumnTypeCatalog.choice(named: newBase, dialect: controller.dialect)
                         if let choice {
                             if !choice.takesLength { spec.length = nil }
                             if !choice.takesDecimals { spec.decimals = nil }
@@ -490,10 +514,19 @@ struct ColumnsPane: View {
                         spec.array = ""
                         if !spec.isEnumeration { spec.values = [] }
                     }
+                    if choice?.isCreationOnly == true {
+                        // The shorthand brings its own numbering; an identity or
+                        // AUTO_INCREMENT beside it is a statement the server refuses.
+                        controller.edited?.columns[safe: index]?.isAutoIncrement = false
+                        controller.edited?.columns[safe: index]?.identityGeneration = nil
+                        controller.edited?.columns[safe: index]?.defaultExpression = nil
+                        controller.edited?.columns[safe: index]?.isNullable = false
+                    }
                 }
             )
         )
         .disabled(!controller.isEditing)
+        .help(current?.summary ?? "")
         .accessibilityLabel("type")
     }
 
@@ -595,6 +628,41 @@ struct ColumnDetailPanel: View {
         ["smallint", "integer", "bigint", "int", "int2", "int4", "int8"].contains(base.lowercased())
     }
 
+    /// What the documentation says of the column's type, or nil for a type of the
+    /// schema's own.
+    private var typeChoice: ColumnTypeChoice? { controller.typeChoice(named: spec.base) }
+
+    /// The defaults worth offering: each engine's own functions, by the column's type.
+    private var defaultChoices: [(title: String, value: String)] {
+        let base = (typeChoice?.name ?? spec.base).lowercased()
+        var choices: [(String, String)] = [("NULL", "NULL"), ("Empty string", "''")]
+        let isTemporal = ["timestamp", "timestamptz", "datetime", "date", "time", "timetz"].contains(base)
+        switch dialect {
+        case .postgresql:
+            if isTemporal || base == "text" {
+                choices += [("CURRENT_TIMESTAMP", "CURRENT_TIMESTAMP"), ("now()", "now()")]
+            }
+            if base == "date" { choices.append(("CURRENT_DATE", "CURRENT_DATE")) }
+            if base == "uuid" { choices.append(("gen_random_uuid()", "gen_random_uuid()")) }
+            if base == "boolean" { choices += [("true", "true"), ("false", "false")] }
+            if base == "json" || base == "jsonb" { choices.append(("Empty object", "'{}'::\(base)")) }
+        case .mysql:
+            if base == "timestamp" || base == "datetime" {
+                let precision = spec.length.map { "(\($0))" } ?? ""
+                choices.append(("CURRENT_TIMESTAMP\(precision)", "CURRENT_TIMESTAMP\(precision)"))
+            }
+            if base == "date" { choices.append(("(CURRENT_DATE)", "(CURRENT_DATE)")) }
+            if ["char", "varchar", "binary", "uuid"].contains(base) { choices.append(("(UUID())", "(UUID())")) }
+            if base == "json" { choices.append(("Empty object", "(JSON_OBJECT())")) }
+        case .sqlite:
+            choices += [
+                ("CURRENT_TIMESTAMP", "CURRENT_TIMESTAMP"), ("CURRENT_DATE", "CURRENT_DATE"),
+                ("CURRENT_TIME", "CURRENT_TIME"),
+            ]
+        }
+        return choices.map { (title: $0.0, value: $0.1) }
+    }
+
     /// The identity menu: none, or one of PostgreSQL's two kinds, or the serial a column
     /// already has (a `nextval` default), which is shown but not offered as a choice.
     enum IdentityChoice: String, CaseIterable, Hashable {
@@ -655,6 +723,18 @@ struct ColumnDetailPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            if let typeChoice, !typeChoice.summary.isEmpty {
+                FieldRow(label: "Type") {
+                    // Bounded, never `fixedSize`; see the identity's explanation below.
+                    Text("\(typeChoice.title) — \(typeChoice.group). \(typeChoice.summary)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .help(typeChoice.summary)
+                }
+            }
+
             if spec.isEnumeration || isPostgresEnum {
                 FieldRow(label: "Enum Value") {
                     HStack(spacing: DesignTokens.Spacing.xs) {
@@ -683,7 +763,7 @@ struct ColumnDetailPanel: View {
                 }
             }
 
-            if let choice = ColumnTypeCatalog.choice(named: spec.base, dialect: dialect), !choice.suffixes.isEmpty {
+            if let choice = typeChoice, !choice.suffixes.isEmpty {
                 // `unsigned` on MySQL numbers, the time zone on PostgreSQL times: the words
                 // the type takes after its length, offered rather than typed.
                 FieldRow(label: "Modifier") {
@@ -700,7 +780,27 @@ struct ColumnDetailPanel: View {
                 }
             }
 
-            if dialect == .postgresql, Self.isInteger(spec.base) {
+            if dialect == .postgresql, typeChoice?.isCreationOnly != true {
+                // Any PostgreSQL type has an array type: `integer[]`, `text[][]`.
+                FieldRow(label: "Array") {
+                    BarPopUp(
+                        items: [
+                            BarPopUp.Item(id: "", title: "not an array"),
+                            BarPopUp.Item(id: "[]", title: "\(spec.base)[] — one dimension"),
+                            BarPopUp.Item(id: "[][]", title: "\(spec.base)[][] — two dimensions"),
+                        ],
+                        selection: Binding(
+                            get: { ["", "[]", "[][]"].contains(spec.array) ? spec.array : "[]" },
+                            set: { value in updateType { $0.array = value } }
+                        )
+                    )
+                    .frame(maxWidth: .infinity)
+                    .disabled(!isEditing)
+                    .accessibilityLabel("array dimensions")
+                }
+            }
+
+            if dialect == .postgresql, Self.isInteger(spec.base), spec.array.isEmpty {
                 FieldRow(label: "Identity") {
                     BarPopUp(
                         items: (IdentityChoice.allCases + (identityChoice == .serial ? [.serial] : []))
@@ -737,9 +837,10 @@ struct ColumnDetailPanel: View {
                     .accessibilityLabel("default value")
                     Menu {
                         Button("No default") { setDefault(nil) }
-                        Button("NULL") { setDefault("NULL") }
-                        Button("Empty string") { setDefault("''") }
-                        Button("CURRENT_TIMESTAMP") { setDefault("CURRENT_TIMESTAMP") }
+                        Divider()
+                        ForEach(defaultChoices, id: \.value) { choice in
+                            Button(choice.title) { setDefault(choice.value) }
+                        }
                     } label: {
                         Image(systemName: Icon.chevronDown)
                     }
@@ -1046,152 +1147,6 @@ struct IndexesPane: View {
         // Every SQLite index is a b-tree; there is nothing to choose.
         case .sqlite: ["btree"]
         }
-    }
-}
-
-// MARK: - Foreign keys
-
-struct ForeignKeysPane: View {
-    @Bindable var controller: StructureController
-
-    private let widths: [CGFloat?] = [170, 150, 150, 150, 130, 130]
-
-    var body: some View {
-        VStack(spacing: 0) {
-            StructureGrid(
-                headers: [
-                    ("Name", widths[0]), ("Columns", widths[1]), ("References", widths[2]),
-                    ("Ref columns", widths[3]), ("On update", widths[4]), ("On delete", widths[5]),
-                ],
-                rows: controller.edited?.foreignKeys ?? []
-            ) { key, position in
-                HStack(spacing: 0) {
-                    Cell(width: widths[0]) {
-                        TextField(
-                            "name",
-                            text: Binding(
-                                get: { controller.edited?.foreignKeys[safe: position]?.name ?? "" },
-                                set: { controller.edited?.foreignKeys[safe: position]?.name = $0 }
-                            )
-                        )
-                        .textFieldStyle(.plain)
-                        .disabled(!controller.isEditing)
-                    }
-                    Cell(width: widths[1]) {
-                        TextField(
-                            "column",
-                            text: Binding(
-                                get: {
-                                    (controller.edited?.foreignKeys[safe: position]?.columns ?? [])
-                                        .joined(separator: ", ")
-                                },
-                                set: {
-                                    controller.edited?.foreignKeys[safe: position]?.columns =
-                                        Self.splitNames($0)
-                                }
-                            )
-                        )
-                        .textFieldStyle(.plain)
-                        .disabled(!controller.isEditing)
-                    }
-                    Cell(width: widths[2]) {
-                        TextField(
-                            "table",
-                            text: Binding(
-                                get: {
-                                    controller.edited?.foreignKeys[safe: position]?
-                                        .referencedTable.name ?? ""
-                                },
-                                set: { name in
-                                    guard
-                                        let old = controller.edited?.foreignKeys[safe: position]?
-                                            .referencedTable
-                                    else { return }
-                                    controller.edited?.foreignKeys[safe: position]?.referencedTable =
-                                        TableRef(database: old.database, schema: old.schema, name: name)
-                                }
-                            )
-                        )
-                        .textFieldStyle(.plain)
-                        .disabled(!controller.isEditing)
-                    }
-                    Cell(width: widths[3]) {
-                        TextField(
-                            "column",
-                            text: Binding(
-                                get: {
-                                    (controller.edited?.foreignKeys[safe: position]?
-                                        .referencedColumns ?? []).joined(separator: ", ")
-                                },
-                                set: {
-                                    controller.edited?.foreignKeys[safe: position]?
-                                        .referencedColumns = Self.splitNames($0)
-                                }
-                            )
-                        )
-                        .textFieldStyle(.plain)
-                        .disabled(!controller.isEditing)
-                    }
-                    Cell(width: widths[4]) {
-                        actionPicker(position, keyName: key.name, isUpdate: true)
-                    }
-                    Cell(width: widths[5]) {
-                        actionPicker(position, keyName: key.name, isUpdate: false)
-                    }
-                }
-            }
-
-            if controller.isEditing {
-                PaneFooter(
-                    addTitle: "Add Foreign Key",
-                    onAdd: {
-                        let table = controller.table
-                        let count = (controller.edited?.foreignKeys.count ?? 0) + 1
-                        controller.edited?.foreignKeys.append(
-                            ForeignKeyDefinition(
-                                name: "\(table.name)_fk_\(count)",
-                                columns: [],
-                                referencedTable: table,
-                                referencedColumns: []
-                            ))
-                    },
-                    onRemove: {
-                        guard controller.edited?.foreignKeys.isEmpty == false else { return }
-                        controller.edited?.foreignKeys.removeLast()
-                    }
-                )
-            }
-        }
-    }
-
-    private func actionPicker(_ position: Int, keyName: String, isUpdate: Bool) -> some View {
-        Picker(
-            "",
-            selection: Binding(
-                get: {
-                    let key = controller.edited?.foreignKeys[safe: position]
-                    return (isUpdate ? key?.onUpdate : key?.onDelete) ?? .noAction
-                },
-                set: { action in
-                    if isUpdate {
-                        controller.edited?.foreignKeys[safe: position]?.onUpdate = action
-                    } else {
-                        controller.edited?.foreignKeys[safe: position]?.onDelete = action
-                    }
-                }
-            )
-        ) {
-            ForEach(ForeignKeyAction.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-        }
-        .labelsHidden()
-        .disabled(!controller.isEditing)
-        .accessibilityLabel("\(keyName) on \(isUpdate ? "update" : "delete")")
-    }
-
-    static func splitNames(_ text: String) -> [String] {
-        text.split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
     }
 }
 

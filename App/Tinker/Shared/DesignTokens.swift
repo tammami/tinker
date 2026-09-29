@@ -310,6 +310,7 @@ public enum Icon {
     public static let sortAscending = "chevron.up"
     public static let moveUp = "arrow.up"
     public static let moveDown = "arrow.down"
+    public static let arrowRight = "arrow.right"
     public static let chevronDown = "chevron.down"
     public static let sortDescending = "chevron.down"
     public static let expand = "chevron.down"

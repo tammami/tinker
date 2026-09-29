@@ -70,6 +70,9 @@ struct NewTableSheet: View {
             HStack(spacing: DesignTokens.Spacing.sm) {
                 if let controller {
                     let count = controller.pendingStatements.count
+                    if let incomplete = controller.incompleteForeignKeys.first {
+                        Badge(text: "Foreign key \(incomplete) is incomplete", color: .red)
+                    }
                     Badge(
                         text: count == 0 ? "Nothing to create yet" : "\(count) statement\(count == 1 ? "" : "s")",
                         color: count == 0 ? .secondary : .orange
@@ -92,6 +95,7 @@ struct NewTableSheet: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(
                     !(controller?.hasPendingChanges ?? false) || name.trimmingCharacters(in: .whitespaces).isEmpty
+                        || !(controller?.incompleteForeignKeys.isEmpty ?? true)
                 )
                 .help("Review the CREATE TABLE statement, then run it")
             }

@@ -527,7 +527,7 @@ public struct DDLGenerator: Sendable {
         let editedByID = Dictionary(uniqueKeysWithValues: edited.checks.map { ($0.id, $0) })
         return current.checks.compactMap { check in
             let after = editedByID[check.id]
-            guard after == nil || after!.expression != check.expression || after!.name != check.name else {
+            guard after?.expression != check.expression || after?.name != check.name else {
                 return nil
             }
             return GeneratedDDL(

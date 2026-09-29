@@ -539,6 +539,11 @@ struct BarPopUp<ID: Hashable>: NSViewRepresentable {
         let id: ID
         let title: String
         var icon: String? = nil
+        /// The heading the item sits under. Consecutive items sharing one are a group; a
+        /// long list — every type an engine has — reads by its groups.
+        var section: String? = nil
+        /// What the pointer resting on the item says.
+        var help: String? = nil
     }
 
     let items: [Item]
@@ -589,10 +594,16 @@ struct BarPopUp<ID: Hashable>: NSViewRepresentable {
         if coordinator.items != items {
             coordinator.items = items
             popUp.removeAllItems()
+            var section: String?
             for item in items {
+                if item.section != section {
+                    section = item.section
+                    if let section, !section.isEmpty { popUp.menu?.addItem(.sectionHeader(title: section)) }
+                }
                 let menuItem = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
                 // The row carries its own id, so a click means that item whatever the index.
                 menuItem.representedObject = item.id
+                menuItem.toolTip = item.help
                 if let icon = item.icon {
                     menuItem.image = NSImage(systemSymbolName: icon, accessibilityDescription: nil)?
                         .withSymbolConfiguration(.init(pointSize: NSFont.systemFontSize(for: size), weight: .regular))
@@ -600,8 +611,9 @@ struct BarPopUp<ID: Hashable>: NSViewRepresentable {
                 popUp.menu?.addItem(menuItem)
             }
         }
-        if let index = items.firstIndex(where: { $0.id == selection }) {
-            if popUp.indexOfSelectedItem != index { popUp.selectItem(at: index) }
+        // Found by what it carries, not by its place: headings sit between the items.
+        if let item = popUp.menu?.items.first(where: { ($0.representedObject as? ID) == selection }) {
+            if popUp.selectedItem !== item { popUp.select(item) }
         } else {
             popUp.select(nil)
         }

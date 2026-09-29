@@ -425,6 +425,9 @@ enum UIDemo {
             case "export":
                 workspace.isExportPresented = true
             case "import":
+                if let index = arguments.firstIndex(of: "--ui-demo-import-file"), index + 1 < arguments.count {
+                    UserDefaults.standard.set(arguments[index + 1], forKey: "uiDemo.importFile")
+                }
                 if let preferred {
                     workspace.pendingTableOperation = TableOperationRequest(
                         kind: .importCSV, table: preferred.ref, connectionID: config.id)

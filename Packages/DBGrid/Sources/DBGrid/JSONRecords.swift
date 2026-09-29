@@ -13,13 +13,25 @@ extension CSVReader: RecordSource {}
 public enum TabularFormat: Sendable, Hashable {
     case delimited(Character)
     case json
+    /// An Excel workbook (Office Open XML); its first sheet is read.
+    case xlsx
 
     public static func detect(url: URL) -> TabularFormat {
         switch url.pathExtension.lowercased() {
         case "json", "ndjson", "jsonl": .json
         case "tsv", "tab": .delimited("\t")
+        case "xlsx", "xlsm": .xlsx
         default: .delimited(",")
         }
+    }
+
+    /// The format from the name, corrected by the first bytes: a zip archive is a
+    /// workbook whatever it is called. Reading one as CSV is what fills the column
+    /// mapping with binary noise.
+    public static func detect(url: URL, data: Data) -> TabularFormat {
+        let signature: [UInt8] = [0x50, 0x4B, 0x03, 0x04]
+        if data.count >= 4, Array(data.prefix(4)) == signature { return .xlsx }
+        return detect(url: url)
     }
 }
 

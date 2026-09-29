@@ -306,13 +306,19 @@ private struct ImportCSVSheet: View {
     private var dialect: SQLDialect { OperationRunner.dialect(request.connectionID, environment) }
     private var header: [String] { preview.first ?? [] }
     private var mappedCount: Int { mapping.compactMap { $0 }.count }
+    /// What the file's columns are called in the mapping: they are not CSV in a workbook.
+    private var sourceNoun: String { isWorkbook ? "Excel" : isJSON ? "JSON" : "CSV" }
     private var isJSON: Bool { format == .json }
+    private var isWorkbook: Bool { format == .xlsx }
+    /// An `.xlsx` file, opened once when chosen; the preview and the import both read it.
+    @State private var workbook: XLSXWorkbook?
 
     var body: some View {
         SheetFrame(
             title: "Import into \(request.table.name)",
             icon: Icon.importData,
-            subtitle: "CSV, TSV, JSON or JSON Lines. The file is mapped, not loaded, and rows go in as they are read.",
+            subtitle:
+                "CSV, TSV, Excel (.xlsx), JSON or JSON Lines. The file is mapped, not loaded, and rows go in as they are read.",
             width: DesignTokens.Metrics.wideSheetWidth
         ) {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
@@ -331,6 +337,14 @@ private struct ImportCSVSheet: View {
                     Spacer()
                     if isJSON {
                         Text("JSON · keys are the columns").font(.caption).foregroundStyle(.secondary)
+                    } else if isWorkbook {
+                        if let workbook {
+                            Text("Sheet “\(workbook.sheetName)”").font(.caption).foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .help("The workbook's first sheet is imported")
+                        }
+                        Toggle("First row is a header", isOn: $hasHeader)
+                            .onChange(of: hasHeader) { _, _ in rebuildMapping() }
                     } else {
                         Toggle("First row is a header", isOn: $hasHeader)
                             .onChange(of: hasHeader) { _, _ in rebuildMapping() }
@@ -361,7 +375,7 @@ private struct ImportCSVSheet: View {
                             "0 keeps the whole import in one transaction; a number commits along the way, which a very large file needs."
                         )
                         Spacer()
-                        Text("\(mappedCount) of \(header.count) CSV column\(header.count == 1 ? "" : "s") mapped")
+                        Text("\(mappedCount) of \(header.count) \(sourceNoun) column\(header.count == 1 ? "" : "s") mapped")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 } else {
@@ -404,14 +418,22 @@ private struct ImportCSVSheet: View {
                     .disabled(data == nil || mappedCount == 0 || isRunning)
             }
         }
-        .task { await loadColumns() }
+        .task {
+            await loadColumns()
+            // `--ui-demo import --ui-demo-import-file <path>` shows a file's preview and
+            // mapping without the open panel. Nothing is imported until Import is pressed.
+            if let path = UserDefaults.standard.string(forKey: "uiDemo.importFile") {
+                UserDefaults.standard.removeObject(forKey: "uiDemo.importFile")
+                load(URL(fileURLWithPath: path))
+            }
+        }
     }
 
     /// The CSV's columns down the left, the table column each one fills, and a sample.
     private var mappingTable: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                Text("CSV column").frame(width: 200, alignment: .leading)
+                Text("\(sourceNoun) column").frame(width: 200, alignment: .leading)
                 Text("Table column").frame(width: 200, alignment: .leading)
                 Text("Sample").frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -478,22 +500,35 @@ private struct ImportCSVSheet: View {
 
     private func chooseFile() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.commaSeparatedText, .tabSeparatedText, .json, .plainText, .data]
+        panel.allowedContentTypes = [
+            .commaSeparatedText, .tabSeparatedText, UTType(filenameExtension: "xlsx") ?? .data, .json, .plainText, .data,
+        ]
         panel.allowsOtherFileTypes = true
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        load(url)
+    }
+
+    private func load(_ url: URL) {
         fileURL = url
         failure = nil
         insertedCount = nil
-        format = TabularFormat.detect(url: url)
-        if case let .delimited(character) = format { delimiter = String(character) }
-        if isJSON { hasHeader = true }
+        preview = []
+        workbook = nil
         do {
             // Mapped, not read: the file's bytes are paged in as the reader walks them.
-            data = try Data(contentsOf: url, options: .mappedIfSafe)
+            let mapped = try Data(contentsOf: url, options: .mappedIfSafe)
+            data = mapped
+            // The bytes decide over the name: a workbook read as CSV fills the mapping
+            // with the zip's binary.
+            format = TabularFormat.detect(url: url, data: mapped)
+            if case let .delimited(character) = format { delimiter = String(character) }
+            if isJSON || isWorkbook { hasHeader = true }
+            if isWorkbook { workbook = try XLSXWorkbook(data: mapped) }
             reparse()
         } catch {
-            failure = String(describing: error)
+            data = nil
+            failure = (error as? XLSXReadError)?.description ?? String(describing: error)
         }
     }
 
@@ -504,6 +539,9 @@ private struct ImportCSVSheet: View {
             // The keys stand in as the header row so the mapping table reads the same.
             var reader = JSONRecordReader(data: data)
             rows.append(reader.header)
+            while rows.count < 6, let row = reader.next() { rows.append(row) }
+        } else if isWorkbook {
+            guard var reader = workbook?.rows() else { return }
             while rows.count < 6, let row = reader.next() { rows.append(row) }
         } else {
             var reader = CSVReader(data: data, delimiter: delimiter.first ?? ",")
@@ -548,8 +586,14 @@ private struct ImportCSVSheet: View {
                 throw DBError.protocolError("This connection is read-only. Unlock it with ⌘⇧L first.")
             }
             _ = try await session.connect()
+            let workbook = workbook
             let count = try await session.withLease { connection in
-                if isJSON {
+                if let workbook {
+                    var reader = workbook.rows()
+                    return try await importer.run(reader: &reader, on: connection) { done in
+                        Task { @MainActor in progressCount = done }
+                    }
+                } else if isJSON {
                     var reader = JSONRecordReader(data: data)
                     return try await importer.run(reader: &reader, on: connection) { done in
                         Task { @MainActor in progressCount = done }

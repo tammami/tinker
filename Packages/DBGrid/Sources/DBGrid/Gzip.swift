@@ -74,9 +74,10 @@ public final class GzipInflater {
     public private(set) var isFinished = false
     private static let outputChunk = 512 * 1_024
 
-    public init() throws {
-        // Window bits 15 + 32 detect the gzip or zlib wrapper automatically.
-        let status = inflateInit2_(&stream, 15 + 32, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size))
+    /// - Parameter raw: a bare deflate stream with no wrapper, which is what a zip entry
+    ///   holds. Otherwise window bits 15 + 32 detect the gzip or zlib wrapper.
+    public init(raw: Bool = false) throws {
+        let status = inflateInit2_(&stream, raw ? -15 : 15 + 32, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size))
         guard status == Z_OK else { throw GzipError(code: status, stage: "inflateInit") }
         isOpen = true
     }

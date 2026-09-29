@@ -80,7 +80,7 @@ public extension DataGridDelegate {
     func gridDidRequestDeleteRows() {}
     func gridDidRequestAddRow() {}
     func gridDidRequestAutosize(column: Int) {}
-    func gridDidRequestShowOnMap(row: Int, column: Int) {}
+    func gridDidRequestShowOnMap(row: Int, source: MapSource) {}
     func gridDidRequestHideColumn(_ column: Int) {}
     func gridDidRequestShowAllColumns() {}
     /// A results grid remembers nothing: its columns are whatever the statement returned.

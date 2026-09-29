@@ -141,7 +141,9 @@ public struct CommandPaletteView: View {
             commands.append(
                 PaletteCommand(
                     id: "conn-\(config.id)", group: .connections, title: config.qualifiedName,
-                    subtitle: "New query on \(config.user)@\(config.host)", icon: Icon.connection
+                    subtitle: config.isRedis
+                        ? "Redis console on \(config.host):\(config.port)" : "New query on \(config.user)@\(config.host)",
+                    icon: config.isRedis ? Icon.console : Icon.connection
                 ) { controller.newQueryTab(connectionID: config.id) })
         }
 

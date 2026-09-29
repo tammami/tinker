@@ -57,6 +57,8 @@ allowed_imports() {
         DBPostgres) echo "Foundation Logging DBCore DBSQL PostgresNIO NIO NIOCore NIOPosix NIOSSL NIOConcurrencyHelpers" ;;
         DBMySQL)    echo "Foundation Logging DBCore DBSQL MySQLNIO NIO NIOCore NIOPosix NIOSSL NIOConcurrencyHelpers" ;;
     DBSQLite)   echo "Foundation Logging DBCore DBSQL SQLite3" ;;
+        # Redis is not SQL: no DBSQL, only the protocol on NIO.
+        DBRedis)    echo "Foundation Logging DBCore NIOCore NIOPosix NIOSSL NIOConcurrencyHelpers" ;;
         DBTunnel)   echo "Foundation Logging DBCore Citadel Crypto _CryptoExtras CTinkerBcrypt NIO NIOCore NIOPosix NIOSSH os" ;;
         DBStore)    echo "Foundation Logging DBCore SQLite3 Security" ;;
         # Observation is the toolchain's own framework (the @Observable write queue that
@@ -67,7 +69,7 @@ allowed_imports() {
     esac
 }
 lint_failed=0
-for module in DBCore DBSQL DBPostgres DBMySQL DBSQLite DBTunnel DBStore DBGrid DBTestKit; do
+for module in DBCore DBSQL DBPostgres DBMySQL DBSQLite DBRedis DBTunnel DBStore DBGrid DBTestKit; do
     dir="Packages/$module/Sources/$module"
     [[ -d "$dir" ]] || continue
     allowed="$(allowed_imports "$module")"
@@ -110,6 +112,7 @@ else
     [[ $PG_SET == 1 ]]    || warn "TINKER_TEST_PG_URL not set — PostgreSQL integration tests will be SKIPPED"
     [[ $MYSQL_SET == 1 ]] || warn "TINKER_TEST_MYSQL_URL not set — MySQL integration tests will be SKIPPED"
 fi
+[[ -n "${TINKER_TEST_REDIS_URL:-}" ]] || warn "TINKER_TEST_REDIS_URL not set — Redis integration tests will be SKIPPED"
 
 TEST_LOG="$(mktemp -t tinker-ci-tests)"
 # `swift test` reports skipped tests as "skipped" with the XCTSkip reason; keep the full log.

@@ -229,6 +229,11 @@ public enum Icon {
     public static let map = "map"
     /// A place opened in another app (Maps, a browser).
     public static let openExternally = "arrow.up.forward.app"
+    // Redis
+    public static let redisKey = "key.horizontal"
+    public static let console = "terminal"
+    public static let expiry = "hourglass"
+    public static let flush = "xmark.bin"
     public static let location = "mappin.and.ellipse"
     public static let transfer = "arrow.left.arrow.right"
     public static let sync = "arrow.triangle.2.circlepath"

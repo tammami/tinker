@@ -170,6 +170,26 @@ public struct WorkspaceView: View {
                 onCancel: { workspace.pendingTableOperation = nil }
             )
         }
+        .sheet(item: boundWorkspace.pendingDatabaseOperation) { request in
+            DatabaseOperationSheet(
+                request: request,
+                environment: environment,
+                affectedTabs: {
+                    if case let .drop(name) = request.kind {
+                        return controller.databaseTabs(connectionID: request.connectionID, name: name)
+                    }
+                    return (0, 0)
+                }(),
+                onFinished: {
+                    workspace.pendingDatabaseOperation = nil
+                    if case let .drop(name) = request.kind {
+                        controller.forgetDatabase(connectionID: request.connectionID, name: name)
+                    }
+                    Task { await sidebar.refresh(connectionID: request.connectionID) }
+                },
+                onCancel: { workspace.pendingDatabaseOperation = nil }
+            )
+        }
         .sheet(item: boundWorkspace.pendingDump) { request in
             DumpSheet(request: request, environment: environment) { workspace.pendingDump = nil }
         }
@@ -178,6 +198,17 @@ public struct WorkspaceView: View {
                 workspace.pendingScriptImport = nil
                 controller.refresh()
                 Task { await sidebar.refresh(connectionID: request.connectionID) }
+            }
+        }
+        .onChange(of: workspace.pendingRedisOpen) { _, request in
+            guard let request else { return }
+            workspace.pendingRedisOpen = nil
+            controller.openRedis(connectionID: request.connectionID, database: request.database, mode: request.mode)
+        }
+        .sheet(item: boundWorkspace.pendingRedisTool) { request in
+            RedisToolsSheet(request: request, environment: environment) {
+                workspace.pendingRedisTool = nil
+                for config in environment.redisConnections { Task { await sidebar.refresh(connectionID: config.id) } }
             }
         }
         .sheet(item: boundWorkspace.pendingTool) { request in
@@ -295,8 +326,10 @@ public struct WorkspaceView: View {
     private var subtitle: String {
         guard let config = workspace.displayedConnection else { return Product.tagline }
         // A file connection has no user or host: the path says everything.
-        if config.dialect.isFileBased { return ((config.database ?? "") as NSString).abbreviatingWithTildeInPath }
-        var parts = ["\(config.user)@\(config.host)"]
+        if config.dialect.isFileBased, !config.isRedis {
+            return ((config.database ?? "") as NSString).abbreviatingWithTildeInPath
+        }
+        var parts = [config.user.isEmpty ? "\(config.host):\(config.port)" : "\(config.user)@\(config.host)"]
         // The database the tab in front is on, which is not always the connection's own.
         if let database = controller.displayedDatabase { parts.append(database) }
         return parts.joined(separator: " · ")
@@ -427,6 +460,9 @@ public struct WorkspaceView: View {
                 onSchemaChanged: { Task { await sidebar.refresh(connectionID: tab.connectionID) } }
             )
             .id(tab.id)
+        case .redis:
+            RedisTabView(controller: controller.redisController(for: tab))
+                .id(tab.id)
         }
     }
 
@@ -621,7 +657,7 @@ public struct WorkspaceView: View {
         case .table: tableControllers[tab.id]?.model
         case .query: queryControllers[tab.id]?.selectedResult?.grid
         // The other tabs are not grids; copy and export act on grids.
-        case .objects, .serverActivity, .source, .queryBuilder: nil
+        case .objects, .serverActivity, .source, .queryBuilder, .redis: nil
         }
     }
 
@@ -630,7 +666,7 @@ public struct WorkspaceView: View {
             switch tab.kind {
             case .table: tableControllers[tab.id]?.selection ?? GridSelection()
             case .query: queryControllers[tab.id]?.selection ?? GridSelection()
-            case .objects, .serverActivity, .source, .queryBuilder: GridSelection()
+            case .objects, .serverActivity, .source, .queryBuilder, .redis: GridSelection()
             }
         let columns = selection.columns(totalColumns: grid.columns.count)
         return selection.rows(totalRows: grid.displayRowCount).map { row in
@@ -709,11 +745,14 @@ public struct WorkspaceView: View {
         {
             return (context.connectionID, context.schema, config.dialect, config.isProduction)
         }
+        // A table is a SQL thing: a Redis tab in front does not choose the connection.
+        let sql = environment.sqlConnections
+        func isSQL(_ id: UUID?) -> UUID? { id.flatMap { id in sql.contains { $0.id == id } ? id : nil } }
         guard
-            let connectionID = workspace.selectedTab?.connectionID
-                ?? workspace.tabs.first?.connectionID
-                ?? environment.connections.first?.id,
-            let config = environment.connections.first(where: { $0.id == connectionID })
+            let connectionID = isSQL(workspace.selectedTab?.connectionID)
+                ?? workspace.tabs.lazy.compactMap({ isSQL($0.connectionID) }).first
+                ?? sql.first?.id,
+            let config = sql.first(where: { $0.id == connectionID })
         else { return nil }
 
         let schema =

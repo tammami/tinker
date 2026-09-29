@@ -29,6 +29,7 @@ let package = Package(
         .library(name: "DBPostgres", targets: ["DBPostgres"]),
         .library(name: "DBMySQL", targets: ["DBMySQL"]),
         .library(name: "DBSQLite", targets: ["DBSQLite"]),
+        .library(name: "DBRedis", targets: ["DBRedis"]),
         .library(name: "DBTunnel", targets: ["DBTunnel"]),
         .library(name: "DBStore", targets: ["DBStore"]),
         .library(name: "DBGrid", targets: ["DBGrid"]),
@@ -103,6 +104,22 @@ let package = Package(
             // The system's libsqlite3, through the SQLite3 module macOS ships; no package.
             dependencies: ["DBCore", "DBSQL", .product(name: "Logging", package: "swift-log")],
             path: "Packages/DBSQLite/Sources/DBSQLite",
+            swiftSettings: strict
+        ),
+        .target(
+            // Redis speaks its own protocol (RESP), written here on the SwiftNIO already in
+            // the graph, so no Redis client library is added. Not a SQL driver: it has its
+            // own session, browser and transfer, and never imports DBSQL.
+            name: "DBRedis",
+            dependencies: [
+                "DBCore",
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
+            ],
+            path: "Packages/DBRedis/Sources/DBRedis",
             swiftSettings: strict
         ),
         .target(
@@ -183,6 +200,12 @@ let package = Package(
             // DBGrid is test-only here: the spatial check parses what the driver decodes.
             dependencies: ["DBMySQL", "DBTestKit", "DBGrid"],
             path: "Packages/DBMySQL/Tests/DBMySQLTests",
+            swiftSettings: strict
+        ),
+        .testTarget(
+            name: "DBRedisTests",
+            dependencies: ["DBRedis", "DBTestKit"],
+            path: "Packages/DBRedis/Tests/DBRedisTests",
             swiftSettings: strict
         ),
         .testTarget(

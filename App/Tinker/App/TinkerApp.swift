@@ -226,6 +226,7 @@ struct TinkerCommands: Commands {
             Divider()
             Button("New Connection…") { workspace?.workspace.presentNewConnection() }
                 .keyboardShortcut("n", modifiers: [.command, .option])
+            Button("New Redis Connection…") { workspace?.workspace.presentNewRedisConnection() }
             Button("New Folder…") { workspace?.workspace.folderEditor = FolderEditor(kind: .create(parent: [])) }
             Button("New Table…") { workspace?.workspace.isNewTablePresented = true }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
@@ -249,6 +250,11 @@ struct TinkerCommands: Commands {
                 .keyboardShortcut("t", modifiers: [.command, .shift])
             Button("Data Synchronization…") { workspace?.presentTool(.dataSync) }
             Button("Structure Synchronization…") { workspace?.presentTool(.structureSync) }
+            Menu("Redis") {
+                Button("Transfer Keys…") { workspace?.presentRedisTool(.transfer) }
+                Button("Data Synchronization…") { workspace?.presentRedisTool(.dataSync) }
+                Button("Structure Synchronization…") { workspace?.presentRedisTool(.structureSync) }
+            }
             Divider()
             Button("Dump Database…") { workspace?.presentDump() }
             Button("Import SQL File…") { workspace?.presentScriptImport() }

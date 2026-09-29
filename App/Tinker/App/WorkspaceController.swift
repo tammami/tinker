@@ -1,6 +1,7 @@
 import AppKit
 import DBCore
 import DBGrid
+import DBRedis
 import DBSQL
 import Foundation
 import Observation
@@ -28,6 +29,8 @@ public final class WorkspaceController {
     public private(set) var sourceControllers: [UUID: SourceController] = [:]
     /// One per query builder tab.
     public private(set) var builderControllers: [UUID: QueryBuilderController] = [:]
+    /// One per Redis tab.
+    public private(set) var redisControllers: [UUID: RedisTabController] = [:]
     /// Toggled by the sidebar command; the split view reads it.
     public var isSidebarVisible = true
 
@@ -56,6 +59,33 @@ public final class WorkspaceController {
         }
     }
 
+    /// Opens (or brings forward) a Redis database's tab, on the given pane.
+    @discardableResult
+    public func openRedis(connectionID: UUID, database: Int, mode: RedisTabController.Mode = .keys) -> WorkspaceTab {
+        let name = environment.connections.first { $0.id == connectionID }?.name ?? "Redis"
+        let tab = workspace.openRedis(connectionID: connectionID, database: database, title: "\(name) · db\(database)")
+        redisController(for: tab).mode = mode
+        return tab
+    }
+
+    public func redisController(for tab: WorkspaceTab) -> RedisTabController {
+        if let existing = redisControllers[tab.id] { return existing }
+        var database = 0
+        if case let .redis(index) = tab.kind { database = index }
+        let made = RedisTabController(connectionID: tab.connectionID, database: database, environment: environment)
+        made.confirm = { [weak self] confirmation in self?.workspace.confirmation = confirmation }
+        made.onKeyspaceChanged = { [weak self] in
+            guard let self else { return }
+            Task { await self.sidebar.refresh(connectionID: tab.connectionID) }
+        }
+        let name = environment.connections.first { $0.id == tab.connectionID }?.name ?? "Redis"
+        made.onDatabaseChanged = { [weak tab] index in
+            tab?.moveToRedisDatabase(index, title: "\(name) · db\(index)")
+        }
+        redisControllers[tab.id] = made
+        return made
+    }
+
     @discardableResult
     public func openServerActivity(connectionID: UUID) -> WorkspaceTab {
         let tab = workspace.openServerActivity(connectionID: connectionID)
@@ -69,6 +99,11 @@ public final class WorkspaceController {
 
     /// The Server tab on its Users pane, with the grant picker on `database`.
     public func openUsers(connectionID: UUID, database: String?) {
+        // Redis ACL users are managed from its console (ACL LIST, ACL SETUSER).
+        if environment.connections.first(where: { $0.id == connectionID })?.isRedis == true {
+            showServerActivity()
+            return
+        }
         let tab = openServerActivity(connectionID: connectionID)
         let controller = serverController(for: tab)
         controller.initialPane = "users"
@@ -187,7 +222,7 @@ public final class WorkspaceController {
     }
 
     public func showQueryBuilder() {
-        guard let id = workspace.activeConnectionID else { return }
+        guard let id = sqlConnectionID(workspace.activeConnectionID) else { return }
         openQueryBuilder(defaultSchema(for: id), connectionID: id)
     }
 
@@ -259,7 +294,7 @@ public final class WorkspaceController {
     static func displayedDatabase(
         config: ConnectionConfig?, tab: WorkspaceTab?, queryDatabase: (WorkspaceTab) -> String?
     ) -> String? {
-        guard let config, !config.dialect.isFileBased else { return config?.database }
+        guard let config, !config.dialect.isFileBased || config.isRedis else { return config?.database }
         guard let tab, tab.connectionID == config.id else { return config.database }
         switch tab.kind {
         case let .table(ref): return ref.database
@@ -267,6 +302,7 @@ public final class WorkspaceController {
         case let .source(object): return object.schema.database
         case .query: return queryDatabase(tab) ?? config.database
         case .serverActivity: return config.database
+        case let .redis(index): return "db\(index)"
         }
     }
 
@@ -297,6 +333,11 @@ public final class WorkspaceController {
 
     @discardableResult
     public func newQueryTab(connectionID: UUID, sql: String = "") -> WorkspaceTab {
+        // A Redis connection has no SQL: New Query (⌘T) opens its console instead.
+        if let redis = environment.connections.first(where: { $0.id == connectionID }), redis.isRedis {
+            return openRedis(
+                connectionID: connectionID, database: Int(redis.database ?? "") ?? 0, mode: .console)
+        }
         let tab = workspace.newQueryTab(connectionID: connectionID, sql: sql)
         let dialect = environment.connections.first { $0.id == connectionID }?.dialect ?? .postgresql
         let controller = QueryTabController(
@@ -404,19 +445,7 @@ public final class WorkspaceController {
     /// On MySQL a database is one of many on the connection, so the connection stays up.
     /// On PostgreSQL a query tab's session database is the connection's own.
     public func closeDatabase(connectionID: UUID, name: String, sidebarItemID: SidebarItem.ID) {
-        let dialect = dialect(for: connectionID)
-        let open = workspace.tabs(for: connectionID, database: name) { [weak self] tab in
-            guard let self, let query = queryControllers[tab.id] else { return nil }
-            switch dialect {
-            // A query tab on MySQL or SQLite belongs to the database its session is on.
-            case .mysql, .sqlite: return query.sessionDatabase
-            // A PostgreSQL query tab is on the connection's own database unless it has
-            // been pointed at another one, which opened that database's own session.
-            case .postgresql:
-                return query.sessionCatalog
-                    ?? environment.connections.first { $0.id == connectionID }?.database
-            }
-        }
+        let open = tabs(on: connectionID, database: name)
         let fold = { [weak self] in self?.sidebar.collapseSubtree(sidebarItemID) }
         guard !open.isEmpty else {
             fold()
@@ -439,6 +468,38 @@ public final class WorkspaceController {
                 fold()
             }
         )
+    }
+
+    /// After a database was dropped: its tabs go without asking — there is nothing left
+    /// for them to show — and its branch of the tree is forgotten.
+    public func forgetDatabase(connectionID: UUID, name: String) {
+        workspace.closeTabs(Set(tabs(on: connectionID, database: name).map(\.id)))
+        pruneControllers()
+        sidebar.collapseSubtree("\(connectionID.uuidString)/db/\(name)")
+    }
+
+    /// How many tabs a database has open, and how many of them hold unsaved work: what
+    /// dropping it will close.
+    public func databaseTabs(connectionID: UUID, name: String) -> (total: Int, unsaved: Int) {
+        let open = tabs(on: connectionID, database: name)
+        return (open.count, open.filter { hasUnsavedWork($0) }.count)
+    }
+
+    /// The tabs that are on one database of a connection.
+    private func tabs(on connectionID: UUID, database name: String) -> [WorkspaceTab] {
+        let dialect = dialect(for: connectionID)
+        return workspace.tabs(for: connectionID, database: name) { [weak self] tab in
+            guard let self, let query = queryControllers[tab.id] else { return nil }
+            switch dialect {
+            // A query tab on MySQL or SQLite belongs to the database its session is on.
+            case .mysql, .sqlite: return query.sessionDatabase
+            // A PostgreSQL query tab is on the connection's own database unless it has
+            // been pointed at another one, which opened that database's own session.
+            case .postgresql:
+                return query.sessionCatalog
+                    ?? environment.connections.first { $0.id == connectionID }?.database
+            }
+        }
     }
 
     /// Closes every tab of a connection and frees what they owned.
@@ -471,6 +532,8 @@ public final class WorkspaceController {
         serverControllers = serverControllers.filter { open.contains($0.key) }
         sourceControllers = sourceControllers.filter { open.contains($0.key) }
         builderControllers = builderControllers.filter { open.contains($0.key) }
+        redisControllers.filter { !open.contains($0.key) }.values.forEach { $0.close() }
+        redisControllers = redisControllers.filter { open.contains($0.key) }
     }
 
     // MARK: - Commands the menus call
@@ -537,6 +600,13 @@ public final class WorkspaceController {
             Task { await controller.refresh() }
             return
         }
+        if let tab = workspace.selectedTab, case .redis = tab.kind, let redis = redisControllers[tab.id] {
+            Task {
+                await redis.rescan()
+                await sidebar.refresh(connectionID: tab.connectionID)
+            }
+            return
+        }
         guard let id = workspace.activeConnectionID else { return }
         Task { await sidebar.refresh(connectionID: id) }
     }
@@ -555,27 +625,62 @@ public final class WorkspaceController {
     /// Opens a Tools wizard with the active connection and its schema as the source.
     public func presentTool(_ kind: ToolKind) {
         let id = workspace.activeConnectionID
+        // From a Redis connection the same menu items open the Redis tools, which only
+        // ever pair Redis with Redis.
+        if let id, environment.connections.first(where: { $0.id == id })?.isRedis == true {
+            let redisKind: RedisToolKind =
+                switch kind {
+                case .dataTransfer: .transfer
+                case .dataSync: .dataSync
+                case .structureSync: .structureSync
+                }
+            var database = 0
+            if let tab = workspace.selectedTab, case let .redis(index) = tab.kind { database = index }
+            workspace.pendingRedisTool = RedisToolRequest(kind: redisKind, connectionID: id, database: database)
+            return
+        }
+        guard let id = sqlConnectionID(id) else { return }
         let fromTab: SchemaRef? = workspace.selectedTab?.tableRef?.schemaRef
         workspace.pendingTool = ToolRequest(
-            kind: kind, connectionID: id, schema: fromTab ?? id.map { defaultSchema(for: $0) })
+            kind: kind, connectionID: id, schema: fromTab ?? defaultSchema(for: id))
+    }
+
+    /// Opens a Redis tool, starting from the active Redis connection (or the first one).
+    public func presentRedisTool(_ kind: RedisToolKind) {
+        let active = workspace.activeConnectionID.flatMap { id in environment.redisConnections.first { $0.id == id } }
+        var database = Int(active?.database ?? "") ?? 0
+        if let tab = workspace.selectedTab, case let .redis(index) = tab.kind { database = index }
+        workspace.pendingRedisTool = RedisToolRequest(
+            kind: kind, connectionID: active?.id ?? environment.redisConnections.first?.id, database: database)
     }
 
     public func presentDump() {
         // From the menu there may be no active connection; the sheet asks either way,
         // with the active one (or the first) only as a starting point.
-        guard let id = workspace.activeConnectionID ?? environment.connections.first?.id else { return }
+        guard let id = sqlConnectionID(workspace.activeConnectionID) else { return }
         let schema = workspace.selectedTab?.tableRef?.schemaRef ?? defaultSchema(for: id)
         workspace.pendingDump = DumpRequest(connectionID: id, schema: schema, tables: nil, choosesSource: true)
     }
 
+    /// The connection a SQL-only command starts from: the active one unless it is Redis,
+    /// else the first SQL connection.
+    private func sqlConnectionID(_ preferred: UUID?) -> UUID? {
+        if let preferred, environment.sqlConnections.contains(where: { $0.id == preferred }) { return preferred }
+        return environment.sqlConnections.first?.id
+    }
+
     public func presentScriptImport() {
-        guard let id = workspace.activeConnectionID ?? environment.connections.first?.id else { return }
+        guard let id = sqlConnectionID(workspace.activeConnectionID) else { return }
         workspace.pendingScriptImport = ScriptImportRequest(
             connectionID: id, database: workspace.activeConnection?.database, choosesTarget: true)
     }
 
     public func showServerActivity() {
         guard let id = workspace.activeConnectionID else { return }
+        if let redis = environment.connections.first(where: { $0.id == id }), redis.isRedis {
+            openRedis(connectionID: id, database: Int(redis.database ?? "") ?? 0, mode: .server)
+            return
+        }
         openServerActivity(connectionID: id)
     }
 
@@ -604,6 +709,12 @@ public final class WorkspaceController {
     }
 
     public func toggleReadOnly() {
+        if let id = workspace.activeConnectionID, let redis = environment.redisSession(for: id),
+            let config = environment.connections.first(where: { $0.id == id })
+        {
+            toggleRedisReadOnly(redis, config)
+            return
+        }
         guard let id = workspace.activeConnectionID,
             let session = environment.session(for: id),
             let config = environment.connections.first(where: { $0.id == id })
@@ -628,6 +739,27 @@ public final class WorkspaceController {
                 confirmTitle: "Unlock",
                 action: apply
             )
+        }
+    }
+
+    /// ⌘⇧L on a Redis connection: the same lock, the same typed name on production.
+    private func toggleRedisReadOnly(_ redis: RedisSession, _ config: ConnectionConfig) {
+        let apply: @MainActor () async -> Void = { [environment] in
+            let locked = await redis.isReadOnly
+            await environment.setReadOnlyOverride(for: config.id, locked)
+            // A connection not marked read-only is locked for this run by the same key.
+            if !config.readOnly { await redis.setReadOnly(!locked) }
+        }
+        Task {
+            guard config.isProduction, await redis.isReadOnly else {
+                await apply()
+                return
+            }
+            workspace.confirmation = DestructiveConfirmation(
+                title: "Unlock writes on “\(config.name)”?",
+                message:
+                    "This is a production Redis marked read-only. Unlocking lets every tab on it write until the app quits or you lock it again with ⌘⇧L.",
+                requiredTypedName: config.name, confirmTitle: "Unlock", action: apply)
         }
     }
 

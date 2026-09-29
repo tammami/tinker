@@ -220,16 +220,18 @@ struct ToolsWizardSheet: View {
         self.environment = environment
         self.onOpenScript = onOpenScript
         self.onDismiss = onDismiss
-        let firstConnection = request.connectionID ?? environment.connections.first?.id
+        // SQL connections only: Redis has tools of its own, and never pairs with SQL.
+        let sql = environment.sqlConnections
+        let firstConnection = request.connectionID.flatMap { id in sql.contains { $0.id == id } ? id : nil } ?? sql.first?.id
         _source = State(
             initialValue: EndpointModel(environment: environment, connectionID: firstConnection, schema: request.schema)
         )
         // The other endpoint starts on the nearest connection of the same engine, but any
         // connection can be chosen: the tools translate between engines.
-        let dialect = environment.connections.first { $0.id == firstConnection }?.dialect
+        let dialect = sql.first { $0.id == firstConnection }?.dialect
         let other =
-            environment.connections.first { $0.id != firstConnection && $0.dialect == dialect }?.id
-            ?? environment.connections.first { $0.id != firstConnection }?.id ?? firstConnection
+            sql.first { $0.id != firstConnection && $0.dialect == dialect }?.id
+            ?? sql.first { $0.id != firstConnection }?.id ?? firstConnection
         _target = State(initialValue: EndpointModel(environment: environment, connectionID: other, schema: nil))
         _controller = State(initialValue: TransferController(environment: environment))
     }
@@ -241,7 +243,7 @@ struct ToolsWizardSheet: View {
     private var isCrossEngine: Bool { !targetIsFile && source.dialect != target.dialect }
 
     /// Every stored connection: the tools carry structure and rows between engines.
-    private var candidateConnections: [ConnectionConfig] { environment.connections }
+    private var candidateConnections: [ConnectionConfig] { environment.sqlConnections }
     /// Folder-qualified titles, so two connections called the same read apart.
     private var connectionTitles: [UUID: String] { ConnectionConfig.distinctTitles(for: candidateConnections) }
 

@@ -60,6 +60,11 @@ public struct SidebarView: View {
                         }
                         .keyboardShortcut("n", modifiers: [.command, .option])
                         Button {
+                            workspace.presentNewRedisConnection()
+                        } label: {
+                            Label("New Redis Connection…", systemImage: Icon.redisKey)
+                        }
+                        Button {
                             workspace.folderEditor = FolderEditor(kind: .create(parent: []))
                         } label: {
                             Label("New Folder…", systemImage: Icon.group)
@@ -118,6 +123,12 @@ extension WorkspaceModel {
             name: "New Connection", dialect: .postgresql,
             host: "localhost", port: 5_432, user: NSUserName(), tls: TLSConfig(mode: .require)
         )
+        isEditingNewConnection = true
+    }
+
+    /// Opens the connection sheet on a fresh Redis configuration: local, 6379, db0.
+    public func presentNewRedisConnection() {
+        editingConnection = .redis(name: "Redis")
         isEditingNewConnection = true
     }
 }
@@ -242,13 +253,13 @@ struct SidebarRow: View {
     private func connectionLabel(id: UUID) -> some View {
         if let config {
             let state = sidebar.state(of: id)
-            let isLive = state.isUsable
+            let isLive = config.isRedis ? sidebar.liveRedis.contains(id) : state.isUsable
             RoundedRectangle(cornerRadius: 1.5)
                 .fill(config.color?.swiftUIColor ?? .clear)
                 .frame(width: 3, height: 14)
                 .help(config.color.map { "Connection colour: \($0.displayName)" } ?? "")
             EngineMark(
-                dialect: config.dialect, flavor: sidebar.flavor(of: config.id),
+                config: config, flavor: sidebar.flavor(of: config.id),
                 size: DesignTokens.Metrics.iconWidth
             )
             .saturation(isLive ? 1 : 0)
@@ -286,6 +297,8 @@ struct SidebarRow: View {
         // An open database is green, a closed one grey, so the tree says which databases
         // are in use and Close Database has an obvious target.
         case .database: sidebar.isExpanded(item.id) ? .green : .secondary
+        // A Redis database with keys in it stands out from the empty ones.
+        case .redisDatabase: item.subtitle == nil ? .secondary : EngineMark.redisPlate
         case .schema: .teal
         default: .secondary
         }
@@ -294,7 +307,13 @@ struct SidebarRow: View {
     private var helpText: String {
         switch item.kind {
         case .connection:
-            config.map { $0.dialect.isFileBased ? ($0.database ?? "") : "\($0.user)@\($0.host):\($0.port)" } ?? ""
+            config.map {
+                $0.dialect.isFileBased && !$0.isRedis
+                    ? ($0.database ?? "")
+                    : ($0.user.isEmpty ? "" : "\($0.user)@") + "\($0.host):\($0.port)"
+            } ?? ""
+        case let .redisDatabase(_, index):
+            "Double-click to browse db\(index)'s keys"
         case let .table(_, info): info.comment ?? "\(info.kind.displayName) \(info.ref.schema).\(info.ref.name)"
         case let .routine(_, _, name, signature): "\(name)(\(signature))"
         case let .failure(_, message): message
@@ -307,6 +326,8 @@ struct SidebarRow: View {
         switch item.kind {
         case let .table(id, info):
             onOpenTable(info.ref, id, false)
+        case let .redisDatabase(id, index):
+            workspace.pendingRedisOpen = RedisOpenRequest(connectionID: id, database: index)
         default:
             toggleExpansion()
         }
@@ -327,6 +348,8 @@ struct SidebarRow: View {
         switch item.kind {
         case let .table(id, info):
             onOpenTable(info.ref, id, NSEvent.modifierFlags.contains(.option))
+        case let .redisDatabase(id, index):
+            workspace.pendingRedisOpen = RedisOpenRequest(connectionID: id, database: index)
         case let .schema(id, ref):
             // A schema opens as a list of what it holds, rather than only expanding
             // one node at a time.
@@ -353,8 +376,12 @@ struct SidebarRow: View {
     @ViewBuilder
     var contextMenu: some View {
         switch item.kind {
+        case let .connection(id) where config?.isRedis == true:
+            redisConnectionMenu(id)
         case let .connection(id):
             connectionMenu(id)
+        case let .redisDatabase(id, index):
+            redisDatabaseMenu(id, index)
         case let .table(id, info):
             tableMenu(connectionID: id, info: info)
         case let .schema(id, ref):
@@ -492,6 +519,14 @@ struct SidebarRow: View {
                 onCloseDatabase(id, name, item.id)
             } label: {
                 Label("Close Database", systemImage: Icon.collapse)
+            }
+            if !DatabaseOperations.isSystemDatabase(name, dialect: dialect(of: id)) {
+                Divider()
+                Button {
+                    workspace.pendingDatabaseOperation = DatabaseOperationRequest(kind: .drop(name), connectionID: id)
+                } label: {
+                    Label("Drop Database…", systemImage: Icon.delete)
+                }
             }
         case let .group(path):
             Button {
@@ -680,6 +715,70 @@ struct SidebarRow: View {
         onNewQuery(connectionID, RoutineTemplates.skeleton(procedure: procedure, schema: schema, dialect: dialect))
     }
 
+    /// A Redis connection: browse, console, server, the Redis tools, then what every
+    /// connection has (edit, move, refresh, disconnect, delete).
+    @ViewBuilder
+    func redisConnectionMenu(_ id: UUID) -> some View {
+        if let config = workspace.environment.connections.first(where: { $0.id == id }) {
+            let database = Int(config.database ?? "") ?? 0
+            Button {
+                workspace.pendingRedisOpen = RedisOpenRequest(connectionID: id, database: database)
+            } label: {
+                Label("Browse Keys", systemImage: Icon.redisKey)
+            }
+            Button {
+                workspace.pendingRedisOpen = RedisOpenRequest(connectionID: id, database: database, mode: .console)
+            } label: {
+                Label("Console", systemImage: Icon.console)
+            }
+            .keyboardShortcut("t", modifiers: .command)
+            Button {
+                workspace.pendingRedisOpen = RedisOpenRequest(connectionID: id, database: database, mode: .server)
+            } label: {
+                Label("Server Info", systemImage: Icon.activity)
+            }
+            Divider()
+            redisToolItems(id, database)
+            Divider()
+            commonConnectionItems(config)
+        }
+    }
+
+    @ViewBuilder
+    func redisDatabaseMenu(_ id: UUID, _ index: Int) -> some View {
+        Button {
+            workspace.pendingRedisOpen = RedisOpenRequest(connectionID: id, database: index)
+        } label: {
+            Label("Browse Keys", systemImage: Icon.redisKey)
+        }
+        Button {
+            workspace.pendingRedisOpen = RedisOpenRequest(connectionID: id, database: index, mode: .console)
+        } label: {
+            Label("Console", systemImage: Icon.console)
+        }
+        Divider()
+        redisToolItems(id, index)
+    }
+
+    @ViewBuilder
+    func redisToolItems(_ id: UUID, _ database: Int) -> some View {
+        Button {
+            workspace.pendingRedisTool = RedisToolRequest(kind: .transfer, connectionID: id, database: database)
+        } label: {
+            Label("Transfer Keys…", systemImage: Icon.transfer)
+        }
+        Button {
+            workspace.pendingRedisTool = RedisToolRequest(kind: .dataSync, connectionID: id, database: database)
+        } label: {
+            Label("Data Synchronization…", systemImage: Icon.sync)
+        }
+        Button {
+            workspace.pendingRedisTool = RedisToolRequest(kind: .structureSync, connectionID: id, database: database)
+        } label: {
+            Label("Structure Synchronization…", systemImage: Icon.structureSync)
+        }
+    }
+
     @ViewBuilder
     func connectionMenu(_ id: UUID) -> some View {
         if let config = workspace.environment.connections.first(where: { $0.id == id }) {
@@ -706,74 +805,88 @@ struct SidebarRow: View {
                     Label("Users & Privileges…", systemImage: Icon.user)
                 }
             }
+            if config.dialect.hasMultipleDatabases {
+                Button {
+                    workspace.pendingDatabaseOperation = DatabaseOperationRequest(kind: .create, connectionID: id)
+                } label: {
+                    Label("New Database…", systemImage: Icon.add)
+                }
+            }
             Divider()
             transferItems(connectionID: id, schema: defaultSchema(for: config), databaseName: config.database)
             Divider()
-            Button {
-                workspace.editingConnection = config
-            } label: {
-                Label("Edit…", systemImage: Icon.edit)
-            }
-            Button {
-                Task { await workspace.environment.duplicate(config) }
-            } label: {
-                Label("Duplicate", systemImage: Icon.duplicate)
-            }
-            Menu {
-                Button("No Folder") { Task { await workspace.environment.move(config, toGroup: []) } }
-                    .disabled(config.groupPath.isEmpty)
-                let folders = workspace.environment.allGroupPaths
-                if !folders.isEmpty { Divider() }
-                ForEach(folders, id: \.self) { path in
-                    Button(path.joined(separator: " › ")) {
-                        Task { await workspace.environment.move(config, toGroup: path) }
-                    }
-                    .disabled(path == config.groupPath)
+            commonConnectionItems(config)
+        }
+    }
+
+    /// What every connection's menu ends with, SQL or Redis.
+    @ViewBuilder
+    func commonConnectionItems(_ config: ConnectionConfig) -> some View {
+        let id = config.id
+        Button {
+            workspace.editingConnection = config
+        } label: {
+            Label("Edit…", systemImage: Icon.edit)
+        }
+        Button {
+            Task { await workspace.environment.duplicate(config) }
+        } label: {
+            Label("Duplicate", systemImage: Icon.duplicate)
+        }
+        Menu {
+            Button("No Folder") { Task { await workspace.environment.move(config, toGroup: []) } }
+                .disabled(config.groupPath.isEmpty)
+            let folders = workspace.environment.allGroupPaths
+            if !folders.isEmpty { Divider() }
+            ForEach(folders, id: \.self) { path in
+                Button(path.joined(separator: " › ")) {
+                    Task { await workspace.environment.move(config, toGroup: path) }
                 }
-                Divider()
-                Button("New Folder…") {
-                    workspace.folderEditor = FolderEditor(kind: .create(parent: [], moving: config.id))
-                }
-            } label: {
-                Label("Move to Folder", systemImage: Icon.group)
+                .disabled(path == config.groupPath)
             }
             Divider()
-            Button {
-                Task { await sidebar.refresh(connectionID: id) }
-            } label: {
-                Label("Refresh", systemImage: Icon.refresh)
+            Button("New Folder…") {
+                workspace.folderEditor = FolderEditor(kind: .create(parent: [], moving: config.id))
             }
-            // A session that lost a transaction waits for this: it will not reconnect on
-            // its own, because that would discard the uncommitted work silently (SPEC §9.6).
-            if case .degraded = sidebar.state(of: id) {
-                Button {
-                    Task { await sidebar.reconnect(connectionID: id) }
-                } label: {
-                    Label("Reconnect", systemImage: Icon.refresh)
+        } label: {
+            Label("Move to Folder", systemImage: Icon.group)
+        }
+        Divider()
+        Button {
+            Task { await sidebar.refresh(connectionID: id) }
+        } label: {
+            Label("Refresh", systemImage: Icon.refresh)
+        }
+        // A session that lost a transaction waits for this: it will not reconnect on
+        // its own, because that would discard the uncommitted work silently (SPEC §9.6).
+        if case .degraded = sidebar.state(of: id) {
+            Button {
+                Task { await sidebar.reconnect(connectionID: id) }
+            } label: {
+                Label("Reconnect", systemImage: Icon.refresh)
+            }
+        }
+        Button {
+            onDisconnect(id)
+        } label: {
+            Label("Disconnect", systemImage: Icon.disconnect)
+        }
+        .disabled(!sidebar.state(of: id).isUsable && workspace.tabs(for: id).isEmpty)
+        Divider()
+        Button(role: .destructive) {
+            let open = workspace.tabs(for: id).count
+            workspace.confirmation = DestructiveConfirmation(
+                title: "Delete “\(config.name)”?",
+                message: "The connection, its saved password and everything remembered about it are removed."
+                    + (open > 0 ? " Its \(open) open tab\(open == 1 ? "" : "s") will be closed." : "")
+                    + " The database itself is untouched.",
+                action: {
+                    onCloseTabs(id)
+                    await workspace.environment.delete(config)
                 }
-            }
-            Button {
-                onDisconnect(id)
-            } label: {
-                Label("Disconnect", systemImage: Icon.disconnect)
-            }
-            .disabled(!sidebar.state(of: id).isUsable && workspace.tabs(for: id).isEmpty)
-            Divider()
-            Button(role: .destructive) {
-                let open = workspace.tabs(for: id).count
-                workspace.confirmation = DestructiveConfirmation(
-                    title: "Delete “\(config.name)”?",
-                    message: "The connection, its saved password and everything remembered about it are removed."
-                        + (open > 0 ? " Its \(open) open tab\(open == 1 ? "" : "s") will be closed." : "")
-                        + " The database itself is untouched.",
-                    action: {
-                        onCloseTabs(id)
-                        await workspace.environment.delete(config)
-                    }
-                )
-            } label: {
-                Label("Delete…", systemImage: Icon.delete)
-            }
+            )
+        } label: {
+            Label("Delete…", systemImage: Icon.delete)
         }
     }
 

@@ -28,7 +28,7 @@ struct StructureSyncSheet: View {
     private var connections: [ConnectionConfig] {
         // Only connections of the same dialect: the generator writes one dialect's SQL,
         // and comparing across engines would produce statements neither server accepts.
-        environment.connections.filter { $0.dialect == dialect }
+        environment.sqlConnections.filter { $0.dialect == dialect }
     }
 
     /// Folder-qualified titles, so two connections called the same read apart.

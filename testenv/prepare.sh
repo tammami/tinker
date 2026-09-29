@@ -5,6 +5,7 @@
 #   Reads:  TINKER_TEST_PG_ADMIN_URL       e.g. postgresql://me@localhost:5432/postgres
 #           TINKER_TEST_MYSQL_ADMIN_URL    e.g. mysql://root:secret@127.0.0.1:3306/
 #           TINKER_TEST_MARIADB_ADMIN_URL  e.g. mariadb://root@127.0.0.1:3316/ (optional)
+#           TINKER_TEST_REDIS_ADMIN_URL    e.g. redis://127.0.0.1:6379 (optional)
 #   Prints: the non-admin URLs to export as TINKER_TEST_PG_URL / TINKER_TEST_MYSQL_URL,
 #           and TINKER_TEST_MYSQL_URLS for the second MySQL-family server
 #
@@ -191,6 +192,44 @@ SQL
 }
 
 # ---------------------------------------------------------------------------
+# Redis
+# ---------------------------------------------------------------------------
+# Redis has no databases to own and no per-database rights, so the test user is an ACL
+# user without the dangerous commands (FLUSHALL, FLUSHDB, CONFIG SET, SHUTDOWN, DEBUG,
+# KEYS…), and the tests confine themselves to logical databases 14 and 15. The ACL lives
+# in the server's memory: re-run this after the server restarts.
+prepare_redis() {
+    local admin="$1"
+    parse_url "$admin"
+    local host="${URL_HOST:-127.0.0.1}" port="${URL_PORT:-6379}"
+    local cli
+    cli="$(command -v redis-cli || command -v valkey-cli || true)"
+    [[ -n "$cli" ]] || die "redis-cli not found on PATH (needed for Redis preparation)"
+    admin_redis() {
+        if [[ -n "$URL_PASS" ]]; then
+            REDISCLI_AUTH="$URL_PASS" "$cli" -h "$host" -p "$port" ${URL_USER:+--user "$URL_USER"} "$@"
+        else
+            "$cli" -h "$host" -p "$port" "$@"
+        fi
+    }
+    log "Redis: connecting as admin to $host:$port"
+    local version
+    version="$(admin_redis INFO server 2>&1 | tr -d '\r' | grep -E '^(redis|valkey)_version:' | head -1 | cut -d: -f2)"
+    [[ -n "$version" ]] || die "Redis admin connection failed"
+    log "Redis: server version $version"
+    # RESTORE, INFO, MODULE LIST and CONFIG GET are in @dangerous but are what a client
+    # reads and what a transfer writes; they are the only ones given back.
+    admin_redis ACL SETUSER "$TEST_USER" reset on ">$TEST_PASSWORD" '~*' '&*' +@all -@dangerous \
+        +restore +info +module\|list +config\|get +client\|setname +client\|info >/dev/null \
+        || die "Redis: ACL SETUSER failed (the server needs Redis 6 or later)"
+    local denied
+    denied="$(REDISCLI_AUTH="$TEST_PASSWORD" "$cli" -h "$host" -p "$port" --user "$TEST_USER" -n 15 FLUSHDB 2>&1 || true)"
+    [[ "$denied" == *NOPERM* ]] || die "Redis: $TEST_USER can run FLUSHDB: $denied"
+    exports+=("export TINKER_TEST_REDIS_URL='redis://$TEST_USER:$TEST_PASSWORD@$host:$port/15'")
+    did_anything=1
+}
+
+# ---------------------------------------------------------------------------
 if [[ -n "${TINKER_TEST_PG_ADMIN_URL:-}" ]]; then
     prepare_pg "$TINKER_TEST_PG_ADMIN_URL"
 else
@@ -209,6 +248,10 @@ fi
 if [[ -n "${TINKER_TEST_MARIADB_ADMIN_URL:-}" ]]; then
     prepare_mysql "$TINKER_TEST_MARIADB_ADMIN_URL"
     exports+=("export TINKER_TEST_MYSQL_URLS='$LAST_MYSQL_URL'")
+fi
+
+if [[ -n "${TINKER_TEST_REDIS_ADMIN_URL:-}" ]]; then
+    prepare_redis "$TINKER_TEST_REDIS_ADMIN_URL"
 fi
 
 [[ "$did_anything" == 1 ]] || die "nothing to do: set TINKER_TEST_PG_ADMIN_URL and/or TINKER_TEST_MYSQL_ADMIN_URL (see testenv/README.md)"

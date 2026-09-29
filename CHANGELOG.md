@@ -4,6 +4,45 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.15] - 2026-09-29
+
+### Added
+- **Redis.** Add a Redis connection (New › New Redis Connection…, or pick Redis as the
+  engine): host, port, an optional ACL user, password, TLS, SSH tunnel, read-only and
+  production like any other connection. Double-click it to see db0…db15 with their key
+  counts; double-click a database to open it.
+  - **Keys:** search by pattern and type, and see each key's type, TTL and size. Edit
+    strings (with Format JSON), hashes, lists, sets, sorted sets, streams (with their
+    consumer groups) and JSON documents, a page at a time for big keys. You can also
+    create, rename, duplicate, set or remove the expiry of, and delete keys. Deleting
+    every key matching a pattern, and emptying a database, both ask for the name typed.
+  - **Console:** commands as in `redis-cli`, printed the way `redis-cli` prints them,
+    with history on ↑ and ↓. Commands that change the server are refused on a read-only
+    connection and confirmed on a production one. Commands that would hijack or block
+    the connection are refused with the reason.
+  - **Server:** INFO by section, connected clients, the slow log and the configuration.
+  - **Tools › Redis:** Transfer Keys, Data Synchronization and Structure Synchronization
+    (search indexes and stream consumer groups), between Redis databases on the same
+    server or on another one. They pair Redis only with Redis; the SQL tools never offer
+    a Redis connection.
+- **Import from Excel.** Import now reads `.xlsx` workbooks, including the ones Tinker
+  exports. Columns map by their header, and dates come back as dates. Before, a
+  workbook was read as CSV and its columns showed as binary noise.
+- **New Database… and Drop Database…** on PostgreSQL, MySQL and MariaDB connections. A new
+  database can be given an encoding, owner and template (PostgreSQL), or a character set
+  and collation read from the server (MySQL). Dropping asks for the name typed and
+  closes the database's tabs.
+
+### Changed
+- A connection shows its databases after it is opened with a double-click; a single click
+  only selects it. ⌘T still opens a query on it directly.
+- ⌘Q asks before quitting whenever tabs are open, not only when there is unsaved work.
+
+### Fixed
+- After dropping, truncating or pasting a table, the sidebar keeps every open branch open
+  and filled; a database no longer shows open and empty until it is closed and reopened.
+- Typing in the Snippets editor goes where the caret is.
+
 ## [0.1.14] - 2026-09-29
 
 ### Added

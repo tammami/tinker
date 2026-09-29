@@ -1,4 +1,5 @@
 import DBCore
+import DBRedis
 import DBMySQL
 import DBPostgres
 import DBSQLite
@@ -225,10 +226,11 @@ public final class AppEnvironment {
     /// Kept here so a session opened later on another database starts unlocked too.
     private var readOnlyOverrides: Set<UUID> = []
 
-    /// The session for a configuration, created on first use.
+    /// The session for a configuration, created on first use. Nil for a Redis
+    /// connection: it has a ``RedisSession`` of its own and never reaches SQL code.
     public func session(for id: UUID) -> ConnectionSession? {
         if let existing = sessions[id] { return existing }
-        guard let config = connections.first(where: { $0.id == id }) else { return nil }
+        guard let config = connections.first(where: { $0.id == id }), !config.isRedis else { return nil }
         let session = ConnectionSession(
             config: config,
             registry: registry,
@@ -293,6 +295,32 @@ public final class AppEnvironment {
         return (sessions[id].map { [$0] } ?? []) + others
     }
 
+    // MARK: - Redis
+
+    /// Adds a connection for this run only, never saved: the UI demo's Redis scenes use
+    /// it so screenshots need nothing in the developer's store.
+    public func addTemporaryConnection(_ config: ConnectionConfig) {
+        connections.append(config)
+    }
+
+    private var redisSessions: [UUID: RedisSession] = [:]
+
+    /// The Redis session for a Redis connection, created on first use; nil for any other.
+    public func redisSession(for id: UUID) -> RedisSession? {
+        if let existing = redisSessions[id] { return existing }
+        guard let config = connections.first(where: { $0.id == id }), config.isRedis else { return nil }
+        let session = RedisSession(config: config, secrets: secrets, tunnelProvider: tunnelProvider, logger: logger)
+        redisSessions[id] = session
+        if readOnlyOverrides.contains(id) { Task { await session.setReadOnly(false) } }
+        return session
+    }
+
+    /// The Redis connections, for the pickers of the Redis tools.
+    public var redisConnections: [ConnectionConfig] { connections.filter(\.isRedis) }
+
+    /// The SQL connections, for every picker that leads to SQL.
+    public var sqlConnections: [ConnectionConfig] { connections.filter { !$0.isRedis } }
+
     /// Whether the user has lifted the connection's read-only lock for this run.
     public func isReadOnlyOverridden(_ id: UUID) -> Bool { readOnlyOverrides.contains(id) }
 
@@ -301,6 +329,10 @@ public final class AppEnvironment {
     public func setReadOnlyOverride(for id: UUID, _ overridden: Bool) async {
         if overridden { readOnlyOverrides.insert(id) } else { readOnlyOverrides.remove(id) }
         for session in sessions(for: id) { await session.setReadOnlyOverride(overridden) }
+        if let redis = redisSessions[id] {
+            let locked = connections.first { $0.id == id }?.readOnly ?? false
+            await redis.setReadOnly(locked && !overridden)
+        }
     }
 
     private func applyReadOnlyOverride(to session: ConnectionSession, for id: UUID) {
@@ -312,6 +344,15 @@ public final class AppEnvironment {
     /// main session's state sees it go and come back.
     public func disconnect(_ id: UUID) async {
         for session in sessions(for: id) { await session.disconnect() }
+        await redisSessions[id]?.disconnect()
+    }
+
+    /// Closes the session opened on one other database of a PostgreSQL server, so the
+    /// database can be dropped: the server refuses while anyone, Tinker included, is in it.
+    public func closeSession(for id: UUID, database: String) async {
+        if let session = databaseSessions.removeValue(forKey: "\(id.uuidString)/\(database)") {
+            await session.disconnect()
+        }
     }
 
     /// Drops a cached session so the next use picks up an edited configuration. What was
@@ -323,6 +364,7 @@ public final class AppEnvironment {
         }
         currentDatabases.removeValue(forKey: id)
         readOnlyOverrides.remove(id)
+        if let redis = redisSessions.removeValue(forKey: id) { await redis.disconnect() }
         guard let session = sessions.removeValue(forKey: id) else { return }
         await session.disconnect()
     }
@@ -333,6 +375,8 @@ public final class AppEnvironment {
         databaseSessions.removeAll()
         for session in sessions.values { await session.disconnect() }
         sessions.removeAll()
+        for session in redisSessions.values { await session.disconnect() }
+        redisSessions.removeAll()
     }
 
     // MARK: - History, preferences, settings

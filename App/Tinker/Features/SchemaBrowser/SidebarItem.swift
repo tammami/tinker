@@ -15,6 +15,8 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
         /// MySQL and MariaDB only: the database's scheduled events.
         case eventFolder(connection: UUID, schema: SchemaRef)
         case event(connection: UUID, schema: SchemaRef, name: String, isEnabled: Bool)
+        /// A Redis logical database (db0…db15), with how many keys it held when listed.
+        case redisDatabase(connection: UUID, index: Int)
         /// Shown while a node's children are being read.
         case loading(parent: String)
         /// Shown when reading a node's children failed, carrying the server's words.
@@ -51,7 +53,7 @@ public struct SidebarItem: Identifiable, Hashable, Sendable {
         case let .connection(id), let .database(id, _), let .schema(id, _),
             let .tableFolder(id, _, _), let .table(id, _),
             let .routineFolder(id, _), let .routine(id, _, _, _),
-            let .eventFolder(id, _), let .event(id, _, _, _):
+            let .eventFolder(id, _), let .event(id, _, _, _), let .redisDatabase(id, _):
             id
         case .group, .loading, .failure:
             nil

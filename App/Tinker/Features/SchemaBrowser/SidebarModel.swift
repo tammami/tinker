@@ -1,4 +1,5 @@
 import DBCore
+import DBRedis
 import DBStore
 import Foundation
 import Observation
@@ -98,7 +99,7 @@ public final class SidebarModel {
             id: config.id.uuidString,
             kind: .connection(config.id),
             title: config.name,
-            subtitle: config.dialect.isFileBased
+            subtitle: config.dialect.isFileBased && !config.isRedis
                 ? ((config.database ?? "") as NSString).abbreviatingWithTildeInPath
                 : "\(config.user)@\(config.host)",
             symbolName: Icon.connection,
@@ -148,7 +149,9 @@ public final class SidebarModel {
     }
 
     public func state(of connectionID: UUID) -> ConnectionState {
-        states[connectionID] ?? .disconnected
+        // A Redis connection has no SQL session to report; the tree's last answer stands in.
+        if liveRedis.contains(connectionID) { return .connected }
+        return states[connectionID] ?? .disconnected
     }
 
     /// Follows a session's state so the status dot stays honest.
@@ -279,6 +282,7 @@ public final class SidebarModel {
     /// What Disconnect does to the tree: every node of the connection closes and empties.
     public func collapseConnection(_ connectionID: UUID) {
         openedConnections.remove(connectionID)
+        liveRedis.remove(connectionID)
         let marker = connectionID.uuidString
         expanded = expanded.filter { !$0.contains(marker) }
         childCache = childCache.filter { !$0.key.contains(marker) }
@@ -406,6 +410,9 @@ public final class SidebarModel {
         switch item.kind {
         case let .group(path):
             return buildLevel(path: path)
+
+        case let .connection(id) where environment.redisSession(for: id) != nil:
+            return try await redisDatabases(of: id)
 
         case let .connection(id):
             guard let session = environment.session(for: id) else { return [] }
@@ -546,10 +553,39 @@ public final class SidebarModel {
             // draw as open and empty while its badge still counted them.
             return item.children ?? []
 
-        case .table, .routine, .event, .loading, .failure:
+        case .table, .routine, .event, .loading, .failure, .redisDatabase:
             return []
         }
     }
+
+    /// A Redis connection's logical databases, every one of them — an empty database can
+    /// be opened and written to — with its key count from `INFO keyspace`.
+    private func redisDatabases(of id: UUID) async throws -> [SidebarItem] {
+        guard let session = environment.redisSession(for: id) else { return [] }
+        do {
+            let info = try await session.connect()
+            let databases = try await session.withConnection(database: session.defaultDatabase) { connection in
+                try await RedisKeyspace.databases(connection, count: info.databaseCount)
+            }
+            liveRedis.insert(id)
+            return databases.map { database in
+                SidebarItem(
+                    id: "\(id.uuidString)/redis/\(database.index)",
+                    kind: .redisDatabase(connection: id, index: database.index),
+                    title: "db\(database.index)",
+                    subtitle: database.keys == 0 ? nil : "\(database.keys) key\(database.keys == 1 ? "" : "s")",
+                    symbolName: Icon.database
+                )
+            }
+        } catch {
+            liveRedis.remove(id)
+            throw error
+        }
+    }
+
+    /// Redis connections that answered the last time the tree asked. They have no SQL
+    /// session to report a state, so the badge reads this.
+    public private(set) var liveRedis: Set<UUID> = []
 
     /// A failure here must not hide the folder, so it answers `.unsupported`.
     private func schedulerState(of session: ConnectionSession) async -> SchedulerState {

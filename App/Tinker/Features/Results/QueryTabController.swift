@@ -1272,7 +1272,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     /// The connection pop-up's contents, which are already in memory: a tab can be opened
     /// and left alone without a single packet going out.
     public func loadConnectionChoices() {
-        availableConnections = environment.connections
+        availableConnections = environment.sqlConnections
     }
 
     /// Fills the session pop-up the first time something actually needs it — the pop-up
@@ -1289,7 +1289,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
 
     /// Reads what the pickers should offer for the current connection.
     public func loadSessionChoices() async {
-        availableConnections = environment.connections
+        availableConnections = environment.sqlConnections
         guard let session else { return }
         isLoadingSessionChoices = true
         defer { isLoadingSessionChoices = false }

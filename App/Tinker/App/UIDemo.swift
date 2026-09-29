@@ -1,5 +1,6 @@
 import AppKit
 import DBCore
+import DBRedis
 import DBGrid
 import DBSQL
 import DBStore
@@ -50,6 +51,45 @@ enum UIDemo {
         let wanted = scene.split(separator: "+").map(String.init)
         // The first-run sheet needs no connection, so the scene opens none.
         if wanted == ["firstrun"] { return }
+        // `redis`, `redis-console`, `redis-server`, `redis-tools`, `redis-editor`: a Redis
+        // connection that exists for this run only (127.0.0.1:6379, db13), so nothing is
+        // added to the store.
+        if let redisScene = wanted.first(where: { $0.hasPrefix("redis") }) {
+            var demo = ConnectionConfig.redis(name: "Redis (demo)")
+            demo.database = "13"
+            environment.addTemporaryConnection(demo)
+            sidebar.rebuildRoots()
+            if let root = sidebar.find(id: demo.id.uuidString) { await sidebar.expand(root) }
+            switch redisScene {
+            case "redis-tools":
+                workspace.pendingRedisTool = RedisToolRequest(kind: .dataSync, connectionID: demo.id, database: 13)
+            case "redis-editor":
+                workspace.editingConnection = demo
+            default:
+                let mode: RedisTabMode =
+                    redisScene == "redis-console" ? .console : redisScene == "redis-server" ? .server : .keys
+                let tab = controller.openRedis(connectionID: demo.id, database: 13, mode: mode)
+                if mode == .keys {
+                    let redis = controller.redisController(for: tab)
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(1_500))
+                        if let first = redis.keys.first(where: { $0.type == .hash }) ?? redis.keys.first {
+                            redis.selection = [first.id]
+                            await redis.open(first.key)
+                        }
+                    }
+                }
+                if mode == .console {
+                    let redis = controller.redisController(for: tab)
+                    for line in ["PING", "HGETALL demo:user:1", "ZRANGE demo:leaderboard 0 -1 WITHSCORES", "LPUSH"] {
+                        redis.consoleInput = line
+                        redis.runConsole()
+                        try? await Task.sleep(for: .milliseconds(150))
+                    }
+                }
+            }
+            return
+        }
         // A named connection may be chosen with `--ui-demo-connection <name>`.
         let arguments = CommandLine.arguments
         var config = environment.connections.first

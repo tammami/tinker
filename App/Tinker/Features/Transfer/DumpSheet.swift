@@ -193,7 +193,7 @@ struct DumpSheet: View {
             HStack(spacing: DesignTokens.Spacing.md) {
                 FieldRow(label: "Connection", labelWidth: 80) {
                     Picker("", selection: $endpoint.connectionID) {
-                        ForEach(environment.connections) { config in
+                        ForEach(environment.sqlConnections) { config in
                             Text(connectionTitles[config.id] ?? config.name).tag(UUID?.some(config.id))
                         }
                     }

@@ -164,6 +164,16 @@ public struct ConnectionConfig: Sendable, Hashable, Codable, Identifiable {
     public var readOnly: Bool
     /// Adds a confirmation to every write and a red badge in the sidebar.
     public var isProduction: Bool
+    /// Set for a server that is not SQL at all (Redis). Nil for every SQL connection,
+    /// whose engine is ``dialect``. Kept out of ``SQLDialect`` on purpose: the SQL code
+    /// switches over the dialect in ~90 places, none of which has anything to say about
+    /// a key–value store, and a Redis connection must never reach them.
+    ///
+    /// Optional so connections saved before it existed decode unchanged.
+    public var keyValueEngine: KeyValueEngine?
+
+    /// True for a Redis connection.
+    public var isRedis: Bool { keyValueEngine == .redis }
 
     public init(
         id: UUID = UUID(),
@@ -182,7 +192,8 @@ public struct ConnectionConfig: Sendable, Hashable, Codable, Identifiable {
         options: [String: String] = [:],
         statementTimeout: Duration? = nil,
         readOnly: Bool = false,
-        isProduction: Bool = false
+        isProduction: Bool = false,
+        keyValueEngine: KeyValueEngine? = nil
     ) {
         self.id = id
         self.name = name
@@ -201,6 +212,16 @@ public struct ConnectionConfig: Sendable, Hashable, Codable, Identifiable {
         self.statementTimeout = statementTimeout
         self.readOnly = readOnly
         self.isProduction = isProduction
+        self.keyValueEngine = keyValueEngine
+    }
+
+    /// A new Redis connection with the usual defaults: local, port 6379, database 0.
+    public static func redis(
+        name: String = "Redis", host: String = "127.0.0.1", port: Int = 6379, groupPath: [String] = []
+    ) -> ConnectionConfig {
+        ConnectionConfig(
+            name: name, groupPath: groupPath, dialect: .postgresql, host: host, port: port, user: "", database: "0",
+            tls: TLSConfig(mode: .disable), keyValueEngine: .redis)
     }
 
     /// Known keys for ``ConnectionConfig/options``.
@@ -210,6 +231,15 @@ public struct ConnectionConfig: Sendable, Hashable, Codable, Identifiable {
         /// MySQL: treat a column declared `tinyint(1)` as boolean. Default true.
         public static let tinyint1IsBool = "tinyint1IsBool"
     }
+}
+
+/// A server that is not SQL. Redis is the one there is; Valkey, KeyDB and Dragonfly
+/// speak the same protocol and use it too.
+public enum KeyValueEngine: String, Sendable, Hashable, Codable, CaseIterable {
+    case redis
+
+    public var displayName: String { "Redis" }
+    public var defaultPort: Int { 6379 }
 }
 
 /// A connection config with its secrets resolved and its endpoint pointing at the

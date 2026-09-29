@@ -53,7 +53,7 @@ struct PasteSheet: View {
     private var isCrossEngine: Bool { dialect != request.source.dialect }
 
     /// Every stored connection: a paste may cross engines.
-    private var candidateConnections: [ConnectionConfig] { environment.connections }
+    private var candidateConnections: [ConnectionConfig] { environment.sqlConnections }
     /// Folder-qualified titles, so two connections called the same read apart.
     private var connectionTitles: [UUID: String] { ConnectionConfig.distinctTitles(for: candidateConnections) }
 

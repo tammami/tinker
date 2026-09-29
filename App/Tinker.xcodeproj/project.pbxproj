@@ -16,6 +16,7 @@
 		DB0000000000000000000105 /* DBPostgres in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000205 /* DBPostgres */; };
 		DB0000000000000000000106 /* DBMySQL in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000206 /* DBMySQL */; };
 		DB0000000000000000000107 /* DBSQLite in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000207 /* DBSQLite */; };
+		DB0000000000000000000108 /* DBRedis in Frameworks */ = {isa = PBXBuildFile; productRef = DB0000000000000000000208 /* DBRedis */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -73,6 +74,7 @@
 				DB0000000000000000000105 /* DBPostgres in Frameworks */,
 				DB0000000000000000000106 /* DBMySQL in Frameworks */,
 				DB0000000000000000000107 /* DBSQLite in Frameworks */,
+				DB0000000000000000000108 /* DBRedis in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -141,6 +143,7 @@
 				DB0000000000000000000205 /* DBPostgres */,
 				DB0000000000000000000206 /* DBMySQL */,
 				DB0000000000000000000207 /* DBSQLite */,
+				DB0000000000000000000208 /* DBRedis */,
 				DB0000000000000000000402 /* Sparkle */,
 			);
 			productName = Tinker;
@@ -634,6 +637,10 @@
 		DB0000000000000000000207 /* DBSQLite */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = DBSQLite;
+		};
+		DB0000000000000000000208 /* DBRedis */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DBRedis;
 		};
 		DB0000000000000000000402 /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;

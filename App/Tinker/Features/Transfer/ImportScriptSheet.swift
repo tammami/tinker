@@ -157,7 +157,7 @@ struct ImportScriptSheet: View {
             HStack(spacing: DesignTokens.Spacing.md) {
                 FieldRow(label: "Into connection", labelWidth: 100) {
                     Picker("", selection: $endpoint.connectionID) {
-                        ForEach(environment.connections) { config in
+                        ForEach(environment.sqlConnections) { config in
                             Text(connectionTitles[config.id] ?? config.name).tag(UUID?.some(config.id))
                         }
                     }

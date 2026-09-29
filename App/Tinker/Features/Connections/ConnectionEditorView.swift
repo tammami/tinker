@@ -1,4 +1,5 @@
 import DBCore
+import DBRedis
 import DBSQLite
 import DBStore
 import SwiftUI
@@ -26,6 +27,63 @@ public struct ConnectionEditorView: View {
     @State private var validationError: String?
 
     enum TestOutcome { case success, failure }
+
+    /// What the engine picker offers: every SQL dialect, then Redis.
+    enum EngineChoice: Hashable {
+        case sql(SQLDialect)
+        case redis
+
+        static var all: [EngineChoice] { SQLDialect.allCases.map(EngineChoice.sql) + [.redis] }
+
+        var title: String {
+            switch self {
+            case let .sql(dialect): dialect.displayName
+            case .redis: "Redis"
+            }
+        }
+    }
+
+    private var isRedis: Bool { config.isRedis }
+
+    /// The picker's value, read from and written to the config.
+    private var engine: Binding<EngineChoice> {
+        Binding(
+            get: { config.isRedis ? .redis : .sql(config.dialect) },
+            set: { choice in
+                let wasRedis = config.isRedis
+                let previous = config.dialect
+                switch choice {
+                case .redis:
+                    guard !wasRedis else { return }
+                    config.keyValueEngine = .redis
+                    // Redis has no SQL dialect; the placeholder is the one `.redis()` uses, so
+                    // nothing still reads a file-based dialect from a server connection.
+                    config.dialect = .postgresql
+                    config.host = previous.isFileBased || config.host.isEmpty ? "127.0.0.1" : config.host
+                    config.port = KeyValueEngine.redis.defaultPort
+                    config.user = ""
+                    config.database = "0"
+                    config.tls = TLSConfig(mode: .disable)
+                    config.options = [:]
+                case let .sql(dialect):
+                    config.keyValueEngine = nil
+                    if wasRedis {
+                        config.user = NSUserName()
+                        config.database = nil
+                        config.tls = TLSConfig(mode: .require)
+                        config.dialect = dialect
+                        if dialect.isFileBased {
+                            switchEngine(from: .postgresql, to: dialect)
+                        } else {
+                            config.port = environment.registry.defaultPort(for: dialect)
+                        }
+                    } else if dialect != previous {
+                        config.dialect = dialect
+                        switchEngine(from: previous, to: dialect)
+                    }
+                }
+            })
+    }
 
     enum SSHAuthKind: String, CaseIterable, Identifiable {
         case password, key, agent
@@ -61,7 +119,7 @@ public struct ConnectionEditorView: View {
                 ? "Passwords go to your Keychain, never to \(Product.name)'s own files."
                 : config.dialect.isFileBased
                     ? ((config.database ?? "") as NSString).abbreviatingWithTildeInPath
-                    : "\(config.user)@\(config.host):\(config.port)",
+                    : (config.user.isEmpty ? "" : "\(config.user)@") + "\(config.host):\(config.port)",
             width: DesignTokens.Metrics.sheetWidth + 40,
             contentInset: 0
         ) {
@@ -69,20 +127,39 @@ public struct ConnectionEditorView: View {
                 Form {
                     Section {
                         TextField("Name", text: $config.name)
-                        Picker("Engine", selection: $config.dialect) {
-                            ForEach(SQLDialect.allCases, id: \.self) { dialect in
+                        Picker("Engine", selection: engine) {
+                            ForEach(EngineChoice.all, id: \.self) { choice in
                                 Label {
-                                    Text(dialect.displayName)
+                                    Text(choice.title)
                                 } icon: {
-                                    EngineMark(dialect: dialect, size: 14)
+                                    switch choice {
+                                    case let .sql(dialect): EngineMark(dialect: dialect, size: 14)
+                                    case .redis: EngineMark(redis: true, size: 14)
+                                    }
                                 }
-                                .tag(dialect)
+                                .tag(choice)
                             }
                         }
-                        .onChange(of: config.dialect) { previous, dialect in
-                            switchEngine(from: previous, to: dialect)
-                        }
-                        if config.dialect.isFileBased {
+                        if isRedis {
+                            HStack(spacing: DesignTokens.Spacing.sm) {
+                                TextField("Host", text: $config.host)
+                                TextField("Port", value: $config.port, format: .number.grouping(.never))
+                                    .frame(width: 90)
+                            }
+                            TextField("Username", text: $config.user, prompt: Text("default (leave empty)"))
+                            SecureField("Password", text: $password, prompt: Text("none"))
+                            // 16 databases is Redis's default, but `databases` can say more.
+                            Stepper(
+                                "Database: db\(Int(config.database ?? "") ?? 0)",
+                                value: Binding(
+                                    get: { Int(config.database ?? "") ?? 0 },
+                                    set: { config.database = String($0) }),
+                                in: 0 ... 255)
+                            Text(
+                                "Username is for a Redis 6+ ACL user; leave it empty for the default user. The database is the one tabs open on; every database stays reachable from the sidebar."
+                            )
+                            .font(.caption).foregroundStyle(.secondary)
+                        } else if config.dialect.isFileBased {
                             HStack(spacing: DesignTokens.Spacing.sm) {
                                 TextField(
                                     "Database file",
@@ -111,7 +188,9 @@ public struct ConnectionEditorView: View {
                                 ), prompt: Text(config.dialect == .mysql ? "Optional" : "postgres"))
                         }
                     } header: {
-                        Label(config.dialect.isFileBased ? "File" : "Server", systemImage: config.dialect.isFileBased ? Icon.localFile : Icon.database)
+                        Label(
+                            config.dialect.isFileBased && !isRedis ? "File" : "Server",
+                            systemImage: config.dialect.isFileBased && !isRedis ? Icon.localFile : Icon.database)
                     }
 
                     Section {
@@ -145,7 +224,7 @@ public struct ConnectionEditorView: View {
                         Label("Appearance and safety", systemImage: Icon.shield)
                     }
 
-                    if !config.dialect.isFileBased {
+                    if !config.dialect.isFileBased || isRedis {
                     Section {
                         Picker("Mode", selection: $config.tls.mode) {
                             ForEach(TLSMode.allCases, id: \.self) { mode in
@@ -158,6 +237,9 @@ public struct ConnectionEditorView: View {
                         case .disable:
                             Text("Nothing on the wire is encrypted.")
                                 .font(.caption).foregroundStyle(.secondary)
+                        case .prefer where isRedis:
+                            Text("Redis has no STARTTLS: a port speaks TLS or it does not, so prefer connects in the clear. Choose require for TLS.")
+                                .font(.caption).foregroundStyle(.orange)
                         case .prefer:
                             Text(
                                 "Encrypts when the server offers it and continues in the clear when it does not. The certificate is not checked, so an impostor server is not detected."
@@ -213,12 +295,12 @@ public struct ConnectionEditorView: View {
 
                     Section {
                         TextField(
-                            "Statement timeout (seconds, 0 for none)",
+                            isRedis ? "Command timeout (seconds, 0 for none)" : "Statement timeout (seconds, 0 for none)",
                             value: Binding(
                                 get: { config.statementTimeout.map { Int($0.components.seconds) } ?? 0 },
                                 set: { config.statementTimeout = $0 <= 0 ? nil : .seconds($0) }
                             ), format: .number)
-                        if !config.dialect.isFileBased {
+                        if !config.dialect.isFileBased && !isRedis {
                             TextField(
                                 "Application name",
                                 text: Binding(
@@ -226,7 +308,7 @@ public struct ConnectionEditorView: View {
                                     set: { config.options[ConnectionConfig.OptionKey.applicationName] = $0 }
                                 ))
                         }
-                        if config.dialect == .sqlite {
+                        if config.dialect == .sqlite && !isRedis {
                             Toggle(
                                 "Enforce foreign keys",
                                 isOn: Binding(
@@ -240,7 +322,7 @@ public struct ConnectionEditorView: View {
                                     set: { config.options[SQLiteDriver.OptionKey.createIfMissing] = $0 ? "true" : "false" }
                                 ))
                         }
-                        if config.dialect == .mysql {
+                        if config.dialect == .mysql && !isRedis {
                             Toggle(
                                 "Treat tinyint(1) as boolean",
                                 isOn: Binding(
@@ -408,6 +490,11 @@ public struct ConnectionEditorView: View {
     }
 
     func validate() -> String? {
+        if isRedis {
+            if config.host.trimmingCharacters(in: .whitespaces).isEmpty { return "A host is required" }
+            if config.port < 1 || config.port > 65_535 { return "The port must be between 1 and 65535" }
+            return validateSSH()
+        }
         if config.dialect.isFileBased {
             let path = ((config.database ?? "") as NSString).expandingTildeInPath
             if path.trimmingCharacters(in: .whitespaces).isEmpty { return "A database file is required" }
@@ -421,6 +508,10 @@ public struct ConnectionEditorView: View {
         if config.host.trimmingCharacters(in: .whitespaces).isEmpty { return "A host is required" }
         if config.user.trimmingCharacters(in: .whitespaces).isEmpty { return "A user is required" }
         if config.port < 1 || config.port > 65_535 { return "The port must be between 1 and 65535" }
+        return validateSSH()
+    }
+
+    private func validateSSH() -> String? {
         if useSSH {
             guard let ssh = config.ssh, !ssh.host.isEmpty else { return "An SSH host is required" }
             if sshAuthKind == .key {
@@ -443,7 +534,11 @@ public struct ConnectionEditorView: View {
     func buildConfig() -> ConnectionConfig {
         var result = config
         result.name = result.name.trimmingCharacters(in: .whitespaces)
-        if result.dialect.isFileBased {
+        if result.isRedis {
+            result.user = result.user.trimmingCharacters(in: .whitespaces)
+            if result.name.isEmpty || result.name == "New Connection" { result.name = "Redis \(result.host)" }
+        }
+        if result.dialect.isFileBased && !result.isRedis {
             let path = ((result.database ?? "") as NSString).expandingTildeInPath
             result.database = path
             if result.name.isEmpty {
@@ -550,6 +645,21 @@ public struct ConnectionEditorView: View {
         // The typed secrets, in memory only: nothing reaches the Keychain until Save.
         let scratch = EphemeralSecretStore()
         await storeSecrets(for: candidate, in: scratch, deletingCleared: false)
+        if candidate.isRedis {
+            let redis = RedisSession(config: candidate, secrets: scratch, tunnelProvider: environment.tunnelProvider)
+            testLog.append("[tcp] Connecting to \(candidate.host):\(candidate.port)…")
+            do {
+                let info = try await redis.connect()
+                testLog.append("✓ \(info.product) \(info.version), \(info.mode), \(info.databaseCount) databases")
+                if !info.modules.isEmpty { testLog.append("  modules: \(info.modules.sorted().joined(separator: ", "))") }
+                testOutcome = .success
+            } catch {
+                testLog.append("✗ \((error as? DBError)?.errorDescription ?? String(describing: error))")
+                testOutcome = .failure
+            }
+            await redis.disconnect()
+            return
+        }
         let session = ConnectionSession(
             config: candidate,
             registry: environment.registry,

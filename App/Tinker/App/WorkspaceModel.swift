@@ -21,10 +21,12 @@ public final class WorkspaceTab: Identifiable {
         case source(SourceObject)
         /// The visual query builder, on one schema.
         case queryBuilder(SchemaRef)
+        /// A Redis logical database: its keys, a console and the server.
+        case redis(database: Int)
     }
 
     public let id = UUID()
-    public let kind: Kind
+    public private(set) var kind: Kind
     /// The connection this tab runs on. A query tab carries its own (SPEC §13.1a), so the
     /// picker in its toolbar moves it here through ``moveToConnection(_:)``; every other
     /// kind of tab is opened on one connection and stays there.
@@ -48,6 +50,14 @@ public final class WorkspaceTab: Identifiable {
     }
 
     public var isQueryTab: Bool { if case .query = kind { true } else { false } }
+
+    /// A Redis tab moved to another logical database: its kind and title follow, so the
+    /// sidebar finds it by the database it shows.
+    public func moveToRedisDatabase(_ index: Int, title: String) {
+        guard case .redis = kind else { return }
+        kind = .redis(database: index)
+        self.title = title
+    }
 
     /// Moves a query tab to another connection, after its controller has accepted the
     /// change and given the old connection back.
@@ -75,6 +85,7 @@ public final class WorkspaceTab: Identifiable {
         case .serverActivity: Icon.activity
         case .source: Icon.source
         case .queryBuilder: Icon.builder
+        case .redis: Icon.redisKey
         }
     }
 }
@@ -246,6 +257,12 @@ public final class WorkspaceModel {
     public var confirmation: DestructiveConfirmation?
     /// A rename, duplicate, import or maintenance request awaiting its sheet.
     public var pendingTableOperation: TableOperationRequest?
+    /// New Database… or Drop Database…, waiting for its sheet.
+    public var pendingDatabaseOperation: DatabaseOperationRequest?
+    /// A Redis database to open in a tab, asked for by the sidebar.
+    public var pendingRedisOpen: RedisOpenRequest?
+    /// Redis Transfer, Data Sync or Structure Sync, waiting for its sheet.
+    public var pendingRedisTool: RedisToolRequest?
     /// Dump, SQL-file import and paste requests awaiting their sheets.
     public var pendingDump: DumpRequest?
     public var pendingScriptImport: ScriptImportRequest?
@@ -379,7 +396,7 @@ public final class WorkspaceModel {
             case let .objects(schema), let .queryBuilder(schema): return schema.database == database
             case let .source(object): return object.schema.database == database
             case .query: return queryDatabase(tab) == database
-            case .serverActivity: return false
+            case .serverActivity, .redis: return false
             }
         }
     }
@@ -418,6 +435,21 @@ public final class WorkspaceModel {
             return existing
         }
         let tab = WorkspaceTab(kind: .serverActivity, connectionID: connectionID, title: "Server")
+        open(tab)
+        return tab
+    }
+
+    /// Opens, or brings forward, the Redis tab of one logical database.
+    @discardableResult
+    public func openRedis(connectionID: UUID, database: Int, title: String) -> WorkspaceTab {
+        if let existing = tabs.first(where: {
+            if case let .redis(index) = $0.kind { return $0.connectionID == connectionID && index == database }
+            return false
+        }) {
+            selectedTabID = existing.id
+            return existing
+        }
+        let tab = WorkspaceTab(kind: .redis(database: database), connectionID: connectionID, title: title)
         open(tab)
         return tab
     }
@@ -494,6 +526,58 @@ public struct TableOperationRequest: Identifiable, Sendable, Hashable {
     public init(kind: Kind, table: TableRef, connectionID: UUID) {
         self.kind = kind
         self.table = table
+        self.connectionID = connectionID
+    }
+}
+
+/// Open a Redis logical database's tab on one of its panes.
+public struct RedisOpenRequest: Identifiable, Equatable, Sendable {
+    public let id = UUID()
+    public let connectionID: UUID
+    public let database: Int
+    public let mode: RedisTabController.Mode
+
+    public init(connectionID: UUID, database: Int, mode: RedisTabController.Mode = .keys) {
+        self.connectionID = connectionID
+        self.database = database
+        self.mode = mode
+    }
+}
+
+/// The Redis tools: they move and compare Redis databases, and only Redis ones.
+public enum RedisToolKind: String, CaseIterable, Identifiable, Sendable {
+    case transfer = "Transfer"
+    case dataSync = "Data Sync"
+    case structureSync = "Structure Sync"
+    public var id: String { rawValue }
+}
+
+public struct RedisToolRequest: Identifiable, Sendable {
+    public let id = UUID()
+    public let kind: RedisToolKind
+    public let connectionID: UUID?
+    public let database: Int
+
+    public init(kind: RedisToolKind, connectionID: UUID?, database: Int = 0) {
+        self.kind = kind
+        self.connectionID = connectionID
+        self.database = database
+    }
+}
+
+/// Creating or dropping a database on a connection.
+public struct DatabaseOperationRequest: Identifiable, Sendable, Hashable {
+    public enum Kind: Sendable, Hashable {
+        case create
+        case drop(String)
+    }
+
+    public let id = UUID()
+    public let kind: Kind
+    public let connectionID: UUID
+
+    public init(kind: Kind, connectionID: UUID) {
+        self.kind = kind
         self.connectionID = connectionID
     }
 }

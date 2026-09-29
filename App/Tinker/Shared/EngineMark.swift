@@ -12,22 +12,57 @@ struct EngineMark: View {
     /// MySQL and MariaDB share a dialect; only a live server says which. Nil until it has.
     var flavor: ServerFlavor?
     var size: CGFloat = 16
+    /// A Redis connection, which has no SQL dialect to draw.
+    var isRedis = false
+
+    init(dialect: SQLDialect, flavor: ServerFlavor? = nil, size: CGFloat = 16) {
+        self.dialect = dialect
+        self.flavor = flavor
+        self.size = size
+    }
+
+    /// The Redis badge.
+    init(redis: Bool, size: CGFloat = 16) {
+        dialect = .postgresql
+        self.size = size
+        isRedis = redis
+    }
+
+    /// The badge for a connection, whatever its engine.
+    init(config: ConnectionConfig, flavor: ServerFlavor? = nil, size: CGFloat = 16) {
+        dialect = config.dialect
+        self.flavor = flavor ?? config.knownFlavor
+        self.size = size
+        isRedis = config.isRedis
+    }
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
-                .fill(Self.plate(for: dialect, flavor: flavor))
+                .fill(isRedis ? Self.redisPlate : Self.plate(for: dialect, flavor: flavor))
             mark
                 .frame(width: size * 0.66, height: size * 0.66)
         }
         .frame(width: size, height: size)
-        .accessibilityLabel(Self.name(for: dialect, flavor: flavor))
+        .accessibilityLabel(isRedis ? "Redis" : Self.name(for: dialect, flavor: flavor))
     }
+
+    /// Redis's red.
+    static let redisPlate = Color(red: 0.86, green: 0.22, blue: 0.18)
 
     private var isMariaDB: Bool { flavor == .mariadb }
 
     @ViewBuilder
     private var mark: some View {
+        if isRedis {
+            StackMark().fill(Color.white)
+        } else {
+            sqlMark
+        }
+    }
+
+    @ViewBuilder
+    private var sqlMark: some View {
         switch dialect {
         case .postgresql: ElephantMark().fill(Color.white)
         case .mysql: isMariaDB ? AnyView(SealMark().fill(Color.white)) : AnyView(DolphinMark().fill(Color.white))
@@ -163,6 +198,27 @@ private struct FeatherMark: Shape {
         path.addLine(to: p(0.06, 1.00))
         path.addLine(to: p(0.00, 0.92))
         path.closeSubpath()
+        return path
+    }
+}
+
+/// Three flat layers stacked with gaps between them: a key–value store's slabs of memory.
+/// Separate shapes, so the plate shows between them at sixteen points.
+struct StackMark: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let width = rect.width
+        let layer = rect.height * 0.26
+        let gap = rect.height * 0.11
+        for index in 0 ..< 3 {
+            let top = rect.minY + CGFloat(index) * (layer + gap)
+            let inset = width * 0.08 * CGFloat(2 - index) * 0.5
+            path.move(to: CGPoint(x: rect.midX, y: top))
+            path.addLine(to: CGPoint(x: rect.maxX - inset, y: top + layer * 0.5))
+            path.addLine(to: CGPoint(x: rect.midX, y: top + layer))
+            path.addLine(to: CGPoint(x: rect.minX + inset, y: top + layer * 0.5))
+            path.closeSubpath()
+        }
         return path
     }
 }

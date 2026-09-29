@@ -30,14 +30,15 @@ public struct TableTabView: View {
     @State private var isWriteLogShown = false
     /// The structure pane is built the first time it is asked for, then kept.
     @State private var hasVisitedStructure = false
-    @State private var mapColumn = -1
+    @State private var mapSource: MapSource?
     /// The rows on the map; nil is all of them.
     @State private var mapRows: Set<Int>?
 
-    /// Geometry columns in the grid, looked for once per revision.
-    private var geometryColumns: [Int] {
+    /// Where the grid keeps locations: geometry columns, latitude/longitude pairs and
+    /// combined coordinate columns, from a few sampled rows.
+    private var mapSources: [MapSource] {
         guard let model = controller.model else { return [] }
-        return GeometryColumns.detect(in: model, dialect: model.dialect)
+        return MapSources.detect(in: model, dialect: model.dialect)
     }
 
     public var body: some View {
@@ -66,17 +67,17 @@ public struct TableTabView: View {
                     .allowsHitTesting(mode == .structure)
                     .accessibilityHidden(mode != .structure)
                 }
-                if mode == .map, let model = controller.model {
-                    let columns = geometryColumns
+                if mode == .map, let model = controller.model, let first = mapSources.first {
+                    let sources = mapSources
                     MapPaneView(
                         grid: model,
                         dialect: model.dialect,
                         revision: controller.revision,
-                        column: Binding(
-                            get: { columns.contains(mapColumn) ? mapColumn : (columns.first ?? 0) },
-                            set: { mapColumn = $0 }
+                        source: Binding(
+                            get: { mapSource.flatMap { sources.contains($0) ? $0 : nil } ?? first },
+                            set: { mapSource = $0 }
                         ),
-                        columns: columns,
+                        sources: sources,
                         rows: $mapRows,
                         onSelectRow: { row in
                             controller.selection = GridSelection(row: row, column: 0, mode: .rows)
@@ -96,10 +97,10 @@ public struct TableTabView: View {
         .onChange(of: controller.model?.sort) { _, _ in mapRows = nil }
         .onChange(of: controller.filterRules) { _, _ in mapRows = nil }
         .onChange(of: controller.quickSearch) { _, _ in mapRows = nil }
-        // "Show on Map" from a cell: that one row, from that column.
+        // "Open in Map Pane" from a row's popover: that one row, from that source.
         .onChange(of: controller.mapRequest) { _, request in
             guard let request else { return }
-            mapColumn = request.column
+            mapSource = request.source
             mapRows = [request.row]
             mode = .map
         }
@@ -121,7 +122,7 @@ public struct TableTabView: View {
                 UserDefaults.standard.removeObject(forKey: "uiDemo.mapRow")
                 Task {
                     try? await Task.sleep(for: .milliseconds(1_200))
-                    if let column = geometryColumns.first { controller.mapRequest = MapRequest(row: 2, column: column) }
+                    if let source = mapSources.first { controller.mapRequest = MapRequest(row: 2, source: source) }
                 }
             }
             if UserDefaults.standard.bool(forKey: "uiDemo.referencePick") {
@@ -178,7 +179,7 @@ public struct TableTabView: View {
                 UserDefaults.standard.removeObject(forKey: "uiDemo.mapPeek")
                 Task {
                     try? await Task.sleep(for: .milliseconds(1_200))
-                    guard let column = geometryColumns.first else { return }
+                    guard let column = mapSources.first?.columns.first else { return }
                     NotificationCenter.default.post(
                         name: .tinkerPeekOnMap, object: controller, userInfo: ["row": 2, "column": column])
                 }
@@ -235,7 +236,7 @@ public struct TableTabView: View {
             BarDivider()
 
             Picker("Mode", selection: $mode) {
-                ForEach(Mode.allCases.filter { $0 != .map || !geometryColumns.isEmpty }) { mode in
+                ForEach(Mode.allCases.filter { $0 != .map || !mapSources.isEmpty }) { mode in
                     Label(mode.rawValue, systemImage: mode.icon).tag(mode)
                 }
             }

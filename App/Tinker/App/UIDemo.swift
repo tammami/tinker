@@ -65,7 +65,7 @@ enum UIDemo {
         // The map scene wants the seeded test database whatever the connection defaults to;
         // `--ui-demo-database <name>` picks any other.
         var preferredDatabase =
-            wanted.contains { $0.hasPrefix("map") || $0 == "reference" || $0 == "runall" || $0 == "joinrefs" }
+            wanted.contains { $0.hasPrefix("map") || $0.hasPrefix("latlng") || $0 == "reference" || $0 == "runall" || $0 == "joinrefs" }
             ? "tinker_test" : (config.database ?? "")
         if let index = arguments.firstIndex(of: "--ui-demo-database"), index + 1 < arguments.count {
             preferredDatabase = arguments[index + 1]
@@ -397,12 +397,14 @@ enum UIDemo {
                     UserDefaults.standard.set(step, forKey: "uiDemo.toolStep")
                 }
                 workspace.pendingTool = ToolRequest(kind: kind, connectionID: config.id, schema: demoSchemaRef(schema))
-            case "map", "map-row", "map-peek":
-                if let places = tables.first(where: { $0.name == "spatial_places" }) {
+            case "map", "map-row", "map-peek", "latlng", "latlng-peek":
+                // `latlng` scenes show the plain latitude/longitude table rather than geometry.
+                let name = item.hasPrefix("latlng") ? "latlng_places" : "spatial_places"
+                if let places = tables.first(where: { $0.name == name }) {
                     controller.openTable(places.ref, connectionID: config.id)
                     let flag =
                         switch item {
-                        case "map": "uiDemo.map"
+                        case "map", "latlng": "uiDemo.map"
                         case "map-row": "uiDemo.mapRow"
                         default: "uiDemo.mapPeek"
                         }

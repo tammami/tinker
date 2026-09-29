@@ -1,61 +1,84 @@
+import AppKit
 import DBCore
 import DBGrid
 import MapKit
 import SwiftUI
 
-/// The geometry columns a grid holds: typed as such, or text that parses as one.
+/// The places a grid holds: geometry columns, latitude/longitude pairs and combined
+/// coordinate columns, found from a few sampled rows.
 @MainActor
-enum GeometryColumns {
-    /// Column indices worth offering on a map, cheapest test first.
-    static func detect(in grid: GridModel, dialect: SQLDialect) -> [Int] {
-        var found: [Int] = []
-        for (index, column) in grid.columns.enumerated() {
-            if GeometryParser.isGeometryType(column.nativeTypeName) {
-                found.append(index)
-                continue
-            }
-            // A text column is a geometry column when its first values say so; only a few
-            // rows are looked at, so an unrelated wide text column costs nothing.
-            guard column.kind == .string || column.kind == .raw else { continue }
-            var sampled = 0
-            var parsed = 0
-            for row in 0 ..< min(grid.rowCount, 12) {
-                guard let value = grid.value(row: row, column: index), !value.isNull else { continue }
-                sampled += 1
-                if GeometryParser.parse(value, dialect: dialect) != nil { parsed += 1 }
-                if sampled == 4 { break }
-            }
-            if sampled > 0, parsed == sampled { found.append(index) }
+enum MapSources {
+    static func detect(in grid: GridModel, dialect: SQLDialect) -> [MapSource] {
+        MapSourceDetector.detect(columns: grid.columns, rowCount: grid.rowCount, dialect: dialect) { row, column in
+            grid.value(row: row, column: column)
         }
-        return found
     }
+
+    /// What a right-click on `column` means: the source reading that column, else the first.
+    static func source(for column: Int, in grid: GridModel) -> MapSource? {
+        MapSourceDetector.source(for: column, among: detect(in: grid, dialect: grid.dialect))
+    }
+
+    static func columnNames(_ grid: GridModel) -> [String] { grid.columns.map(\.name) }
 }
 
-/// A request from the grid to put one row's geometry on the map.
+/// A request from the grid to put one row's location on the map.
 public struct MapRequest: Equatable, Sendable {
     public let row: Int
-    public let column: Int
+    public let source: MapSource
     /// Distinguishes two requests for the same cell, so the second still switches panes.
     let token = UUID()
 
-    public init(row: Int, column: Int) {
+    public init(row: Int, source: MapSource) {
         self.row = row
-        self.column = column
+        self.source = source
     }
 }
 
-/// The map: every loaded row's geometry from one column — or just the rows asked for —
+/// Opening a place outside Tinker, or copying where it is. Only ever on the user's click:
+/// the coordinates leave the app only when asked to.
+enum MapLinks {
+    static func appleMaps(_ point: GeoPoint, title: String?) -> URL? {
+        var components = URLComponents()
+        components.scheme = "maps"
+        components.host = ""
+        var items = [URLQueryItem(name: "ll", value: coordinate(point))]
+        if let title, !title.isEmpty { items.append(URLQueryItem(name: "q", value: title)) }
+        components.queryItems = items
+        return components.url
+    }
+
+    static func googleMaps(_ point: GeoPoint) -> URL? {
+        var components = URLComponents(string: "https://www.google.com/maps/search/")
+        components?.queryItems = [
+            URLQueryItem(name: "api", value: "1"), URLQueryItem(name: "query", value: coordinate(point)),
+        ]
+        return components?.url
+    }
+
+    static func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// Seven decimals is about a centimetre: all a link can use.
+    private static func coordinate(_ point: GeoPoint) -> String {
+        String(format: "%.7f,%.7f", point.latitude, point.longitude)
+    }
+}
+
+/// The map: every loaded row's location from one source — or just the rows asked for —
 /// drawn where it belongs, with points clustered and the view fitted to the whole.
 ///
 /// Rows are read from the grid model, never copied: what the map holds are the shapes,
-/// converted once per revision, and capped so a table of a million geometries cannot
-/// take the app down with it.
+/// converted once per revision, and capped so a table of a million places cannot take
+/// the app down with it.
 struct MapPaneView: View {
     let grid: GridModel
     let dialect: SQLDialect
     let revision: Int
-    @Binding var column: Int
-    let columns: [Int]
+    @Binding var source: MapSource
+    let sources: [MapSource]
     /// The rows on the map; nil is every loaded row.
     @Binding var rows: Set<Int>?
     let onSelectRow: (Int) -> Void
@@ -65,19 +88,26 @@ struct MapPaneView: View {
     @State private var summary = MapSummary()
 
     var body: some View {
+        let names = MapSources.columnNames(grid)
         VStack(spacing: 0) {
             PaneBar {
                 Label("Map", systemImage: Icon.map).font(.caption.weight(.semibold))
-                if columns.count > 1 {
-                    Picker("Column", selection: $column) {
-                        ForEach(columns, id: \.self) { index in
-                            Text(grid.columns[index].name).tag(index)
+                if sources.count > 1 {
+                    Picker("Location", selection: $source) {
+                        ForEach(sources, id: \.self) { source in
+                            Text(source.title(columnNames: names)).tag(source)
                         }
                     }
                     .labelsHidden()
-                    .frame(width: 180)
-                } else if let first = columns.first {
-                    Text(grid.columns[first].name).font(.caption).foregroundStyle(.secondary)
+                    .frame(width: 220)
+                } else {
+                    Text(source.title(columnNames: names)).font(.caption).foregroundStyle(.secondary)
+                }
+                if case .pair(_, _, true) = source {
+                    Badge(text: "SWAPPED", color: .orange)
+                        .help(
+                            "The column named latitude holds longitudes and the other the latitudes; the map reads them the right way round."
+                        )
                 }
                 if let rows {
                     Badge(
@@ -94,16 +124,26 @@ struct MapPaneView: View {
                     )
                     .font(.caption).foregroundStyle(.orange).lineLimit(1)
                 }
+                if summary.outOfRange > 0 {
+                    Label("\(summary.outOfRange) out of range", systemImage: Icon.warning)
+                        .font(.caption).foregroundStyle(.orange).lineLimit(1)
+                        .help("Latitude beyond ±90° or longitude beyond ±180°, so these rows have no place on the map")
+                }
                 if summary.unreadable > 0 {
                     Label("\(summary.unreadable) unreadable", systemImage: Icon.warning)
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        .help("Values that are neither coordinates nor a geometry, or only half of a pair")
                 }
-                Text("\(summary.placed) on the map").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                Text(
+                    summary.capped
+                        ? "First \(Self.featureCap.formatted()) on the map" : "\(summary.placed) on the map"
+                )
+                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
             .controlSize(.small)
             Divider()
             MapCanvas(
-                grid: grid, dialect: dialect, revision: revision, column: column, rows: rows,
+                grid: grid, dialect: dialect, revision: revision, source: source, rows: rows,
                 onSelectRow: onSelectRow, summary: $summary
             )
             .clipped()
@@ -118,15 +158,16 @@ struct MapSummary: Equatable {
     var placed = 0
     var unplaceable = 0
     var unreadable = 0
+    var outOfRange = 0
     var capped = false
 }
 
-/// The `MKMapView`, rebuilt only when the grid's revision or the chosen column changes.
+/// The `MKMapView`, rebuilt only when the grid's revision or the chosen source changes.
 struct MapCanvas: NSViewRepresentable {
     let grid: GridModel
     let dialect: SQLDialect
     let revision: Int
-    let column: Int
+    let source: MapSource
     let rows: Set<Int>?
     let onSelectRow: (Int) -> Void
     @Binding var summary: MapSummary
@@ -144,14 +185,14 @@ struct MapCanvas: NSViewRepresentable {
         context.coordinator.map = map
         context.coordinator.onSelectRow = onSelectRow
         context.coordinator.reload(
-            grid: grid, dialect: dialect, column: column, rows: rows, revision: revision, summary: $summary)
+            grid: grid, dialect: dialect, source: source, rows: rows, revision: revision, summary: $summary)
         return map
     }
 
     func updateNSView(_ map: MKMapView, context: Context) {
         context.coordinator.onSelectRow = onSelectRow
         context.coordinator.reload(
-            grid: grid, dialect: dialect, column: column, rows: rows, revision: revision, summary: $summary)
+            grid: grid, dialect: dialect, source: source, rows: rows, revision: revision, summary: $summary)
     }
 
     func makeCoordinator() -> MapCoordinator { MapCoordinator() }
@@ -162,12 +203,20 @@ final class RowAnnotation: NSObject, MKAnnotation {
     let coordinate: CLLocationCoordinate2D
     let row: Int
     let title: String?
+    /// The row's coordinates as the server wrote them.
+    let subtitle: String?
 
-    init(coordinate: CLLocationCoordinate2D, row: Int, title: String?) {
+    init(coordinate: CLLocationCoordinate2D, row: Int, title: String?, subtitle: String?) {
         self.coordinate = coordinate
         self.row = row
         self.title = title
+        self.subtitle = subtitle
     }
+}
+
+/// The callout's button: the pin it belongs to, for the menu it opens.
+final class CalloutMenuButton: NSButton {
+    weak var annotation: RowAnnotation?
 }
 
 @MainActor
@@ -175,22 +224,22 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     weak var map: MKMapView?
     var onSelectRow: ((Int) -> Void)?
     private var loadedRevision = -1
-    private var loadedColumn = -1
+    private var loadedSource: MapSource?
     private var loadedRows: Set<Int>?
     private var hasFitted = false
 
-    /// Converts the column's values to overlays. Skipped when nothing changed. A change
-    /// of column or of the row subset fits the view to what is now shown.
+    /// Converts the source's values to pins and overlays. Skipped when nothing changed. A
+    /// change of source or of the row subset fits the view to what is now shown.
     func reload(
-        grid: GridModel, dialect: SQLDialect, column: Int, rows: Set<Int>?, revision: Int,
+        grid: GridModel, dialect: SQLDialect, source: MapSource, rows: Set<Int>?, revision: Int,
         summary: Binding<MapSummary>
     ) {
-        guard let map, revision != loadedRevision || column != loadedColumn || rows != loadedRows,
-            grid.columns.indices.contains(column)
+        guard let map, revision != loadedRevision || source != loadedSource || rows != loadedRows,
+            source.columns.allSatisfy(grid.columns.indices.contains)
         else { return }
-        let columnChanged = column != loadedColumn || rows != loadedRows
+        let sourceChanged = source != loadedSource || rows != loadedRows
         loadedRevision = revision
-        loadedColumn = column
+        loadedSource = source
         loadedRows = rows
         map.removeAnnotations(map.annotations)
         map.removeOverlays(map.overlays)
@@ -199,16 +248,21 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         var bounds: GeoBounds?
         var annotations: [MKAnnotation] = []
         var overlays: [MKOverlay] = []
-        let labelColumn = grid.columns.firstIndex { ["name", "title", "label"].contains($0.name.lowercased()) }
+        let labelColumn = MapSourceDetector.labelColumn(columnNames: MapSources.columnNames(grid))
 
         func add(_ shape: GeoShape, row: Int) {
             let title = labelColumn.flatMap { grid.value(row: row, column: $0)?.text } ?? "Row \(row + 1)"
             switch shape {
             case let .point(point):
-                annotations.append(RowAnnotation(coordinate: point.coordinate, row: row, title: title))
+                let subtitle = MapSourceDetector.coordinateText(source, dialect: dialect) {
+                    grid.value(row: row, column: $0)
+                }
+                annotations.append(
+                    RowAnnotation(coordinate: point.coordinate, row: row, title: title, subtitle: subtitle))
             case let .multiPoint(points):
                 for point in points {
-                    annotations.append(RowAnnotation(coordinate: point.coordinate, row: row, title: title))
+                    annotations.append(
+                        RowAnnotation(coordinate: point.coordinate, row: row, title: title, subtitle: nil))
                 }
             case let .line(points):
                 let line = RowPolyline(coordinates: points.map(\.coordinate), count: points.count)
@@ -238,21 +292,25 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
                 result.capped = true
                 break
             }
-            guard let value = grid.value(row: row, column: column), !value.isNull else { continue }
-            guard let feature = GeometryParser.parse(value, dialect: dialect) else {
+            switch MapSourceDetector.read(source, dialect: dialect, value: { grid.value(row: row, column: $0) }) {
+            case .empty:
+                continue
+            case .unreadable:
                 result.unreadable += 1
-                continue
+            case .outOfRange:
+                result.outOfRange += 1
+            case let .feature(feature):
+                if feature.isUnplaceable {
+                    result.unplaceable += 1
+                    continue
+                }
+                add(feature.shape, row: row)
+                result.placed += 1
             }
-            if feature.isUnplaceable {
-                result.unplaceable += 1
-                continue
-            }
-            add(feature.shape, row: row)
-            result.placed += 1
         }
         map.addAnnotations(annotations)
         map.addOverlays(overlays)
-        if let bounds, !hasFitted || columnChanged {
+        if let bounds, !hasFitted || sourceChanged {
             map.setRegion(Self.region(for: bounds), animated: false)
             hasFitted = true
         }
@@ -284,6 +342,15 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         return MKCoordinateRegion(center: center, span: span)
     }
 
+    // MARK: Callout menu
+
+    @objc private func showCalloutMenu(_ sender: CalloutMenuButton) {
+        guard let annotation = sender.annotation else { return }
+        let point = GeoPoint(longitude: annotation.coordinate.longitude, latitude: annotation.coordinate.latitude)
+        let menu = PlaceMenu.make(point: point, title: annotation.title, coordinates: annotation.subtitle)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+    }
+
     // MARK: MKMapViewDelegate
 
     nonisolated func mapView(_ mapView: MKMapView, viewFor annotation: any MKAnnotation) -> MKAnnotationView? {
@@ -302,6 +369,18 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
             view?.clusteringIdentifier = "rows"
             view?.markerTintColor = NSColor.controlAccentColor
             view?.canShowCallout = true
+            if let row = annotation as? RowAnnotation {
+                let button =
+                    (view?.rightCalloutAccessoryView as? CalloutMenuButton)
+                    ?? CalloutMenuButton(
+                        image: NSImage(systemSymbolName: Icon.openExternally, accessibilityDescription: "Open in…")
+                            ?? NSImage(),
+                        target: self, action: #selector(showCalloutMenu(_:)))
+                button.isBordered = false
+                button.toolTip = "Open in Maps, or copy the coordinates"
+                button.annotation = row
+                view?.rightCalloutAccessoryView = button
+            }
             return view
         }
     }
@@ -333,6 +412,50 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     }
 }
 
+/// Open in Apple Maps, open in Google Maps, copy the coordinates: one menu, used by a
+/// pin's callout and by the row popover.
+@MainActor
+enum PlaceMenu {
+    static func make(point: GeoPoint, title: String?, coordinates: String?) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(
+            MenuAction.item(title: "Open in Apple Maps", symbol: Icon.map) {
+                if let url = MapLinks.appleMaps(point, title: title) { NSWorkspace.shared.open(url) }
+            })
+        menu.addItem(
+            MenuAction.item(title: "Open in Google Maps", symbol: Icon.openExternally) {
+                if let url = MapLinks.googleMaps(point) { NSWorkspace.shared.open(url) }
+            })
+        if let coordinates {
+            menu.addItem(.separator())
+            menu.addItem(MenuAction.item(title: "Copy Coordinates", symbol: Icon.copy) { MapLinks.copy(coordinates) })
+        }
+        return menu
+    }
+}
+
+/// A menu item that runs a closure, so a menu built on the fly needs no target object.
+/// The item holds its action as its represented object; its target is only weak.
+@MainActor
+final class MenuAction: NSObject {
+    private let handler: @MainActor () -> Void
+
+    private init(_ handler: @escaping @MainActor () -> Void) {
+        self.handler = handler
+    }
+
+    static func item(title: String, symbol: String, handler: @escaping @MainActor () -> Void) -> NSMenuItem {
+        let action = MenuAction(handler)
+        let item = NSMenuItem(title: title, action: #selector(run(_:)), keyEquivalent: "")
+        item.target = action
+        item.representedObject = action
+        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        return item
+    }
+
+    @objc private func run(_ sender: Any?) { handler() }
+}
+
 final class RowPolyline: MKPolyline {
     var row = 0
 }
@@ -345,40 +468,91 @@ extension GeoPoint {
     var coordinate: CLLocationCoordinate2D { CLLocationCoordinate2D(latitude: latitude, longitude: longitude) }
 }
 
-/// One row's geometry, shown over its cell: the shape, where it is, and a way to the full
-/// map pane for that row alone.
+/// One row's location, shown over its cell: the place, its coordinates, ways to take it
+/// elsewhere, and the full map pane for that row alone.
 struct MapPeekView: View {
     let grid: GridModel
     let row: Int
-    let column: Int
+    let source: MapSource
     let onOpenPane: () -> Void
 
     @State private var summary = MapSummary()
 
+    private var reading: MapReading {
+        MapSourceDetector.read(source, dialect: grid.dialect) { grid.value(row: row, column: $0) }
+    }
+
+    private var coordinates: String? {
+        MapSourceDetector.coordinateText(source, dialect: grid.dialect) { grid.value(row: row, column: $0) }
+    }
+
+    private var title: String? {
+        MapSourceDetector.labelColumn(columnNames: MapSources.columnNames(grid)).flatMap {
+            grid.value(row: row, column: $0)?.text
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            MapCanvas(
-                grid: grid, dialect: grid.dialect, revision: 0, column: column, rows: [row],
-                onSelectRow: { _ in }, summary: $summary
-            )
+            if let problem {
+                EmptyStateView(icon: Icon.location, title: problem)
+            } else {
+                MapCanvas(
+                    grid: grid, dialect: grid.dialect, revision: 0, source: source, rows: [row],
+                    onSelectRow: { _ in }, summary: $summary
+                )
+            }
             Divider()
             HStack(spacing: DesignTokens.Spacing.sm) {
-                Label("Row \(row + 1) · \(grid.columns[column].name)", systemImage: Icon.map)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                if summary.unreadable > 0 {
-                    Text("Unreadable geometry").font(.caption).foregroundStyle(.orange)
-                } else if summary.unplaceable > 0 {
-                    Text("Not longitude/latitude; use ST_Transform(…, 4326)")
-                        .font(.caption).foregroundStyle(.orange).lineLimit(1)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title ?? "Row \(row + 1)").font(.caption.weight(.semibold)).lineLimit(1)
+                    Text(coordinates ?? source.title(columnNames: MapSources.columnNames(grid)))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .textSelection(.enabled)
                 }
-                Spacer()
+                Spacer(minLength: DesignTokens.Spacing.sm)
+                if let point = anchor {
+                    Menu {
+                        Button("Open in Apple Maps") {
+                            if let url = MapLinks.appleMaps(point, title: title) { NSWorkspace.shared.open(url) }
+                        }
+                        Button("Open in Google Maps") {
+                            if let url = MapLinks.googleMaps(point) { NSWorkspace.shared.open(url) }
+                        }
+                        if let coordinates {
+                            Divider()
+                            Button("Copy Coordinates") { MapLinks.copy(coordinates) }
+                        }
+                    } label: {
+                        Label("Open In", systemImage: Icon.openExternally)
+                    }
+                    .fixedSize()
+                    .help("Open this place in Apple Maps or Google Maps, or copy its coordinates")
+                }
                 Button("Open in Map Pane", action: onOpenPane)
             }
             .controlSize(.small)
             .padding(.horizontal, DesignTokens.Spacing.md)
-            .frame(height: DesignTokens.Metrics.statusHeight + DesignTokens.Spacing.xs)
+            .frame(height: DesignTokens.Metrics.statusHeight + DesignTokens.Spacing.md)
+        }
+    }
+
+    /// Where the links point: the place itself, or the middle of a shape.
+    private var anchor: GeoPoint? {
+        guard case let .feature(feature) = reading, !feature.isUnplaceable else { return nil }
+        return feature.shape.anchor
+    }
+
+    /// Why nothing is on the map, in words, when nothing is.
+    private var problem: String? {
+        switch reading {
+        case .empty: "This row has no location"
+        case .unreadable: "Not a coordinate or a geometry"
+        case .outOfRange: "Latitude or longitude out of range"
+        case let .feature(feature):
+            feature.isUnplaceable ? "Not longitude/latitude; use ST_Transform(…, 4326)" : nil
         }
     }
 }

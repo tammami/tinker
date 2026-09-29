@@ -32,8 +32,24 @@ final class ScriptTransferIntegrationTests: XCTestCase {
         return all
     }
 
-    func withSession(_ body: (ConnectionSession, TestServer, SQLDialect) async throws -> Void) async throws {
-        for server in try await allServers() {
+    /// Every server of every engine, MariaDB included: for a check that is about what each
+    /// server hands back rather than about pairs of engines.
+    func everyServer() async throws -> [TestServer] {
+        let sqlite = try TestEnvironment.servers(for: .sqlite)
+        if !sqlite.isEmpty { try await SQLiteFixtures.prepare() }
+        let all =
+            (try TestEnvironment.servers(for: .postgresql)) + (try TestEnvironment.servers(for: .mysql)) + sqlite
+        if all.isEmpty { throw XCTSkip("no test server is configured and SQLite is disabled") }
+        return all
+    }
+
+    /// Runs `body` on a connected session per server: by default one server per engine.
+    func withSession(
+        on servers: [TestServer]? = nil, _ body: (ConnectionSession, TestServer, SQLDialect) async throws -> Void
+    ) async throws {
+        let chosen: [TestServer]
+        if let servers { chosen = servers } else { chosen = try await allServers() }
+        for server in chosen {
             let dialect = server.engine.dialect
             let config = ConnectionConfig(
                 name: "transfer-test", dialect: dialect, host: server.host, port: server.port, user: server.user,

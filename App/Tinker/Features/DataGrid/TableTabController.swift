@@ -738,8 +738,8 @@ public final class TableTabController: DataGridDelegate, WriteLogOwner {
     /// The row the grid asked to see on the map; the view switches to the map for it.
     public var mapRequest: MapRequest?
 
-    public func gridDidRequestShowOnMap(row: Int, column: Int) {
-        mapRequest = MapRequest(row: row, column: column)
+    public func gridDidRequestShowOnMap(row: Int, source: MapSource) {
+        mapRequest = MapRequest(row: row, source: source)
     }
 
     public func gridDidChangeSelection(_ selection: GridSelection) {

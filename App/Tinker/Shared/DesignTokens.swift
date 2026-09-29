@@ -227,6 +227,9 @@ public enum Icon {
     public static let source = "chevron.left.forwardslash.chevron.right"
     public static let builder = "rectangle.connected.to.line.below"
     public static let map = "map"
+    /// A place opened in another app (Maps, a browser).
+    public static let openExternally = "arrow.up.forward.app"
+    public static let location = "mappin.and.ellipse"
     public static let transfer = "arrow.left.arrow.right"
     public static let sync = "arrow.triangle.2.circlepath"
     public static let structureSync = "square.grid.3x3.square"

@@ -100,10 +100,10 @@ public struct QueryTabView: View {
         // The rows arrive after the result tab does, and the Chart pane is offered only
         // once there is something in them to measure.
         .onChange(of: controller.revision) { _, _ in showChartPaneIfDemoAsked() }
-        // "Show on Map" from a result cell: that one row, from that column.
+        // "Open in Map Pane" from a result row's popover: that one row, from that source.
         .onChange(of: controller.mapRequest) { _, request in
             guard let request else { return }
-            mapColumn = request.column
+            mapSource = request.source
             mapRows = [request.row]
             resultPane = .map
         }
@@ -350,7 +350,7 @@ public struct QueryTabView: View {
     private var visiblePanes: [ResultPane] {
         ResultPane.allCases.filter { pane in
             switch pane {
-            case .map: !resultGeometryColumns.isEmpty
+            case .map: !resultMapSources.isEmpty
             case .chart: !resultChartKinds.isEmpty
             default: true
             }
@@ -453,14 +453,14 @@ public struct QueryTabView: View {
         }
     }
 
-    @State private var mapColumn = -1
+    @State private var mapSource: MapSource?
     /// The rows on the map; nil is all of them.
     @State private var mapRows: Set<Int>?
 
-    /// Geometry columns in the selected result, when it has any.
-    private var resultGeometryColumns: [Int] {
+    /// Where the selected result keeps locations, when it has any.
+    private var resultMapSources: [MapSource] {
         guard let grid = controller.selectedResult?.grid else { return [] }
-        return GeometryColumns.detect(in: grid, dialect: controller.dialect)
+        return MapSources.detect(in: grid, dialect: controller.dialect)
     }
 
     /// The result strip: one chip per statement on the left, the pane picker on the right.
@@ -588,20 +588,20 @@ public struct QueryTabView: View {
         }
     }
 
-    /// The result's geometry column on a map.
+    /// The result's locations on a map.
     @ViewBuilder
     private func mapPane(_ result: QueryResultTab) -> some View {
-        if let grid = result.grid {
-            let columns = resultGeometryColumns
+        let sources = resultMapSources
+        if let grid = result.grid, let first = sources.first {
             MapPaneView(
                 grid: grid,
                 dialect: controller.dialect,
                 revision: controller.revision,
-                column: Binding(
-                    get: { columns.contains(mapColumn) ? mapColumn : (columns.first ?? 0) },
-                    set: { mapColumn = $0 }
+                source: Binding(
+                    get: { mapSource.flatMap { sources.contains($0) ? $0 : nil } ?? first },
+                    set: { mapSource = $0 }
                 ),
-                columns: columns,
+                sources: sources,
                 rows: $mapRows,
                 onSelectRow: { row in
                     controller.selection = GridSelection(row: row, column: 0, mode: .rows)

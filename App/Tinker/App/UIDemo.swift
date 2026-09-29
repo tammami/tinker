@@ -455,7 +455,10 @@ enum UIDemo {
                 workspace.pendingTool = ToolRequest(kind: kind, connectionID: config.id, schema: demoSchemaRef(schema))
             case "map", "map-row", "map-peek", "latlng", "latlng-peek":
                 // `latlng` scenes show the plain latitude/longitude table rather than geometry.
-                let name = item.hasPrefix("latlng") ? "latlng_places" : "spatial_places"
+                var name = item.hasPrefix("latlng") ? "latlng_places" : "spatial_places"
+                if let index = arguments.firstIndex(of: "--ui-demo-table"), index + 1 < arguments.count {
+                    name = arguments[index + 1]
+                }
                 if let places = tables.first(where: { $0.name == name }) {
                     controller.openTable(places.ref, connectionID: config.id)
                     let flag =

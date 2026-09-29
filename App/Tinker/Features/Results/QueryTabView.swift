@@ -603,6 +603,8 @@ public struct QueryTabView: View {
                 ),
                 sources: sources,
                 rows: $mapRows,
+                selectedRows: Set(controller.selection.rows(totalRows: grid.rowCount)),
+                scope: "\(result.id)/\(ObjectIdentifier(grid).hashValue)/\(grid.pageOffset)",
                 onSelectRow: { row in
                     controller.selection = GridSelection(row: row, column: 0, mode: .rows)
                     controller.bumpRevision()

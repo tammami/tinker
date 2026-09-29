@@ -81,11 +81,27 @@ struct MapPaneView: View {
     let sources: [MapSource]
     /// The rows on the map; nil is every loaded row.
     @Binding var rows: Set<Int>?
+    /// The rows selected in the grid, offered as "Selected" when the map opens.
+    var selectedRows: Set<Int> = []
+    /// Changes with the page, sort, filter or result: row numbers of another scope mean
+    /// other rows, so the remembered choice is forgotten.
+    var scope: String = ""
     let onSelectRow: (Int) -> Void
 
     static let featureCap = 5_000
 
     @State private var summary = MapSummary()
+    /// The rows "Selected" shows. Kept while switching to All and back, and not moved by
+    /// a click on a pin (which selects that row in the grid).
+    @State private var chosen: Set<Int>?
+
+    private enum Showing: Hashable { case all, selected }
+
+    private var showing: Binding<Showing> {
+        Binding(
+            get: { rows == nil ? .all : .selected },
+            set: { rows = $0 == .all ? nil : chosen })
+    }
 
     var body: some View {
         let names = MapSources.columnNames(grid)
@@ -109,13 +125,15 @@ struct MapPaneView: View {
                             "The column named latitude holds longitudes and the other the latitudes; the map reads them the right way round."
                         )
                 }
-                if let rows {
-                    Badge(
-                        text: rows.count == 1 ? "ROW \((rows.first ?? 0) + 1) ONLY" : "\(rows.count) ROWS ONLY",
-                        color: .accentColor)
-                    Button("Show All") { self.rows = nil }
-                        .help("Put every loaded row back on the map")
+                Picker("Show", selection: showing) {
+                    Text("All \(grid.rowCount.formatted())").tag(Showing.all)
+                    Text(chosenTitle).tag(Showing.selected)
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .disabled(chosen?.isEmpty ?? true)
+                .help("Every loaded row, or only the rows selected in the grid")
                 Spacer()
                 if summary.unplaceable > 0 {
                     Label(
@@ -151,6 +169,24 @@ struct MapPaneView: View {
         // The window's title bar takes its backdrop from what scrolls beneath it; a map
         // would tint it, so the bar keeps its own background while the map is up.
         .toolbarBackground(.visible, for: .windowToolbar)
+        .onAppear { remember() }
+        // "Show on Map" from a row: that row becomes the selection to come back to.
+        .onChange(of: rows) { _, new in if let new { chosen = new } }
+        .onChange(of: scope) { _, _ in
+            chosen = nil
+            remember()
+        }
+    }
+
+    private var chosenTitle: String {
+        guard let chosen, !chosen.isEmpty else { return "Selected" }
+        return chosen.count == 1 ? "Row \((chosen.first ?? 0) + 1)" : "Selected \(chosen.count)"
+    }
+
+    /// What "Selected" means when the map opens: the rows it was opened on, else the
+    /// grid's selection.
+    private func remember() {
+        if let rows { chosen = rows } else if chosen == nil, !selectedRows.isEmpty { chosen = selectedRows }
     }
 }
 
@@ -179,8 +215,11 @@ struct MapCanvas: NSViewRepresentable {
         map.showsZoomControls = true
         map.showsScale = true
         map.register(MKMarkerAnnotationView.self, forAnnotationViewWithReuseIdentifier: "row")
+        // A cluster is a marker too, labelled with how many rows it holds. A plain
+        // MKAnnotationView has no image: every cluster was invisible, so a page of nearby
+        // rows showed "1,000 on the map" over an empty map.
         map.register(
-            MKAnnotationView.self,
+            MKMarkerAnnotationView.self,
             forAnnotationViewWithReuseIdentifier: MKMapViewDefaultClusterAnnotationViewReuseIdentifier)
         context.coordinator.map = map
         context.coordinator.onSelectRow = onSelectRow
@@ -358,10 +397,17 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
         // back to the same map view and never crosses to another isolation.
         nonisolated(unsafe) let annotation = annotation
         return MainActor.assumeIsolated {
-            if annotation is MKClusterAnnotation {
+            if let cluster = annotation as? MKClusterAnnotation {
                 let view = mapView.dequeueReusableAnnotationView(
                     withIdentifier: MKMapViewDefaultClusterAnnotationViewReuseIdentifier, for: annotation)
                 view.displayPriority = .defaultHigh
+                view.canShowCallout = false
+                if let marker = view as? MKMarkerAnnotationView {
+                    marker.markerTintColor = NSColor.controlAccentColor
+                    marker.glyphText = cluster.memberAnnotations.count.formatted()
+                    marker.titleVisibility = .hidden
+                    marker.subtitleVisibility = .hidden
+                }
                 return view
             }
             let view =
@@ -388,6 +434,11 @@ final class MapCoordinator: NSObject, MKMapViewDelegate {
     nonisolated func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
         MainActor.assumeIsolated {
             if let annotation = view.annotation as? RowAnnotation { onSelectRow?(annotation.row) }
+            // A cluster opens up: the map zooms to the rows it stands for.
+            if let cluster = view.annotation as? MKClusterAnnotation {
+                mapView.deselectAnnotation(cluster, animated: false)
+                mapView.showAnnotations(cluster.memberAnnotations, animated: true)
+            }
         }
     }
 

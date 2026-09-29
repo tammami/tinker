@@ -79,6 +79,9 @@ public struct TableTabView: View {
                         ),
                         sources: sources,
                         rows: $mapRows,
+                        selectedRows: Set(controller.selection.rows(totalRows: model.rowCount)),
+                        scope: "\(ObjectIdentifier(model).hashValue)/\(model.pageOffset)/\(model.sort)/"
+                            + "\(controller.filterRules)/\(controller.quickSearch)",
                         onSelectRow: { row in
                             controller.selection = GridSelection(row: row, column: 0, mode: .rows)
                             controller.bumpRevision()

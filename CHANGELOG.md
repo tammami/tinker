@@ -4,6 +4,22 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.14] - 2026-09-29
+
+### Added
+- **Latitude and longitude columns on the map.** A table that keeps its locations as two
+  plain columns — `latitude`/`longitude`, `lat`/`lng`, `lattitude`/`long`, `lintang`/`bujur`,
+  or with a prefix such as `pickup_lat`/`pickup_lng` — or as one `koordinat` column holding
+  "lat, lng", now has a Map mode and a Map pane, whether the values are numbers or text.
+  Values are read as they are typed: with spaces, with a decimal comma (`-8,5994`), or in
+  degrees (`8°35'57"S`, `8,5 LS`). Rows with no location are skipped, and the map says how
+  many values were unreadable or out of range. Columns named the wrong way round are read
+  correctly and marked SWAPPED.
+- **Show on Map from any cell of a row.** Right-click a row with a location to see it on a
+  map over the grid, with its name and coordinates, and open it in Apple Maps or Google
+  Maps, copy the coordinates, or open the full map pane for that row. A pin on the map has
+  the same menu. Coordinates leave Tinker only when you click one of these.
+
 ## [0.1.13] - 2026-09-24
 
 ### Added

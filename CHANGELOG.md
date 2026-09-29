@@ -4,6 +4,65 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.19] - 2026-09-30
+
+### Added
+- **Every type each engine documents.** The type list in Structure now carries all of
+  PostgreSQL's, MySQL's, MariaDB's and SQLite's types, grouped the way each manual groups
+  them, with what the manual says of each: its size and its range.
+  - A type is shown with its other names, `bigint · int8`, `character varying · varchar`,
+    so a name known from another client is found at once.
+  - The list follows the server: `vector` from MySQL 9.0, `uuid`, `inet4` and `inet6` on
+    MariaDB, multirange types from PostgreSQL 14.
+  - PostgreSQL columns can be arrays (`integer[]`), and the defaults offered are the
+    engine's own: `gen_random_uuid()`, `now()`, `CURRENT_TIMESTAMP(6)`, `(UUID())`.
+- **Foreign keys are chosen, not typed.** The table a key points at, its columns and the
+  columns they point at come from lists of what the server has.
+  - Choosing the table fills in its primary key and finds the column named after it
+    (`customer_id` for `customers.id`).
+  - Each ON DELETE and ON UPDATE action says what it does, and only the actions the engine
+    carries out are offered. PostgreSQL and SQLite can defer the check to commit.
+  - What the server would refuse is said before it is asked: types that differ, columns
+    that are not unique where they are pointed at, SET NULL on a NOT NULL column.
+- **Import Data.** “Import from CSV…” is now “Import Data…”, since it reads Excel and JSON
+  too. The sheet shows the file, the sheet of the workbook and the table; each table
+  column chooses the file column that fills it, with Match by Name and Match by Position.
+  - Any sheet of a workbook can be imported, not only the first.
+  - The encoding (UTF-8, UTF-16, Windows-1252, ISO-8859-1) and the separator are read from
+    the file, and can be changed.
+  - A number typed in Excel as `-8.59940239` arrives as that, not as the
+    `-8.5994023899999995` Excel stores.
+- **Redis: every data type.** Time series, Bloom and Cuckoo filters, Top-K, Count-min
+  sketch, t-digest, vector sets, HyperLogLog, bitmaps and geospatial indexes each have
+  their own view, under the name the Redis manual gives them. A key shows its encoding,
+  its memory and how long it has been idle; hash fields show their own expiry, and New Key
+  offers the types the server has.
+
+### Changed
+- **The Chart tab opens at once on a large result.** It draws at most 50 bars (or 20, or
+  100), 8 slices, 1,000 points of a line or 2,000 of a scatter, and says what it drew:
+  “Top 50 of 3,214 categories”. Lines keep their peaks and troughs. The chart is worked out
+  off the main thread, and moving the pointer over it no longer redraws it.
+- **One way to add a connection.** “New Redis Connection…” is gone from the New menu and
+  the menu bar: New Connection… opens the same sheet, and Redis is chosen as its engine
+  like PostgreSQL, MySQL and SQLite.
+
+### Fixed
+- Imported text no longer turns into odd characters when the file is a CSV saved by Excel
+  in UTF-16 or Windows-1252, or separated by semicolons.
+- An old `.xls` workbook, or any other binary file, is refused with a message asking for
+  `.xlsx` instead of filling the columns with noise.
+- Text holding a carriage return, a control character or something shaped like `_x0041_`
+  comes back from an Excel export as it went in.
+- A `true`/`false` cell of a workbook fills an integer column, and a generated column is
+  no longer matched by name, which the server refused.
+- PostgreSQL's `serial` types are offered for a new column only: an existing column cannot
+  be altered to one.
+- Redis: editing a hash field kept dropping the field's own expiry; a value page could
+  land in another key opened meanwhile; creating a key with an expiry is now one
+  transaction.
+- A chart no longer takes `Infinity` in a `double precision` column for a value.
+
 ## [0.1.18] - 2026-09-29
 
 ### Added

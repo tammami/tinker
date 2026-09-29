@@ -95,26 +95,50 @@ enum SQLiteFileOpener {
 /// Receives the files Finder hands the app — a double-clicked database, "Open With", a
 /// drop on the Dock icon — and opens them once a workspace window exists to open them in.
 final class TinkerAppDelegate: NSObject, NSApplicationDelegate {
-    /// Quitting with uncommitted edits or an open transaction in any window asks first
-    /// (SPEC §13.2). The question goes through the frontmost workspace's confirmation
-    /// sheet; the answer is handed back to AppKit, which finishes or cancels the quit.
+    /// Quitting while tabs are open asks first, in any window (SPEC §13.2 asked only
+    /// for uncommitted work; a stray ⌘Q closing a window full of tabs cost more than the
+    /// question does), answered in an alert before AppKit finishes or cancels the quit.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let workspaces = CommandCenter.shared.all
-        let unsaved = workspaces.filter(\.hasAnyUnsavedWork)
-        guard !unsaved.isEmpty, let front = workspaces.first else { return .terminateNow }
-        let tabs = unsaved.reduce(0) { total, workspace in
+        let openTabs = workspaces.reduce(0) { $0 + $1.workspace.tabs.count }
+        let unsavedTabs = workspaces.reduce(0) { total, workspace in
             total + workspace.workspace.tabs.filter { workspace.hasUnsavedWork($0) }.count
         }
-        front.workspace.confirmation = DestructiveConfirmation(
-            title: "Quit \(Product.name)?",
-            message:
-                "\(tabs) tab\(tabs == 1 ? " has" : "s have") uncommitted changes or an open transaction. "
-                + "Quitting rolls the transactions back and discards the changes.",
-            confirmTitle: "Quit",
-            action: { sender.reply(toApplicationShouldTerminate: true) },
-            onCancel: { sender.reply(toApplicationShouldTerminate: false) }
-        )
-        return .terminateLater
+        guard let question = Self.quitQuestion(openTabs: openTabs, unsavedTabs: unsavedTabs) else { return .terminateNow }
+        // Logging out, restarting or shutting down is not a stray ⌘Q: with nothing unsaved
+        // it goes ahead rather than hold the whole Mac up on a question.
+        if unsavedTabs == 0, Self.isSystemQuit() { return .terminateNow }
+        // An app-modal alert, not a workspace sheet: a window with an Import or New
+        // Database sheet already up cannot show a second one, and the quit would hang.
+        let alert = NSAlert()
+        alert.messageText = "Quit \(Product.name)?"
+        alert.informativeText = question
+        alert.alertStyle = unsavedTabs > 0 ? .critical : .warning
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+    }
+
+    /// Whether the quit was asked for by the system (log out, restart, shut down).
+    static func isSystemQuit() -> Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+            event.eventClass == kCoreEventClass, event.eventID == kAEQuitApplication,
+            let reason = event.attributeDescriptor(forKeyword: kAEQuitReason)?.enumCodeValue
+        else { return false }
+        return [kAELogOut, kAEReallyLogOut, kAEShowRestartDialog, kAERestart, kAEShowShutdownDialog, kAEShutDown]
+            .map { OSType($0) }.contains(reason)
+    }
+
+    /// What quitting asks, or nil when there is nothing open to lose.
+    static func quitQuestion(openTabs: Int, unsavedTabs: Int) -> String? {
+        guard openTabs > 0 else { return nil }
+        var message = "\(openTabs) tab\(openTabs == 1 ? " is" : "s are") open and will be closed."
+        if unsavedTabs > 0 {
+            message +=
+                " \(unsavedTabs) of them \(unsavedTabs == 1 ? "has" : "have") uncommitted changes or an open transaction; "
+                + "quitting rolls the transactions back and discards the changes."
+        }
+        return message
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

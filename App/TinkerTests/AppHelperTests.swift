@@ -14,6 +14,16 @@ import XCTest
 final class AppHelperTests: XCTestCase {
     // MARK: Logging
 
+    /// ⌘Q asks whenever a tab is open, and says so when work would be lost.
+    func testQuittingAsksWhileTabsAreOpen() {
+        XCTAssertNil(TinkerAppDelegate.quitQuestion(openTabs: 0, unsavedTabs: 0), "nothing open: quit at once")
+        XCTAssertEqual(
+            TinkerAppDelegate.quitQuestion(openTabs: 1, unsavedTabs: 0), "1 tab is open and will be closed.")
+        let lossy = TinkerAppDelegate.quitQuestion(openTabs: 3, unsavedTabs: 1) ?? ""
+        XCTAssertTrue(lossy.hasPrefix("3 tabs are open"), lossy)
+        XCTAssertTrue(lossy.contains("1 of them has uncommitted changes"), lossy)
+    }
+
     func testRecentRecordsKeepTheLastFewHundredInOrder() {
         let records = AppLogging.RecentRecords()
         for index in 0 ..< (AppLogging.RecentRecords.capacity + 25) { records.append("record \(index)") }

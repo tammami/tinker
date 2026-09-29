@@ -928,3 +928,45 @@ tab to a server where nothing is open. The tab's colour stripe, which reads
 `tab.connectionID`, now changes with the picker, so the move is visible in the tab bar. The tab keeps its title: "SQL 1" is the
 user's handle on it, not its address. Nothing persists tabs across a relaunch, so there is
 no stored id to migrate.
+
+## ADR-0064 — A location is wherever the table keeps it, not only a geometry column
+Date: 2026-09-29
+
+**Context.** The map (built 2026-09-04 on the pgAdmin model) only drew geometry columns.
+Most application tables keep a place as two ordinary columns, often `varchar`: the report
+was a MySQL `pelanggan` table with `latitude`/`longitude` as text, spelt by different
+teams as `lat`, `lattitude`, `lng`, `long`, and so on. Those rows had no way to a map.
+
+**Decision.** A map reads from a `MapSource` (DBGrid, `Coordinates.swift`): a geometry
+column, a latitude/longitude pair, or one combined text column. `MapSourceDetector` finds
+them from column metadata plus a value lookup, so a table tab, a query result and a test
+share one implementation.
+
+- A pair needs *both* halves by name (words split on `_`, spaces, camelCase and digits,
+  so `pickupLat`, `pickup_lat` and `lat2` all read) *and* sampled values that are
+  coordinates. The name makes the case, so a stray bad row does not sink it: more good
+  samples than bad. A table with no values yet is taken on its names. This is what keeps
+  `long_description` and a microdegree `int` pair off the map.
+- A combined column needs a name that says so (`koordinat`, `lokasi`, `gps`, `latlng`, …)
+  and values that parse as two numbers. Separators are tried `;`, then `, `, then a lone
+  comma, then whitespace, so decimal commas survive.
+- Swapped columns are read the right way round and badged, never corrected silently.
+- `0, 0` counts as "no location": it is what a form writes when nothing was picked, and a
+  pin in the Gulf of Guinea helps no one.
+- "Show on Map" moved from "a geometry cell" to "any cell of a row with a location". The
+  delegate and `MapRequest` now carry the source, not a column.
+- Open in Apple Maps / Google Maps and Copy Coordinates are explicit clicks; the app sends
+  no coordinates anywhere by itself. Apple Maps opens through the `maps:` scheme, so no
+  deprecated `MKPlacemark` is needed.
+
+**Rejected.** *Detecting by name alone*: `long` is an English word and a column called
+`lat` can hold anything. *Detecting by values alone*: any two small decimals would qualify.
+*Degrees without a degree sign or hemisphere* (`8 35 57`): three numbers are not
+necessarily an angle. *`x`/`y` columns*: too often not geographic.
+
+**Consequences.** Detection runs on every render of the mode bar and every right-click;
+it samples at most 24 rows and eight values per candidate, so its cost does not grow with
+the table. Converting to `Double` is for placing a pin only; §5's precision rule still
+holds for everything the user sees or copies. `testenv/fixtures/*/005_latlng.sql` adds
+`latlng_places` on every engine.
+

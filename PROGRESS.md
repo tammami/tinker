@@ -1153,3 +1153,56 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 - None. SPEC §13.1a ("a query tab carries its own connection") is what the first half
   implements rather than changes; §13.2's badge, its colour and its two buttons are
   unchanged. ADR-0062 and ADR-0063.
+
+## 2026-09-29 — Latitude/longitude columns on the map (ADR-0064, SPEC §13.2b)
+
+### Done
+- The map reads a `MapSource` instead of a geometry column: a geometry column, a
+  latitude/longitude pair, or one text column holding both. `MapSourceDetector`
+  (`Packages/DBGrid/Sources/DBGrid/Coordinates.swift`) finds them by name and confirms them
+  by sampled values (at most 24 rows), whatever the column type — the report was a MySQL
+  table with `latitude`/`longitude` as `varchar`.
+- Values are read as typed: padding, decimal comma, degrees/minutes/seconds, and the
+  Indonesian hemispheres LU/LS/BT/BB. NULL, blank and `0, 0` are "no location"; text that is
+  not a number is counted as unreadable; values off the earth as out of range. The Map bar
+  shows both counts. Columns named the wrong way round are read correctly and badged SWAPPED.
+- "Show on Map" is on any cell of a row with a location. Its popover shows the place, the
+  row's name (`name`/`title`/`label`/`nama`, or a column containing those words) and the
+  server's own coordinate text, with Open in Apple Maps, Open in Google Maps, Copy
+  Coordinates and Open in Map Pane. A pin's callout has the same menu. The Map mode on
+  table tabs and the Map pane on results appear for these tables too, with a picker when a
+  table has several locations.
+- Fixture `latlng_places` (`testenv/fixtures/{pg,mysql,sqlite}/005_latlng.sql`), around
+  Mataram, loaded through `testenv/prepare.sh` on PostgreSQL 16, MySQL 9.4 and MariaDB
+  11.8. UI demo scenes `latlng` and `latlng-peek`.
+
+### Tests
+- `CoordinatesTests` (17): number parsing (padding, decimal comma, junk refused), degrees
+  with hemispheres, pairs in one text column, value text per `DBValue` kind, name → axis and
+  pairing key (`platform`, `longest`, `latlng` claim no axis), combined names, label column,
+  detection of a varchar pair, several numeric pairs, swapped pairs, names without
+  coordinate values rejected, one bad row tolerated, empty table taken on names, combined
+  order, geometry first, reading rows into placed/empty/unreadable/out of range, server
+  digits kept for Copy Coordinates, shape anchor.
+- `testLatitudeLongitudeColumnsAreFoundAndPlacedOnEveryEngine`: reads `latlng_places`
+  through each real driver — PostgreSQL :5432, MySQL :3306, MariaDB :3316 and SQLite — and
+  proves the three sources are found, rows 1–4 placed on Lombok, rows 5–8 classified, and
+  the server's digits kept. It asserts every configured server was reached. It uses the new
+  `everyServer()`, since `allServers()` takes one MySQL-family server only.
+- `Scripts/ci.sh --skip-app`: zero warnings, lints ok, 806 tests passed, 0 failed, 1
+  skipped (`testWrongPasswordSurfacesAsAuthenticationFailure`: the local PostgreSQL uses
+  trust auth — an existing gap). App build: zero warnings. Screenshots of `--ui-demo
+  latlng` and `latlng-peek` against the local PostgreSQL show four pins with their names,
+  "1 out of range · 1 unreadable", and the popover on a decimal-comma row.
+
+### Not done / deferred
+- The app-hosted half of `ci.sh` (`TinkerTests`, smoke pass) was not run: it launches the
+  app on the real store, which holds a production connection. The map views have no
+  app-hosted test; they were checked by screenshot only.
+- The UI scenes ran on PostgreSQL only. The store has no MariaDB connection, and its two
+  connections named "MySQL" include a production one, so no scene was pointed at MySQL.
+- `x`/`y` columns and degrees without a sign or hemisphere are not read as coordinates
+  (ADR-0064 says why).
+
+### Spec deviations
+- None. §13.2a's Map pane is widened and §13.2b added to describe it; ADR-0064.

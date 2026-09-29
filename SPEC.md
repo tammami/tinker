@@ -680,7 +680,9 @@ that would be empty:
   offered as a label and never as a value, because drawing or summing a key says nothing.
   Rows sharing a label can be summed, averaged or counted, or drawn one bar each. Hovering
   reads out the point under the pointer. Capped at the first 5,000 rows.
-- **Map** — a geometry column drawn on a real map. Shown only when the result has one.
+- **Map** — the rows' locations drawn on a real map. Shown only when the result has one.
+  A location is a geometry column, a latitude/longitude pair of columns, or one text column
+  holding both ("-8.5994, 116.0977"); see §13.2b. Capped at the first 5,000 locations.
 - **Profile** — per-stage timings, where the engine offers them. MySQL's `SHOW PROFILE`,
   which needs `profiling` on for the session. PostgreSQL has no equivalent that does not
   re-run the statement, and re-running a write to time it is not something a client may do
@@ -694,6 +696,37 @@ a round trip, and a pane nobody looks at should cost nothing.
 
 The status line under the panes carries the SQL that ran, the elapsed time and the row
 count, so what produced the rows on screen is always visible.
+
+### 13.2b Locations on a map (added 2026-09-29, ADR-0064)
+
+Table tabs (a Map mode beside Data and Structure) and query results (the Map pane) put rows
+on a map wherever the grid holds a location, whatever the column types are:
+
+- **Geometry**: PostGIS, MySQL/MariaDB spatial, or text holding EWKB/WKT.
+- **A pair of columns**, found by name and confirmed by values. Latitude: `lat`, `latitude`,
+  `lattitude`, `lintang`; longitude: `lng`, `lon`, `long`, `longitude`, `longtitude`,
+  `bujur`. The rest of the name pairs them (`pickup_lat` with `pickup_lng`, `dropLat` with
+  `dropLon`); a half without its partner is not a location. Numbers, decimals and text
+  (`varchar`) all qualify.
+- **One text column holding both**, named like `koordinat`, `lokasi`, `gps`, `coordinates`,
+  `latlng`. Latitude first unless the values can only be longitude first.
+
+Detection samples at most 24 rows, so a right-click stays cheap. Values are accepted as
+people type them: padded, with a decimal comma (`-8,5994`), or in degrees and minutes
+(`8°35'57.8"S`, `8,5 LS`, `116 BT`). A row with NULL, blank, or `0, 0` has no location; a
+value that is not a number is counted as unreadable; |latitude| > 90 or |longitude| > 180
+is counted as out of range. The map says how many of each, and never drops a row silently.
+When the values show the two columns are named the wrong way round, the map reads them
+the right way and shows a SWAPPED badge.
+
+Numbers are converted to `Double` only to place a pin. The grid, the pin's subtitle and
+Copy Coordinates keep the server's own text.
+
+"Show on Map" on any cell of a row with a location opens a popover over that cell: the
+place, its name (a `name`/`title`/`label`/`nama` column, or one containing those words),
+its coordinates, and Open in Apple Maps, Open in Google Maps, Copy Coordinates, and Open in
+Map Pane (that row alone). A pin's callout offers the same menu. Coordinates leave the app
+only on one of those clicks.
 
 ### 13.3 Acceptance criteria
 

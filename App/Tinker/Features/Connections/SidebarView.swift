@@ -60,11 +60,6 @@ public struct SidebarView: View {
                         }
                         .keyboardShortcut("n", modifiers: [.command, .option])
                         Button {
-                            workspace.presentNewRedisConnection()
-                        } label: {
-                            Label("New Redis Connection…", systemImage: Icon.redisKey)
-                        }
-                        Button {
                             workspace.folderEditor = FolderEditor(kind: .create(parent: []))
                         } label: {
                             Label("New Folder…", systemImage: Icon.group)
@@ -116,19 +111,14 @@ public struct SidebarView: View {
 }
 
 extension WorkspaceModel {
-    /// Opens the connection sheet on a fresh PostgreSQL configuration.
+    /// Opens the connection sheet on a fresh PostgreSQL configuration. Every other engine,
+    /// Redis included, is chosen in the sheet's Engine picker: one way in for all of them.
     public func presentNewConnection() {
         // A new connection starts with TLS required (ADR-0031); stored ones keep theirs.
         editingConnection = ConnectionConfig(
             name: "New Connection", dialect: .postgresql,
             host: "localhost", port: 5_432, user: NSUserName(), tls: TLSConfig(mode: .require)
         )
-        isEditingNewConnection = true
-    }
-
-    /// Opens the connection sheet on a fresh Redis configuration: local, 6379, db0.
-    public func presentNewRedisConnection() {
-        editingConnection = .redis(name: "Redis")
         isEditingNewConnection = true
     }
 }

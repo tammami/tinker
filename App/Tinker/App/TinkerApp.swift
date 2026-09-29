@@ -226,7 +226,6 @@ struct TinkerCommands: Commands {
             Divider()
             Button("New Connection…") { workspace?.workspace.presentNewConnection() }
                 .keyboardShortcut("n", modifiers: [.command, .option])
-            Button("New Redis Connection…") { workspace?.workspace.presentNewRedisConnection() }
             Button("New Folder…") { workspace?.workspace.folderEditor = FolderEditor(kind: .create(parent: [])) }
             Button("New Table…") { workspace?.workspace.isNewTablePresented = true }
                 .keyboardShortcut("n", modifiers: [.command, .shift])

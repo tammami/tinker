@@ -65,6 +65,7 @@ public final class SidebarModel {
         // A watcher for a connection that no longer exists would run for the life of the
         // window; nothing cancelled them before.
         let known = Set(environment.connections.map(\.id))
+        openedConnections.formIntersection(known)
         for id in stateWatchers.keys where !known.contains(id) {
             stateWatchers.removeValue(forKey: id)?.cancel()
             states.removeValue(forKey: id)
@@ -235,8 +236,18 @@ public final class SidebarModel {
     /// again before the query returned.
     public func markExpanded(_ id: SidebarItem.ID) {
         if id.hasPrefix("group/") { collapsedGroups.remove(id) }
+        // A connection's row is its id alone; opening it is what gives it a chevron.
+        if let connectionID = UUID(uuidString: id) { openedConnections.insert(connectionID) }
         expanded.insert(id)
     }
+
+    /// Connections the user has opened — with a double-click, Expand, or anything that
+    /// expands the row for them. Only these draw a chevron: a connection is not browsed
+    /// until it is asked for, and a single click only selects it. A query tab (⌘T) opens
+    /// its own session and leaves this alone.
+    public private(set) var openedConnections: Set<UUID> = []
+
+    public func isOpened(_ connectionID: UUID) -> Bool { openedConnections.contains(connectionID) }
 
     /// Loads a node's children if they have not been read yet.
     public func loadChildrenIfNeeded(_ item: SidebarItem) async {
@@ -267,6 +278,7 @@ public final class SidebarModel {
 
     /// What Disconnect does to the tree: every node of the connection closes and empties.
     public func collapseConnection(_ connectionID: UUID) {
+        openedConnections.remove(connectionID)
         let marker = connectionID.uuidString
         expanded = expanded.filter { !$0.contains(marker) }
         childCache = childCache.filter { !$0.key.contains(marker) }

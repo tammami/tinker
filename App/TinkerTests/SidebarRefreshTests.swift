@@ -114,6 +114,21 @@ final class SidebarRefreshTests: XCTestCase {
         XCTAssertEqual(tables(under: ids[2]), ["alpha", "beta"])
     }
 
+    /// A connection has no chevron until it is opened; closing its triangle keeps it
+    /// open, Disconnect does not. Nothing about a refresh opens it.
+    func testAConnectionIsBrowsedOnlyOnceItIsOpened() async throws {
+        let id = try XCTUnwrap(config).id
+        XCTAssertFalse(sidebar.isOpened(id), "a single click only selects")
+        await sidebar.refresh(connectionID: id)
+        XCTAssertFalse(sidebar.isOpened(id))
+        let ids = try await openToTables()
+        XCTAssertTrue(sidebar.isOpened(id), "the double-click's expand opens it")
+        sidebar.collapse(ids[0])
+        XCTAssertTrue(sidebar.isOpened(id), "the chevron stays to open it again")
+        sidebar.collapseConnection(id)
+        XCTAssertFalse(sidebar.isOpened(id), "Disconnect takes the chevron away")
+    }
+
     /// Opening and closing still work during a refresh and after one.
     func testRowsStillOpenAndCloseAroundARefresh() async throws {
         let ids = try await openToTables()

@@ -141,7 +141,7 @@ struct SidebarRow: View {
         // The context menu sits on the row's own label, not on the disclosure group: a menu
         // on the group would cover every child row and answer for them.
         Group {
-            if item.isExpandable {
+            if isExpandable {
                 DisclosureGroup(isExpanded: expansionBinding) {
                     ForEach(item.children ?? []) { child in
                         SidebarRow(
@@ -161,6 +161,13 @@ struct SidebarRow: View {
             }
         }
         .tag(item.id)
+    }
+
+    /// A connection has a chevron only once it has been opened (double-click or Expand);
+    /// every other branch has one from the start.
+    private var isExpandable: Bool {
+        if case let .connection(id) = item.kind { return sidebar.isOpened(id) }
+        return item.isExpandable
     }
 
     var expansionBinding: Binding<Bool> {

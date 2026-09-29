@@ -96,6 +96,12 @@ enum UIDemo {
         if let index = arguments.firstIndex(of: "--ui-demo-connection"), index + 1 < arguments.count {
             config = environment.connections.first { $0.name == arguments[index + 1] } ?? config
         }
+        // By id: names are not unique (a local and a production connection can share one).
+        if let index = arguments.firstIndex(of: "--ui-demo-connection-id"), index + 1 < arguments.count {
+            config = environment.connections.first { $0.id.uuidString == arguments[index + 1] }
+        }
+        // A demo never opens a production connection.
+        if config?.isProduction == true { return }
         guard let config else { return }
 
         // Expand the tree the way a double-click would, so tables become known.

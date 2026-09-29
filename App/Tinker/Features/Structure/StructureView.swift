@@ -708,10 +708,15 @@ struct ColumnDetailPanel: View {
                     .accessibilityLabel("identity")
                 }
                 FieldRow(label: "") {
+                    // Bounded, never `fixedSize`: a text that sizes its own height asks for
+                    // one line per word when measured narrow, and the pane then outgrows the
+                    // window and pushes the whole window's content up under the toolbar.
                     Text(identityChoice.explanation)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .help(identityChoice.explanation)
                 }
             }
 

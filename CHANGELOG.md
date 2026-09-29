@@ -4,6 +4,13 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.17] - 2026-09-29
+
+### Fixed
+- Opening Structure on a PostgreSQL table whose selected column is an integer no longer
+  pushes the whole window up under the toolbar, hiding the tabs and the column headings.
+  The Identity explanation added in 0.1.16 asked for more height than the window had.
+
 ## [0.1.16] - 2026-09-29
 
 ### Added

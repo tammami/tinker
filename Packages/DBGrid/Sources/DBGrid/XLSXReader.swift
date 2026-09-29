@@ -70,6 +70,12 @@ public final class XLSXWorkbook: Sendable {
         sheet = try Self.inflate(sheetPath, from: zip)
     }
 
+    /// Opens a workbook away from the caller's actor: inflating a large sheet takes a
+    /// moment, and the import sheet must not freeze while it does.
+    public static func open(data: Data) async throws -> XLSXWorkbook {
+        try XLSXWorkbook(data: data)
+    }
+
     /// A reader over the sheet's rows, from the first. Cheap: nothing is re-read.
     public func rows() -> XLSXRowReader { XLSXRowReader(workbook: self) }
 
@@ -195,8 +201,17 @@ public struct XLSXRowReader: RecordSource {
         while let token = scanner.next() {
             switch token {
             case let .open("c", attributes, selfClosing):
-                let column = attributes["r"].flatMap(Self.columnIndex) ?? cells.count
                 let value = selfClosing ? "" : readCell(type: attributes["t"], style: attributes["s"].flatMap(Int.init))
+                // Excel stops at XFD; a reference past it (or one that is not a reference)
+                // is damage, not data, and padding up to it would allocate without limit.
+                let column: Int
+                if let reference = attributes["r"] {
+                    guard let index = Self.columnIndex(reference) else { continue }
+                    column = index
+                } else {
+                    column = cells.count
+                }
+                guard column < Self.columnLimit else { continue }
                 if column >= cells.count {
                     cells.append(contentsOf: repeatElement("", count: column - cells.count))
                     cells.append(value)
@@ -252,11 +267,15 @@ public struct XLSXRowReader: RecordSource {
         }
     }
 
-    /// `C7` → 2. Nil for anything that is not letters followed by digits.
+    /// Excel's last column, `XFD`, is index 16 383.
+    static let columnLimit = 16_384
+
+    /// `C7` → 2. Nil for anything that is not one to three letters followed by digits.
     static func columnIndex(_ reference: String) -> Int? {
         var index = 0
         var letters = 0
         for scalar in reference.unicodeScalars {
+            if letters > 3 { return nil }
             switch scalar.value {
             case 65 ... 90:
                 index = index * 26 + Int(scalar.value - 64)
@@ -265,24 +284,27 @@ public struct XLSXRowReader: RecordSource {
                 index = index * 26 + Int(scalar.value - 96)
                 letters += 1
             case 48 ... 57:
-                return letters == 0 ? nil : index - 1
+                return letters == 0 || letters > 3 || index > columnLimit ? nil : index - 1
             default:
                 return nil
             }
         }
-        return letters == 0 ? nil : index - 1
+        return letters == 0 || letters > 3 || index > columnLimit ? nil : index - 1
     }
 }
 
 /// What an Excel number format makes of a day count.
 enum ExcelDateKind: Sendable, Hashable {
-    case date, time, dateTime
+    /// `time` is a time of day; `duration` is elapsed time (`[h]:mm:ss`), where hours
+    /// keep counting past a day.
+    case date, time, dateTime, duration
 
     /// Built-in formats by id, then a custom format by what its code asks for.
     static func of(formatID id: Int, code: String?) -> ExcelDateKind? {
         switch id {
         case 14 ... 17, 27 ... 31, 34 ... 36, 50 ... 58: return .date
-        case 18 ... 21, 32, 33, 45 ... 47: return .time
+        case 18 ... 21, 32, 33, 45, 47: return .time
+        case 46: return .duration
         case 22: return .dateTime
         default: break
         }
@@ -291,16 +313,30 @@ enum ExcelDateKind: Sendable, Hashable {
         // about the value; `[h]` (elapsed hours) does.
         var cleaned = ""
         var inQuote = false
-        var inBracket = false
+        var bracket: String?
         var escape = false
+        var isElapsed = false
         for character in code.lowercased() {
             if escape { escape = false; continue }
+            if var inside = bracket {
+                if character == "]" {
+                    // Only `[h]`, `[mm]`, `[ss]` and the like are about the value; a colour
+                    // (`[Magenta]`), a currency (`[$USD]`) or a locale (`[$-421]`) is not.
+                    if let first = inside.first, "hms".contains(first), inside.allSatisfy({ $0 == first }) {
+                        cleaned += inside
+                        isElapsed = true
+                    }
+                    bracket = nil
+                } else {
+                    inside.append(character)
+                    bracket = inside
+                }
+                continue
+            }
             if character == "\\" { escape = true; continue }
             if character == "\"" { inQuote.toggle(); continue }
             if inQuote { continue }
-            if character == "[" { inBracket = true; cleaned.append(" "); continue }
-            if character == "]" { inBracket = false; continue }
-            if inBracket, !"hms".contains(character) { continue }
+            if character == "[" { bracket = ""; continue }
             cleaned.append(character)
         }
         // A format for positive numbers is the first section.
@@ -311,7 +347,7 @@ enum ExcelDateKind: Sendable, Hashable {
         switch (hasDate, hasTime) {
         case (true, true): return .dateTime
         case (true, false): return .date
-        case (false, true): return .time
+        case (false, true): return isElapsed ? .duration : .time
         default:
             // `mm` alone, or `mmm yy` without the y already caught: months.
             return section.contains("m") ? .date : nil
@@ -329,9 +365,10 @@ enum ExcelDateKind: Sendable, Hashable {
             seconds -= 86_400
         }
         let time = String(format: "%02d:%02d:%02d", seconds / 3_600, seconds / 60 % 60, seconds % 60)
-        if kind == .time {
-            // A duration past a day keeps counting hours, as `[h]:mm:ss` shows it.
-            guard days > 0 else { return time }
+        // A time of day shows the clock whatever the date; a duration keeps counting
+        // hours past a day, as `[h]:mm:ss` does.
+        if kind == .time { return time }
+        if kind == .duration {
             let hours = days * 24 + seconds / 3_600
             return String(format: "%02d:%02d:%02d", hours, seconds / 60 % 60, seconds % 60)
         }
@@ -389,6 +426,8 @@ struct ZipArchive {
     private let entries: [String: Entry]
     /// Parts other than the sheet are read whole; none is anywhere near this.
     static let wholePartLimit: UInt64 = 256 * 1_024 * 1_024
+    /// No part inflates past this: a million rows of a wide sheet is well under it.
+    static let partLimit: UInt64 = 4 * 1_024 * 1_024 * 1_024
 
     init(data: Data) throws {
         self.data = data
@@ -408,7 +447,7 @@ struct ZipArchive {
             var directory = bytes.u32(end + 16).map(UInt64.init)
         else { throw notAWorkbook }
         // ZIP64: a locator just before the end record points at the larger one.
-        if end >= 20, bytes.u32(end - 20) == 0x0706_4B50, let record = bytes.u64(end - 12).map(Int.init),
+        if end >= 20, bytes.u32(end - 20) == 0x0706_4B50, let record = bytes.u64(end - 12).flatMap(Int.init(exactly:)),
             bytes.u32(record) == 0x0606_4B50, let bigCount = bytes.u64(record + 32),
             let bigDirectory = bytes.u64(record + 48)
         {
@@ -416,7 +455,10 @@ struct ZipArchive {
             directory = bigDirectory
         }
         var entries: [String: Entry] = [:]
-        var position = Int(directory)
+        guard let start = Int(exactly: directory), start < data.count, count <= UInt64(data.count / 46) else {
+            throw notAWorkbook
+        }
+        var position = start
         for _ in 0 ..< count {
             guard bytes.u32(position) == 0x0201_4B50, let method = bytes.u16(position + 10),
                 var compressed = bytes.u32(position + 20).map(UInt64.init),
@@ -466,17 +508,26 @@ struct ZipArchive {
     func read(_ name: String, _ body: (Data) throws -> Void) throws {
         guard let entry = entries[name] else { throw XLSXReadError("The workbook has no \(name).") }
         let bytes = ByteView(data)
-        let header = Int(entry.localHeaderOffset)
-        guard bytes.u32(header) == 0x0403_4B50, let nameLength = bytes.u16(header + 26).map(Int.init),
+        let damaged = XLSXReadError("\(name) is damaged in the archive.")
+        guard let header = Int(exactly: entry.localHeaderOffset), header < data.count,
+            bytes.u32(header) == 0x0403_4B50, let nameLength = bytes.u16(header + 26).map(Int.init),
             let extraLength = bytes.u16(header + 28).map(Int.init)
-        else { throw XLSXReadError("\(name) is damaged in the archive.") }
+        else { throw damaged }
         let start = header + 30 + nameLength + extraLength
-        let end = start + Int(entry.compressedSize)
-        guard end <= data.count else { throw XLSXReadError("\(name) is cut short; the file is incomplete.") }
+        guard let compressed = Int(exactly: entry.compressedSize), compressed <= data.count - min(start, data.count),
+            start + compressed <= data.count
+        else { throw XLSXReadError("\(name) is cut short; the file is incomplete.") }
+        let end = start + compressed
+        // A part that claims to inflate a thousand times over, or past the absolute cap,
+        // is a zip bomb or damage; real spreadsheets compress XML ten to fifty times.
+        guard entry.uncompressedSize <= Self.partLimit,
+            entry.uncompressedSize <= max(UInt64(compressed), 1_024) * 1_000
+        else { throw XLSXReadError("\(name) claims \(entry.uncompressedSize >> 20) MiB; the file is refused as unsafe.") }
         let base = data.startIndex
         let piece = 64 * 1_024
         switch entry.method {
         case 0:
+            guard UInt64(compressed) == entry.uncompressedSize else { throw damaged }
             var offset = start
             while offset < end {
                 let next = min(offset + 1_024 * 1_024, end)
@@ -489,7 +540,12 @@ struct ZipArchive {
             var offset = start
             while offset < end, !inflater.isFinished {
                 let next = min(offset + piece, end)
-                let output = try inflater.decompress(data.subdata(in: base + offset ..< base + next))
+                let output: Data
+                do {
+                    output = try inflater.decompress(data.subdata(in: base + offset ..< base + next))
+                } catch {
+                    throw damaged
+                }
                 produced += UInt64(output.count)
                 guard produced <= entry.uncompressedSize else {
                     throw XLSXReadError("\(name) inflates past the size the archive declares.")
@@ -497,6 +553,9 @@ struct ZipArchive {
                 if !output.isEmpty { try body(output) }
                 offset = next
             }
+            // A stream that stops early, or inflates to other than it said, is damage:
+            // importing the rows before it would pass off part of a sheet as all of it.
+            guard inflater.isFinished, produced == entry.uncompressedSize else { throw damaged }
         default:
             throw XLSXReadError("\(name) uses a compression method (\(entry.method)) Tinker cannot read.")
         }
@@ -696,9 +755,9 @@ struct XMLScanner {
         var index = text.startIndex
         while index < text.endIndex {
             let character = text[index]
-            guard character == "&", let semicolon = text[index...].firstIndex(of: ";"),
-                text.distance(from: index, to: semicolon) <= 10
-            else {
+            // Entities are short: look for the `;` in the next few characters only, so a
+            // text full of `&` stays linear.
+            guard character == "&", let semicolon = text[index...].prefix(12).firstIndex(of: ";") else {
                 result.append(character)
                 index = text.index(after: index)
                 continue
@@ -738,9 +797,10 @@ struct XMLScanner {
         var index = plain.startIndex
         while index < plain.endIndex {
             let rest = plain[index...]
-            if rest.hasPrefix("_x"), rest.count >= 7 {
+            if rest.hasPrefix("_x"), let hexEnd = plain.index(index, offsetBy: 6, limitedBy: plain.endIndex),
+                hexEnd < plain.endIndex
+            {
                 let hexStart = plain.index(index, offsetBy: 2)
-                let hexEnd = plain.index(hexStart, offsetBy: 4)
                 if plain[hexEnd] == "_", let value = UInt32(plain[hexStart ..< hexEnd], radix: 16),
                     let scalar = Unicode.Scalar(value)
                 {

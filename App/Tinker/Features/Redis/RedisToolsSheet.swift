@@ -151,7 +151,8 @@ struct RedisToolsSheet: View {
                     Menu(types.isEmpty ? "All types" : types.map(\.displayName).sorted().joined(separator: ", ")) {
                         Button("All types") { types = [] }
                         Divider()
-                        ForEach(RedisKeyType.allCases, id: \.self) { type in
+                        // Every documented type: the module types travel as DUMP payloads.
+                        ForEach(RedisKeyType.documented, id: \.self) { type in
                             Toggle(
                                 type.displayName,
                                 isOn: Binding(

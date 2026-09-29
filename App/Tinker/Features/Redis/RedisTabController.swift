@@ -52,6 +52,20 @@ public final class RedisTabController {
     public private(set) var isLoadingValue = false
     /// Groups and TTL of a stream, shown under its entries.
     public private(set) var streamGroups: [RedisStreamGroup] = []
+    /// How the server holds the open key: encoding, idle time, access frequency.
+    public private(set) var metadata: RedisKeyMetadata?
+    /// What the open key is besides its type: a HyperLogLog, a geospatial index.
+    public private(set) var facet: RedisFacet?
+    /// The open string read as a bitmap, once that view was asked for.
+    public private(set) var bitmap: RedisBitmap?
+    /// Where the members of the open sorted set are, once that view was asked for.
+    public private(set) var positions: [RedisGeoMember] = []
+    /// The vector set element last picked, with its vector and attributes.
+    public private(set) var vectorElement: RedisVectorElement?
+    /// The elements nearest to it.
+    public private(set) var vectorMatches: [RedisVectorMatch] = []
+    /// What a probabilistic key answered to the last question.
+    public private(set) var answer: String?
     /// A filter inside the selected hash or set (HSCAN/SSCAN MATCH).
     public var valueFilter = ""
     /// How many keys one "Load More" asks for.
@@ -138,42 +152,96 @@ public final class RedisTabController {
         isLoadingValue = true
         defer { if request == openGeneration { isLoadingValue = false } }
         valueFilter = ""
+        let server = info
         do {
-            let (info, page, groups) = try await session.withConnection(database: database) { connection in
-                guard let info = try await RedisKeyspace.describe(connection, [key]).first else {
-                    return (RedisKeyInfo?.none, RedisValuePage?.none, [RedisStreamGroup]())
+            let opened = try await session.withConnection(database: database) { connection -> OpenedKey? in
+                guard var info = try await RedisKeyspace.describe(connection, [key]).first else { return nil }
+                let page = try await RedisValues.read(connection, key, type: info.type, server: server)
+                var opened = OpenedKey(info: info, page: page)
+                if info.type == .stream { opened.groups = (try? await RedisValues.streamGroups(connection, key)) ?? [] }
+                if server?.supports("object") ?? true {
+                    opened.metadata = try? await RedisFacets.metadata(connection, key)
                 }
-                let page = try await RedisValues.read(connection, key, type: info.type)
-                let groups = info.type == .stream ? (try? await RedisValues.streamGroups(connection, key)) ?? [] : []
-                return (info, page, groups)
+                switch page {
+                case let .string(data) where RedisFacets.isHyperLogLog(data) && (server?.supports("pfcount") ?? true):
+                    // A string that is not a HyperLogLog after all answers WRONGTYPE; it stays a string.
+                    if let count = try? await RedisFacets.hyperLogLogCount(connection, key) {
+                        opened.facet = .hyperLogLog(count: count)
+                    }
+                case let .zset(members, _)
+                where RedisFacets.looksGeospatial(members) && (server?.supports("geopos") ?? true):
+                    opened.facet = .geospatial
+                case let .timeSeries(series, _, _):
+                    info.length = series.totalSamples
+                    opened.info = info
+                default:
+                    break
+                }
+                return opened
             }
             // A later click asked for another key; this answer is for one no longer shown.
             guard request == openGeneration, database == self.database else { return }
-            guard let info else {
+            guard let opened else {
                 failure = "\(key.display) no longer exists."
                 keys.removeAll { $0.key == key }
                 selectedKey = nil
                 value = nil
+                clearDetails()
                 return
             }
-            selectedKey = info
-            value = page
-            streamGroups = groups
-            if let index = keys.firstIndex(where: { $0.key == key }) { keys[index] = info }
+            let isSameKey = selectedKey?.key == key
+            selectedKey = opened.info
+            value = opened.page
+            streamGroups = opened.groups
+            metadata = opened.metadata
+            facet = opened.facet
+            // A reload of the same key keeps the views that were asked for up to date.
+            if isSameKey {
+                if bitmap != nil { await loadBitmap() }
+                if !positions.isEmpty { await loadPositions() }
+            } else {
+                clearDetails()
+                metadata = opened.metadata
+                facet = opened.facet
+            }
+            if let index = keys.firstIndex(where: { $0.key == key }) { keys[index] = opened.info }
         } catch {
-            failure = Self.message(error)
+            if request == openGeneration { failure = Self.message(error) }
         }
+    }
+
+    /// What one round of opening a key read.
+    private struct OpenedKey: Sendable {
+        var info: RedisKeyInfo
+        var page: RedisValuePage
+        var groups: [RedisStreamGroup] = []
+        var metadata: RedisKeyMetadata?
+        var facet: RedisFacet?
+    }
+
+    /// Forgets what belonged to the key that was open.
+    private func clearDetails() {
+        metadata = nil
+        facet = nil
+        bitmap = nil
+        positions = []
+        vectorElement = nil
+        vectorMatches = []
+        answer = nil
     }
 
     /// Reads the next page of the open key's value and appends it.
     public func loadMoreValue() async {
         guard let session, let selected = selectedKey, let current = value else { return }
         let filter = valueFilter
+        let (request, server) = (openGeneration, info)
         do {
             let next = try await session.withConnection(database: database) { connection in
                 try await RedisValues.read(
-                    connection, selected.key, type: selected.type, continuing: current, match: filter)
+                    connection, selected.key, type: selected.type, continuing: current, match: filter, server: server)
             }
+            // Another key was opened while this page was on its way: it is not that key's.
+            guard request == openGeneration, value == current else { return }
             value = Self.merge(current, next)
         } catch {
             failure = Self.message(error)
@@ -184,13 +252,77 @@ public final class RedisTabController {
     public func applyValueFilter() async {
         guard let session, let selected = selectedKey else { return }
         let filter = valueFilter
+        let (request, server) = (openGeneration, info)
         do {
-            value = try await session.withConnection(database: database) { connection in
-                try await RedisValues.read(connection, selected.key, type: selected.type, match: filter)
+            let page = try await session.withConnection(database: database) { connection in
+                try await RedisValues.read(connection, selected.key, type: selected.type, match: filter, server: server)
             }
+            guard request == openGeneration else { return }
+            value = page
         } catch {
             failure = Self.message(error)
         }
+    }
+
+    // MARK: - Views of a key beside its value
+
+    /// Runs a read for the open key and hands the result over only if that key is still open.
+    private func readDetail<T: Sendable>(
+        _ body: @escaping @Sendable (RedisConnection, RedisKey) async throws -> T, then store: (T) -> Void
+    ) async {
+        guard let session, let key = selectedKey?.key else { return }
+        let request = openGeneration
+        do {
+            let result = try await session.withConnection(database: database) { try await body($0, key) }
+            guard request == openGeneration else { return }
+            store(result)
+        } catch {
+            if request == openGeneration { failure = Self.message(error) }
+        }
+    }
+
+    /// The open string as a bitmap: size, set bits, first bits.
+    public func loadBitmap() async {
+        await readDetail({ try await RedisFacets.bitmap($0, $1) }, then: { bitmap = $0 })
+    }
+
+    /// Where the members read so far are (`GEOPOS`), a page at a time.
+    public func loadPositions() async {
+        guard case let .zset(members, _) = value else { return }
+        await readDetail(
+            { connection, key in
+                var found: [RedisGeoMember] = []
+                for start in stride(from: 0, to: members.count, by: RedisValues.pageSize) {
+                    let page = Array(members[start ..< min(start + RedisValues.pageSize, members.count)])
+                    found += try await RedisFacets.positions(connection, key, of: page)
+                }
+                return found
+            }, then: { positions = $0 })
+    }
+
+    /// One element of the open vector set: its vector, its attributes and its neighbours.
+    public func loadVectorElement(_ element: Data) async {
+        let canSearch = info?.supports("vsim") ?? true
+        await readDetail(
+            { connection, key in
+                let detail = try await RedisModuleValues.vectorElement(connection, key, element: element)
+                let matches = canSearch ? try await RedisModuleValues.similar(connection, key, to: element) : []
+                return (detail, matches)
+            },
+            then: { result in
+                vectorElement = result.0
+                // The element itself is its own nearest neighbour; it is not news.
+                vectorMatches = result.1.filter { $0.element != element }
+            })
+    }
+
+    public func clearAnswer() { answer = nil }
+
+    /// Asks the open probabilistic key about one item.
+    public func ask(_ item: String) async {
+        guard let type = selectedKey?.type, !item.isEmpty else { return }
+        answer = nil
+        await readDetail({ try await RedisModuleValues.ask($0, $1, type: type, item: item) }, then: { answer = $0 })
     }
 
     public func reloadSelected() async {
@@ -206,6 +338,8 @@ public final class RedisTabController {
         case let .zset(members, _):
             members.count >= RedisValues.pageSize && members.count < Int(selectedKey?.length ?? 0)
         case let .stream(_, next): next != nil
+        case let .timeSeries(_, _, next): next != nil
+        case let .vectorSet(_, _, next, _): next != nil
         default: false
         }
     }
@@ -224,6 +358,10 @@ public final class RedisTabController {
             return .zset(members: a + b, offset: offset)
         case let (.stream(a, _), .stream(b, next)):
             return .stream(entries: a + b, next: next)
+        case let (.timeSeries(_, a, _), .timeSeries(info, b, next)):
+            return .timeSeries(info: info, samples: a + b, next: next)
+        case let (.vectorSet(_, a, _, _), .vectorSet(info, b, next, isSample)):
+            return .vectorSet(info: info, elements: a + b, next: next, isSample: isSample)
         default:
             return new
         }
@@ -368,7 +506,10 @@ public final class RedisTabController {
         }
     }
 
-    public func create(name: String, type: RedisKeyType, initial: RedisInitialValue, ttlSeconds: Int64?) async -> Bool {
+    public func create(
+        name: String, kind: RedisNewKeyKind, initial: RedisInitialValue,
+        settings: [RedisNewKeySetting.Name: String] = [:], ttlSeconds: Int64?
+    ) async -> Bool {
         // On production the New Key sheet itself asks for the server's name (its
         // ProductionGate) before this is called: a second sheet cannot open over it.
         guard let session else { return false }
@@ -383,7 +524,8 @@ public final class RedisTabController {
         }
         do {
             try await session.withConnection(database: database) { connection in
-                try await RedisValues.create(connection, key, type: type, initial: initial, ttlSeconds: ttlSeconds)
+                try await RedisValues.create(
+                    connection, key, kind: kind, initial: initial, settings: settings, ttlSeconds: ttlSeconds)
             }
             notice = "Created \(key.display)"
             await rescan()
@@ -401,6 +543,7 @@ public final class RedisTabController {
         if removed == nil || (selectedKey.map { removed?.contains($0.key) ?? false } ?? false) {
             selectedKey = nil
             value = nil
+            clearDetails()
         }
         await rescan()
         onKeyspaceChanged()
@@ -414,8 +557,11 @@ public final class RedisTabController {
             return
         }
         database = index
+        // Whatever was being read belongs to the database that was left.
+        openGeneration += 1
         selectedKey = nil
         value = nil
+        clearDetails()
         onDatabaseChanged(index)
         await consoleConnection?.close()
         consoleConnection = nil

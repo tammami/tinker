@@ -25,9 +25,7 @@ struct RedisTabView: View {
         }
         .task { await controller.start() }
         .sheet(isPresented: $isCreatingKey) {
-            RedisNewKeySheet(controller: controller, hasJSON: controller.info?.hasJSON ?? false) {
-                isCreatingKey = false
-            }
+            RedisNewKeySheet(controller: controller) { isCreatingKey = false }
         }
         .sheet(isPresented: $isDeletingPattern) {
             RedisDeletePatternSheet(initial: controller.pattern) { pattern in
@@ -132,7 +130,8 @@ struct RedisTabView: View {
                     Task { await controller.rescan() }
                 }
                 Divider()
-                ForEach(RedisKeyType.allCases, id: \.self) { type in
+                // The types this server has; one it lacks could never match a key.
+                ForEach(controller.info?.keyTypes ?? RedisKeyType.allCases, id: \.self) { type in
                     Button(type.displayName) {
                         controller.typeFilter = type
                         Task { await controller.rescan() }
@@ -195,7 +194,7 @@ struct RedisKeyList: View {
             TableColumn("Type") { info in
                 RedisTypeBadge(type: info.type)
             }
-            .width(min: 50, ideal: 70, max: 100)
+            .width(min: 50, ideal: 84, max: 130)
             TableColumn("TTL") { info in
                 Text(RedisFormat.ttl(info.ttlMilliseconds)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
@@ -244,13 +243,26 @@ struct RedisKeyList: View {
 
 struct RedisTypeBadge: View {
     let type: RedisKeyType
+    /// What the key is besides its type, when that is known: it names the badge.
+    var facet: RedisFacet? = nil
 
     var body: some View {
         Badge(text: label, color: color)
+            .help(explanation)
+    }
+
+    /// The documented name, and what `TYPE` answers when that reads differently.
+    private var explanation: String {
+        let stored = "TYPE \(type.scanName)"
+        if case .hyperLogLog = facet { return "HyperLogLog, stored as a string · \(stored)" }
+        return "\(type.displayName) · \(stored)"
     }
 
     private var label: String {
-        switch type {
+        // A HyperLogLog is known by its header. Scores that could be geohashes are only
+        // a guess, so a sorted set keeps its own name.
+        if case .hyperLogLog = facet { return "HYPERLOGLOG" }
+        return switch type {
         case .string: "STRING"
         case .hash: "HASH"
         case .list: "LIST"
@@ -258,6 +270,13 @@ struct RedisTypeBadge: View {
         case .zset: "ZSET"
         case .stream: "STREAM"
         case .json: "JSON"
+        case .timeSeries: "TIME SERIES"
+        case .bloomFilter: "BLOOM"
+        case .cuckooFilter: "CUCKOO"
+        case .topK: "TOP-K"
+        case .countMinSketch: "COUNT-MIN"
+        case .tDigest: "T-DIGEST"
+        case .vectorSet: "VECTOR SET"
         case let .other(name): name.uppercased()
         }
     }
@@ -271,6 +290,9 @@ struct RedisTypeBadge: View {
         case .zset: .pink
         case .stream: .teal
         case .json: .indigo
+        case .timeSeries: .cyan
+        case .bloomFilter, .cuckooFilter, .topK, .countMinSketch, .tDigest: .brown
+        case .vectorSet: .mint
         case .other: .secondary
         }
     }

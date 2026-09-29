@@ -140,51 +140,24 @@ struct RedisServerView: View {
     }
 }
 
-/// Reading the new-key form's multi-line fields.
+/// Reading the multi-line fields of the Redis forms; the rules live in `DBRedis`.
 enum RedisNewKeyParsing {
-    /// `field=value` per line; a line without `=` is a field with an empty value.
-    static func pairs(_ text: String) -> [RedisPair] {
-        text.split(whereSeparator: \.isNewline).compactMap { line in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty else { return nil }
-            let parts = trimmed.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            return RedisPair(
-                field: RedisText.parse(String(parts[0]).trimmingCharacters(in: .whitespaces)),
-                value: RedisText.parse(parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespaces) : ""))
-        }
-    }
-
-    /// One element per line.
-    static func items(_ text: String) -> [Data] {
-        text.split(whereSeparator: \.isNewline).map { RedisText.parse(String($0)) }.filter { !$0.isEmpty }
-    }
-
-    /// `score member` per line. Nil when a score does not parse.
-    static func scored(_ text: String) -> [RedisScoredMember]? {
-        var result: [RedisScoredMember] = []
-        for line in text.split(whereSeparator: \.isNewline) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty else { continue }
-            let parts = trimmed.split(separator: " ", maxSplits: 1)
-            guard parts.count == 2 else { return nil }
-            let score = String(parts[0])
-            guard Double(score) != nil || ["inf", "+inf", "-inf"].contains(score.lowercased()) else { return nil }
-            result.append(RedisScoredMember(member: RedisText.parse(String(parts[1])), score: score))
-        }
-        return result
-    }
+    static func pairs(_ text: String) -> [RedisPair] { RedisNewKeyText.pairs(text) }
+    static func items(_ text: String) -> [Data] { RedisNewKeyText.items(text) }
+    static func scored(_ text: String) -> [RedisScoredMember]? { RedisNewKeyText.scored(text) }
 }
 
-/// New Key: a name, a type, a first value and an optional expiry.
+/// New Key: a name, one of the data types the server has, the type's own settings, a
+/// first value and an optional expiry.
 struct RedisNewKeySheet: View {
     @Bindable var controller: RedisTabController
-    let hasJSON: Bool
     let onDone: () -> Void
 
     @State private var name = ""
-    @State private var type: RedisKeyType = .string
+    @State private var kind: RedisNewKeyKind = .string
     @State private var text = ""
     @State private var ttl = ""
+    @State private var settings: [RedisNewKeySetting.Name: String] = [:]
     @State private var problem: String?
     @State private var isSaving = false
     @State private var typedName = ""
@@ -193,19 +166,8 @@ struct RedisNewKeySheet: View {
         controller.config?.isProduction == true ? controller.config?.name : nil
     }
 
-    private var types: [RedisKeyType] { RedisKeyType.allCases.filter { $0 != .json || hasJSON } }
-
-    private var prompt: String {
-        switch type {
-        case .string: "The value"
-        case .json: #"A JSON document, e.g. {"name": "Ada"}"#
-        case .hash: "One field=value per line"
-        case .list, .set: "One element per line"
-        case .zset: "One \"score member\" per line, e.g. 1.5 ada"
-        case .stream: "The first entry: one field=value per line"
-        case .other: ""
-        }
-    }
+    /// Only what this server can create: a type whose commands it lacks is not offered.
+    private var kinds: [RedisNewKeyKind] { RedisNewKeyKind.available(on: controller.info) }
 
     var body: some View {
         SheetFrame(title: "New Key", icon: Icon.redisKey, subtitle: "In db\(controller.database). Creating never overwrites a key.") {
@@ -214,18 +176,31 @@ struct RedisNewKeySheet: View {
                     TextField("e.g. user:42", text: $name).textFieldStyle(.roundedBorder).font(.system(.body, design: .monospaced))
                 }
                 FieldRow(label: "Type") {
-                    Picker("Type", selection: $type) {
-                        ForEach(types, id: \.self) { Text($0.displayName).tag($0) }
+                    BarPopUp(items: kinds.map { BarPopUp.Item(id: $0, title: $0.displayName) }, selection: $kind)
+                        .frame(width: 200)
+                        .accessibilityLabel("type")
+                    Text("TYPE \(kind.keyType.scanName)")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .help("What the server's TYPE command will answer for this key")
+                }
+                ForEach(kind.settings) { setting in
+                    FieldRow(label: setting.label) {
+                        TextField(
+                            setting.placeholder,
+                            text: Binding(
+                                get: { settings[setting.name] ?? "" }, set: { settings[setting.name] = $0 })
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: setting.name == .labels ? 300 : 200)
                     }
-                    .labelsHidden()
-                    .frame(width: 180)
                 }
                 FieldRow(label: "Expires in") {
                     TextField("never", text: $ttl).textFieldStyle(.roundedBorder).frame(width: 120)
                     Text("seconds").font(.caption).foregroundStyle(.secondary)
                 }
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                    Text(prompt).font(.caption).foregroundStyle(.secondary)
+                    Text(kind.prompt).font(.caption).foregroundStyle(.secondary)
                     TextEditor(text: $text)
                         .font(.system(.body, design: .monospaced))
                         .frame(minHeight: 140)
@@ -249,27 +224,22 @@ struct RedisNewKeySheet: View {
                     name.trimmingCharacters(in: .whitespaces).isEmpty || isSaving
                         || !ProductionGate.passes(productionName: productionName, requiresTypedName: true, typed: typedName))
         }
+        .onChange(of: kind) { _, _ in
+            // The settings of one type mean nothing to the next.
+            settings = [:]
+            problem = nil
+        }
     }
 
     private func create() async {
         let initial: RedisInitialValue
-        switch type {
-        case .string, .json:
-            initial = .text(text)
-        case .hash, .stream:
-            initial = .pairs(RedisNewKeyParsing.pairs(text))
-        case .list, .set:
-            initial = .items(RedisNewKeyParsing.items(text))
-        case .zset:
-            guard let scored = RedisNewKeyParsing.scored(text) else {
-                problem = "Each line is a number, a space, then the member."
-                return
-            }
-            initial = .scored(scored)
-        case .other:
+        do {
+            initial = try kind.initialValue(from: text)
+        } catch {
+            problem = (error as? RedisNewKeyProblem)?.description ?? String(describing: error)
             return
         }
-        if type == .json, (try? JSONSerialization.jsonObject(with: Data(text.utf8), options: [.fragmentsAllowed])) == nil {
+        if kind == .json, (try? JSONSerialization.jsonObject(with: Data(text.utf8), options: [.fragmentsAllowed])) == nil {
             problem = "That is not valid JSON."
             return
         }
@@ -281,7 +251,7 @@ struct RedisNewKeySheet: View {
         isSaving = true
         defer { isSaving = false }
         controller.failure = nil
-        if await controller.create(name: name, type: type, initial: initial, ttlSeconds: seconds) {
+        if await controller.create(name: name, kind: kind, initial: initial, settings: settings, ttlSeconds: seconds) {
             onDone()
         } else {
             problem = controller.failure

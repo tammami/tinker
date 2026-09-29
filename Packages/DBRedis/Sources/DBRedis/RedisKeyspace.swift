@@ -2,12 +2,23 @@ import DBCore
 import Foundation
 
 /// A Redis key type, as `TYPE` names it.
+///
+/// The seven types every tool edits, and the ones Redis documents beside them: time
+/// series, the probabilistic types and vector sets. Bitmaps, bitfields and HyperLogLogs
+/// are strings to `TYPE`, and a geospatial index is a sorted set; those are
+/// ``RedisFacet``s of a key rather than types of their own.
 public enum RedisKeyType: Sendable, Hashable, CaseIterable {
     case string, hash, list, set, zset, stream, json
-    /// Anything else a module adds: TimeSeries, Bloom, vector sets… shown, not edited.
+    case timeSeries, bloomFilter, cuckooFilter, topK, countMinSketch, tDigest, vectorSet
+    /// A type of a module Tinker does not know: shown by name, never edited.
     case other(String)
 
+    /// The types a transfer or a synchronization copies element by element.
     public static let allCases: [RedisKeyType] = [.string, .hash, .list, .set, .zset, .stream, .json]
+
+    /// Every type Redis documents, in the order its documentation lists them.
+    public static let documented: [RedisKeyType] =
+        allCases + [.vectorSet, .timeSeries, .bloomFilter, .cuckooFilter, .countMinSketch, .tDigest, .topK]
 
     public init(typeName: String) {
         switch typeName.lowercased() {
@@ -18,11 +29,18 @@ public enum RedisKeyType: Sendable, Hashable, CaseIterable {
         case "zset": self = .zset
         case "stream": self = .stream
         case "rejson-rl", "json": self = .json
+        case "tsdb-type": self = .timeSeries
+        case "mbbloom--": self = .bloomFilter
+        case "mbbloomcf": self = .cuckooFilter
+        case "topk-type": self = .topK
+        case "cmsk-type": self = .countMinSketch
+        case "tdis-type": self = .tDigest
+        case "vectorset": self = .vectorSet
         default: self = .other(typeName)
         }
     }
 
-    /// What `SCAN … TYPE` expects.
+    /// The name `TYPE` answers with, which is also what `SCAN … TYPE` expects.
     public var scanName: String {
         switch self {
         case .string: "string"
@@ -32,20 +50,51 @@ public enum RedisKeyType: Sendable, Hashable, CaseIterable {
         case .zset: "zset"
         case .stream: "stream"
         case .json: "ReJSON-RL"
+        case .timeSeries: "TSDB-TYPE"
+        case .bloomFilter: "MBbloom--"
+        case .cuckooFilter: "MBbloomCF"
+        case .topK: "TopK-TYPE"
+        case .countMinSketch: "CMSk-TYPE"
+        case .tDigest: "TDIS-TYPE"
+        case .vectorSet: "vectorset"
         case let .other(name): name
         }
     }
 
+    /// The type as Redis's documentation names it.
     public var displayName: String {
         switch self {
         case .string: "String"
         case .hash: "Hash"
         case .list: "List"
         case .set: "Set"
-        case .zset: "Sorted Set"
+        case .zset: "Sorted set"
         case .stream: "Stream"
         case .json: "JSON"
+        case .timeSeries: "Time series"
+        case .bloomFilter: "Bloom filter"
+        case .cuckooFilter: "Cuckoo filter"
+        case .topK: "Top-K"
+        case .countMinSketch: "Count-min sketch"
+        case .tDigest: "t-digest"
+        case .vectorSet: "Vector set"
         case let .other(name): name
+        }
+    }
+
+    /// A command every key of this type answers, by which a server is known to have the
+    /// type at all. Nil for the types every server has.
+    public var probeCommand: String? {
+        switch self {
+        case .string, .hash, .list, .set, .zset, .stream, .other: nil
+        case .json: "json.get"
+        case .timeSeries: "ts.info"
+        case .bloomFilter: "bf.info"
+        case .cuckooFilter: "cf.info"
+        case .topK: "topk.info"
+        case .countMinSketch: "cms.info"
+        case .tDigest: "tdigest.info"
+        case .vectorSet: "vcard"
         }
     }
 
@@ -58,7 +107,8 @@ public enum RedisKeyType: Sendable, Hashable, CaseIterable {
         case .set: "SCARD"
         case .zset: "ZCARD"
         case .stream: "XLEN"
-        case .json, .other: nil
+        case .vectorSet: "VCARD"
+        case .json, .timeSeries, .bloomFilter, .cuckooFilter, .topK, .countMinSketch, .tDigest, .other: nil
         }
     }
 }

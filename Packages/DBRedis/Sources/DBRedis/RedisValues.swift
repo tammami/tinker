@@ -39,17 +39,28 @@ public enum RedisValuePage: Sendable, Hashable {
     case stream(entries: [RedisStreamEntry], next: String?)
     /// Pretty-printed where it parses.
     case json(String)
-    /// A module type Tinker does not edit; `info` is what the module says about it.
+    /// Samples oldest first; `next` is the timestamp the page after starts at, or nil.
+    case timeSeries(info: RedisTimeSeriesInfo, samples: [RedisSample], next: Int64?)
+    /// A Bloom or Cuckoo filter, a Top-K, a Count-min sketch or a t-digest.
+    case summary(RedisTypeSummary)
+    /// Elements in lexicographic order; `next` is the element the page after follows.
+    /// `isSample` says the server could only give a random sample of them.
+    case vectorSet(info: [RedisField], elements: [Data], next: Data?, isSample: Bool)
+    /// A type of a module Tinker does not know; `info` is what the server says of the key.
     case unsupported(typeName: String, info: [String])
 }
 
 public struct RedisPair: Sendable, Hashable {
     public var field: Data
     public var value: Data
+    /// Milliseconds until this field alone expires (Redis 7.4); nil when it does not,
+    /// or when the server has no field expiry.
+    public var ttlMilliseconds: Int64?
 
-    public init(field: Data, value: Data) {
+    public init(field: Data, value: Data, ttlMilliseconds: Int64? = nil) {
         self.field = field
         self.value = value
+        self.ttlMilliseconds = ttlMilliseconds
     }
 }
 
@@ -71,9 +82,12 @@ public enum RedisValues {
     public static let stringReadLimit = 4 * 1_024 * 1_024
 
     /// The first page of a key, or the page after `continuing`.
+    ///
+    /// `server` says what the server can do beyond the classic commands: with it, hash
+    /// fields come with their own expiry and a vector set is paged in order.
     public static func read(
         _ connection: RedisConnection, _ key: RedisKey, type: RedisKeyType, continuing: RedisValuePage? = nil,
-        match: String? = nil
+        match: String? = nil, server: RedisServerInfo? = nil
     ) async throws -> RedisValuePage {
         let size = RedisArgument(pageSize)
         let pattern: [RedisArgument] = match.map { $0.isEmpty ? [] : ["MATCH", RedisArgument($0)] } ?? []
@@ -90,8 +104,12 @@ public enum RedisValues {
             if case let .hash(_, previous) = continuing { cursor = previous }
             let reply = try await connection.send(["HSCAN", key.argument, RedisArgument(cursor)] + pattern + ["COUNT", size])
             let (next, items) = try scanReply(reply)
-            let fields = stride(from: 0, to: items.count - 1, by: 2).map {
+            var fields = stride(from: 0, to: items.count - 1, by: 2).map {
                 RedisPair(field: items[$0].data ?? Data(), value: items[$0 + 1].data ?? Data())
+            }
+            if server?.hasHashFieldExpiry == true, !fields.isEmpty {
+                let expiry = try await RedisFacets.fieldExpiry(connection, key, fields: fields.map(\.field))
+                for (index, ttl) in expiry.enumerated() { fields[index].ttlMilliseconds = ttl }
             }
             return .hash(fields: fields, cursor: next)
         case .list:
@@ -129,16 +147,35 @@ public enum RedisValues {
         case .json:
             let reply = try await connection.send(["JSON.GET", key.argument])
             return .json(prettyJSON(reply.string ?? "null"))
+        case .timeSeries:
+            var start: Int64?
+            if case let .timeSeries(_, _, next) = continuing { start = next }
+            return try await RedisModuleValues.timeSeries(connection, key, from: start)
+        case .bloomFilter:
+            return try await RedisModuleValues.summary(connection, key, info: "BF.INFO")
+        case .cuckooFilter:
+            return try await RedisModuleValues.summary(connection, key, info: "CF.INFO")
+        case .countMinSketch:
+            return try await RedisModuleValues.summary(connection, key, info: "CMS.INFO")
+        case .topK:
+            return try await RedisModuleValues.topK(connection, key)
+        case .tDigest:
+            return try await RedisModuleValues.tDigest(connection, key)
+        case .vectorSet:
+            var after: Data?
+            if case let .vectorSet(_, _, next, _) = continuing { after = next }
+            // Without the server's word on it, VRANGE is tried: every server with
+            // vector sets as a documented type has it.
+            return try await RedisModuleValues.vectorSet(
+                connection, key, after: after, ranged: server?.supports("vrange") ?? true)
         case let .other(name):
+            // What the server itself can say of any key, whatever module owns it.
+            let replies = try await connection.pipeline([
+                ["OBJECT", "ENCODING", key.argument], ["MEMORY", "USAGE", key.argument],
+            ])
             var info: [String] = []
-            for command in ["TS.INFO", "BF.INFO", "CF.INFO", "VINFO", "TOPK.INFO", "CMS.INFO"] {
-                let arguments: [RedisArgument] = [RedisArgument(command), key.argument]
-                guard let reply = try? await connection.send(arguments) else {
-                    continue
-                }
-                info = RedisReplyFormatter.lines(reply)
-                break
-            }
+            if let encoding = replies[0].string { info.append("encoding: \(encoding)") }
+            if let memory = replies[1].integer { info.append("memory: \(memory) bytes") }
             return .unsupported(typeName: name, info: info)
         }
     }
@@ -176,40 +213,10 @@ public enum RedisValues {
         _ connection: RedisConnection, _ key: RedisKey, type: RedisKeyType, initial: RedisInitialValue,
         ttlSeconds: Int64? = nil
     ) async throws {
-        if try await RedisKeyspace.exists(connection, key) {
-            throw DBError.server(ServerError(message: "A key named \(key.display) already exists."))
+        guard let kind = RedisNewKeyKind(type) else {
+            throw DBError.protocolError("\(type.displayName) keys cannot be created here.")
         }
-        switch (type, initial) {
-        case let (.string, .text(value)):
-            var arguments: [RedisArgument] = ["SET", key.argument, RedisArgument(value), "NX"]
-            if let ttlSeconds, ttlSeconds > 0 { arguments += ["EX", RedisArgument(ttlSeconds)] }
-            try await connection.send(arguments)
-            return
-        case let (.hash, .pairs(pairs)):
-            guard !pairs.isEmpty else { throw emptyValue(type) }
-            try await connection.send(["HSET", key.argument] + pairs.flatMap { [RedisArgument($0.field), RedisArgument($0.value)] })
-        case let (.list, .items(items)):
-            guard !items.isEmpty else { throw emptyValue(type) }
-            try await connection.send(["RPUSH", key.argument] + items.map(RedisArgument.init))
-        case let (.set, .items(items)):
-            guard !items.isEmpty else { throw emptyValue(type) }
-            try await connection.send(["SADD", key.argument] + items.map(RedisArgument.init))
-        case let (.zset, .scored(members)):
-            guard !members.isEmpty else { throw emptyValue(type) }
-            try await connection.send(
-                ["ZADD", key.argument] + members.flatMap { [RedisArgument($0.score), RedisArgument($0.member)] })
-        case let (.stream, .pairs(pairs)):
-            guard !pairs.isEmpty else { throw emptyValue(type) }
-            try await connection.send(
-                ["XADD", key.argument, "*"] + pairs.flatMap { [RedisArgument($0.field), RedisArgument($0.value)] })
-        case let (.json, .text(value)):
-            try await connection.send(["JSON.SET", key.argument, "$", RedisArgument(value), "NX"])
-        default:
-            throw DBError.protocolError("\(type.displayName) keys cannot be created with that value.")
-        }
-        if let ttlSeconds, ttlSeconds > 0 {
-            try await connection.send(["EXPIRE", key.argument, RedisArgument(ttlSeconds)])
-        }
+        try await create(connection, key, kind: kind, initial: initial, ttlSeconds: ttlSeconds)
     }
 
     private static func emptyValue(_ type: RedisKeyType) -> DBError {
@@ -234,19 +241,36 @@ public enum RedisValues {
         try await connection.send(["JSON.SET", key.argument, "$", RedisArgument(text)])
     }
 
-    public static func setHashField(_ connection: RedisConnection, _ key: RedisKey, field: Data, value: Data) async throws {
-        try await connection.send(["HSET", key.argument, RedisArgument(field), RedisArgument(value)])
+    /// Writes a field. `HSET` takes a field's own expiry away; `keepingTTL` is the time
+    /// the field had left, put back in the same transaction so an edit does not make a
+    /// field that was about to expire live for ever.
+    public static func setHashField(
+        _ connection: RedisConnection, _ key: RedisKey, field: Data, value: Data, keepingTTL: Int64? = nil
+    ) async throws {
+        let write: [RedisArgument] = ["HSET", key.argument, RedisArgument(field), RedisArgument(value)]
+        guard let keepingTTL, keepingTTL > 0 else {
+            try await connection.send(write)
+            return
+        }
+        try check(try await connection.pipeline([["MULTI"], write, fieldExpiry(key, field, keepingTTL), ["EXEC"]]))
     }
 
-    /// Renames a hash field: the new one is written before the old one goes, atomically.
+    /// Renames a hash field: the new one is written before the old one goes, atomically,
+    /// and takes over the time the old one had left.
     public static func renameHashField(
-        _ connection: RedisConnection, _ key: RedisKey, from old: Data, to new: Data, value: Data
+        _ connection: RedisConnection, _ key: RedisKey, from old: Data, to new: Data, value: Data,
+        keepingTTL: Int64? = nil
     ) async throws {
-        let replies = try await connection.pipeline([
+        var commands: [[RedisArgument]] = [
             ["MULTI"], ["HSET", key.argument, RedisArgument(new), RedisArgument(value)],
-            ["HDEL", key.argument, RedisArgument(old)], ["EXEC"],
-        ])
-        try check(replies)
+        ]
+        if let keepingTTL, keepingTTL > 0 { commands.append(fieldExpiry(key, new, keepingTTL)) }
+        commands += [["HDEL", key.argument, RedisArgument(old)], ["EXEC"]]
+        try check(try await connection.pipeline(commands))
+    }
+
+    private static func fieldExpiry(_ key: RedisKey, _ field: Data, _ milliseconds: Int64) -> [RedisArgument] {
+        ["HPEXPIRE", key.argument, RedisArgument(milliseconds), "FIELDS", 1, RedisArgument(field)]
     }
 
     public static func deleteHashFields(_ connection: RedisConnection, _ key: RedisKey, _ fields: [Data]) async throws {
@@ -388,7 +412,7 @@ public enum RedisValues {
     }
 
     /// Throws the first error inside a MULTI/EXEC pipeline, verbatim.
-    private static func check(_ replies: [RESPValue]) throws {
+    static func check(_ replies: [RESPValue]) throws {
         for reply in replies {
             if case let .error(message) = reply { throw DBError.server(ServerError(message: message)) }
         }
@@ -407,6 +431,12 @@ public enum RedisInitialValue: Sendable, Hashable {
     case pairs([RedisPair])
     case items([Data])
     case scored([RedisScoredMember])
+    /// Members of a geospatial index, each with its longitude and latitude.
+    case positions([RedisGeoMember])
+    /// Elements of a vector set, each with its vector.
+    case vectors([RedisNewVector])
+    /// Samples of a time series.
+    case samples([RedisNewSample])
 }
 
 public struct RedisStreamGroup: Sendable, Hashable, Identifiable {

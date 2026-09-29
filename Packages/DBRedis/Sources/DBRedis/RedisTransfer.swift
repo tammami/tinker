@@ -402,7 +402,9 @@ enum RedisValueCopy {
         case .json:
             let text = try await connection.send(["JSON.GET", key.argument]).string ?? "null"
             return .json(canonicalJSON(text))
-        case .other:
+        case .timeSeries, .bloomFilter, .cuckooFilter, .topK, .countMinSketch, .tDigest, .vectorSet, .other:
+            // What a sketch or an index holds cannot be read back out of it element by
+            // element; these travel as DUMP payloads or not at all.
             return nil
         }
     }

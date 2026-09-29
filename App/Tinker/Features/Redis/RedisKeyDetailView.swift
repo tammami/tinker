@@ -36,7 +36,7 @@ struct RedisKeyDetailView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
             HStack(spacing: DesignTokens.Spacing.sm) {
-                RedisTypeBadge(type: info.type)
+                RedisTypeBadge(type: info.type, facet: controller.facet)
                 TextField("Key", text: $name)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
@@ -68,16 +68,59 @@ struct RedisKeyDetailView: View {
                     .help("Remove the expiry: the key lives until deleted")
                 Spacer()
                 if let length = info.length {
-                    Text(info.type == .string ? "\(length) bytes" : "\(length) element\(length == 1 ? "" : "s")")
+                    Text(lengthText(length))
                         .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 }
                 if let memory = info.memoryBytes {
                     Text(RedisFormat.bytes(memory) + " in memory").font(.caption).foregroundStyle(.secondary)
+                        .help("MEMORY USAGE: the key, its value and the server's own overhead")
                 }
             }
             .controlSize(.small)
+            storage
         }
         .padding(DesignTokens.Spacing.md)
+    }
+
+    private func lengthText(_ length: Int64) -> String {
+        switch info.type {
+        case .string: "\(length) byte\(length == 1 ? "" : "s")"
+        case .timeSeries: "\(length) sample\(length == 1 ? "" : "s")"
+        default: "\(length) element\(length == 1 ? "" : "s")"
+        }
+    }
+
+    /// The type by its documented name and by what `TYPE` answers, and how the server
+    /// holds the key: its encoding, and how recently or how often it is used.
+    private var storage: some View {
+        HStack(spacing: DesignTokens.Spacing.md) {
+            Text(typeText).help("The data type as Redis documents it, and what the TYPE command answers")
+            if let metadata = controller.metadata {
+                if let encoding = metadata.encoding {
+                    Text("encoding \(encoding)")
+                        .help("OBJECT ENCODING: the representation the server chose for this value")
+                }
+                if let idle = metadata.idleSeconds {
+                    Text("idle \(RedisFormat.ttl(idle * 1_000))")
+                        .help("OBJECT IDLETIME: time since the key was last read or written")
+                }
+                if let frequency = metadata.frequency {
+                    Text("frequency \(frequency)")
+                        .help("OBJECT FREQ: the logarithmic access counter of an LFU eviction policy")
+                }
+            }
+            Spacer()
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .monospacedDigit()
+        .lineLimit(1)
+    }
+
+    private var typeText: String {
+        let stored = "TYPE \(info.type.scanName)"
+        if case .hyperLogLog = controller.facet { return "HyperLogLog · \(stored)" }
+        return "\(info.type.displayName) · \(stored)"
     }
 
     private func applyTTL() {
@@ -89,7 +132,9 @@ struct RedisKeyDetailView: View {
     private func editor(_ value: RedisValuePage) -> some View {
         switch value {
         case let .string(data):
-            RedisTextEditor(controller: controller, key: info.key, data: data, isJSON: false, isTruncated: (info.length ?? 0) > Int64(RedisValues.stringReadLimit))
+            RedisStringView(
+                controller: controller, key: info.key, data: data,
+                isTruncated: (info.length ?? 0) > Int64(RedisValues.stringReadLimit))
         case let .json(text):
             RedisTextEditor(controller: controller, key: info.key, data: Data(text.utf8), isJSON: true, isTruncated: false)
         case let .hash(fields, _):
@@ -99,13 +144,21 @@ struct RedisKeyDetailView: View {
         case let .set(members, _):
             RedisSetEditor(controller: controller, key: info.key, members: members)
         case let .zset(members, _):
-            RedisSortedSetEditor(controller: controller, key: info.key, members: members)
+            RedisSortedSetView(controller: controller, key: info.key, members: members)
         case let .stream(entries, _):
             RedisStreamEditor(controller: controller, key: info.key, entries: entries)
+        case let .timeSeries(series, samples, _):
+            RedisTimeSeriesEditor(controller: controller, key: info.key, info: series, samples: samples)
+        case let .summary(summary):
+            RedisSummaryView(controller: controller, key: info.key, type: info.type, summary: summary)
+        case let .vectorSet(fields, elements, _, isSample):
+            RedisVectorSetView(
+                controller: controller, key: info.key, fields: fields, elements: elements, isSample: isSample)
         case let .unsupported(typeName, lines):
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
                 Label(
-                    "\(typeName) is a module type; Tinker shows what the module reports. Use the Console to change it.",
+                    "\(typeName) belongs to a module Tinker does not know; this is what the server says of the key. "
+                        + "Use the Console to read or change it.",
                     systemImage: Icon.info
                 )
                 .font(.callout).foregroundStyle(.secondary)
@@ -280,14 +333,33 @@ struct RedisHashEditor: View {
     @State private var selection: Set<Data> = []
     @State private var field = ""
     @State private var value = ""
+    @State private var fieldTTL = ""
 
     private var selectedPair: RedisPair? {
         guard selection.count == 1, let id = selection.first else { return nil }
         return fields.first { $0.field == id }
     }
 
-    var body: some View {
-        VStack(spacing: 0) {
+    /// Redis 7.4 lets a single field expire; older servers have no such thing to show.
+    private var hasFieldExpiry: Bool { controller.info?.hasHashFieldExpiry ?? false }
+
+    @ViewBuilder
+    private var table: some View {
+        if hasFieldExpiry {
+            Table(fields.map(Row.init), selection: $selection) {
+                TableColumn("Field") { row in
+                    Text(RedisFormat.text(row.pair.field)).font(.system(.body, design: .monospaced)).lineLimit(1)
+                }
+                TableColumn("Value") { row in
+                    Text(RedisFormat.text(row.pair.value)).font(.system(.body, design: .monospaced)).lineLimit(1)
+                }
+                TableColumn("TTL") { row in
+                    Text(RedisFormat.ttl(row.pair.ttlMilliseconds))
+                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                }
+                .width(min: 40, ideal: 70, max: 100)
+            }
+        } else {
             Table(fields.map(Row.init), selection: $selection) {
                 TableColumn("Field") { row in
                     Text(RedisFormat.text(row.pair.field)).font(.system(.body, design: .monospaced)).lineLimit(1)
@@ -296,10 +368,17 @@ struct RedisHashEditor: View {
                     Text(RedisFormat.text(row.pair.value)).font(.system(.body, design: .monospaced)).lineLimit(1)
                 }
             }
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            table
             .onChange(of: selection) { _, _ in
                 if let pair = selectedPair {
                     field = RedisFormat.text(pair.field)
                     value = RedisFormat.text(pair.value)
+                    fieldTTL = pair.ttlMilliseconds.map { String(max(1, $0 / 1_000)) } ?? ""
                 }
             }
             RedisPagingBar(controller: controller, shown: fields.count, filterable: true) {
@@ -317,11 +396,30 @@ struct RedisHashEditor: View {
                 RedisValueField(title: "Field", text: $field, multiline: false)
                 RedisValueField(title: "Value", text: $value)
                 HStack {
+                    if hasFieldExpiry, let pair = selectedPair {
+                        Image(systemName: Icon.expiry).foregroundStyle(.secondary)
+                        TextField("Field TTL seconds", text: $fieldTTL)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 130)
+                            .onSubmit { setFieldTTL(pair) }
+                            .help("HEXPIRE: this field alone expires; the rest of the hash stays")
+                        Button("Set Field TTL") { setFieldTTL(pair) }
+                            .disabled((Int64(fieldTTL.trimmingCharacters(in: .whitespaces)) ?? 0) <= 0)
+                        Button("Persist Field") {
+                            let name = pair.field
+                            controller.write("Removed the expiry of \(RedisFormat.text(name))") {
+                                try await RedisFacets.setFieldExpiry($0, key, field: name, milliseconds: nil)
+                            }
+                        }
+                        .disabled(pair.ttlMilliseconds == nil)
+                        .help("HPERSIST: the field lives as long as the hash")
+                    }
                     Spacer()
                     Button("Clear") {
                         selection = []
                         field = ""
                         value = ""
+                        fieldTTL = ""
                     }
                     if let pair = selectedPair {
                         Button("Update") { update(pair) }.buttonStyle(.borderedProminent)
@@ -332,6 +430,14 @@ struct RedisHashEditor: View {
                 .controlSize(.small)
             }
             .padding(DesignTokens.Spacing.md)
+        }
+    }
+
+    private func setFieldTTL(_ pair: RedisPair) {
+        guard let seconds = Int64(fieldTTL.trimmingCharacters(in: .whitespaces)), seconds > 0 else { return }
+        let name = pair.field
+        controller.write("Set the expiry of \(RedisFormat.text(name))") {
+            try await RedisFacets.setFieldExpiry($0, key, field: name, milliseconds: seconds * 1_000)
         }
     }
 
@@ -346,11 +452,16 @@ struct RedisHashEditor: View {
     private func update(_ pair: RedisPair) {
         let newField = RedisText.parse(field)
         let newValue = RedisText.parse(value)
+        // The time the field had left when the page was read; HSET alone would drop it.
+        let ttl = hasFieldExpiry ? pair.ttlMilliseconds : nil
         if newField == pair.field {
-            controller.write("Updated \(field)") { try await RedisValues.setHashField($0, key, field: newField, value: newValue) }
+            controller.write("Updated \(field)") {
+                try await RedisValues.setHashField($0, key, field: newField, value: newValue, keepingTTL: ttl)
+            }
         } else {
             controller.write("Renamed field to \(field)") {
-                try await RedisValues.renameHashField($0, key, from: pair.field, to: newField, value: newValue)
+                try await RedisValues.renameHashField(
+                    $0, key, from: pair.field, to: newField, value: newValue, keepingTTL: ttl)
             }
         }
         selection = []

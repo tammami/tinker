@@ -205,7 +205,8 @@ final class RESPTests: XCTestCase {
     func testKeyTypes() {
         XCTAssertEqual(RedisKeyType(typeName: "ReJSON-RL"), .json)
         XCTAssertEqual(RedisKeyType(typeName: "zset"), .zset)
-        XCTAssertEqual(RedisKeyType(typeName: "TSDB-TYPE"), .other("TSDB-TYPE"))
+        XCTAssertEqual(RedisKeyType(typeName: "TSDB-TYPE"), .timeSeries)
+        XCTAssertEqual(RedisKeyType(typeName: "GraphData"), .other("GraphData"))
         XCTAssertEqual(RedisKeyType.json.scanName, "ReJSON-RL")
     }
 }

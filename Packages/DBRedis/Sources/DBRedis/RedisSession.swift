@@ -15,9 +15,71 @@ public struct RedisServerInfo: Sendable, Hashable {
     /// Loaded modules by name: `ReJSON`, `search`, `bf`, `timeseries`…
     public var modules: Set<String>
     public var role: String
+    /// The commands of ``RedisServerInfo/probedCommands`` this server has, lowercased.
+    /// Asked of the server (`COMMAND INFO`), so a fork, a managed service or an older
+    /// version is offered exactly what it can do.
+    public var commands: Set<String> = []
 
-    public var hasJSON: Bool { modules.contains("ReJSON") || modules.contains("json") }
+    public var hasJSON: Bool { supports(.json) || modules.contains("ReJSON") || modules.contains("json") }
     public var hasSearch: Bool { modules.contains("search") || modules.contains("ft") }
+    /// Expiry on single hash fields: `HEXPIRE`, `HPTTL`, `HPERSIST` (Redis 7.4).
+    public var hasHashFieldExpiry: Bool { supports("hpttl") && supports("hpexpire") && supports("hpersist") }
+
+    /// Whether the server knows a command.
+    public func supports(_ command: String) -> Bool { commands.contains(command.lowercased()) }
+
+    /// Whether keys of a type can exist on this server.
+    public func supports(_ type: RedisKeyType) -> Bool {
+        guard let probe = type.probeCommand else { return true }
+        return commands.contains(probe)
+    }
+
+    /// The documented types this server has, in the documentation's order.
+    public var keyTypes: [RedisKeyType] { RedisKeyType.documented.filter(supports) }
+
+    /// Every command Tinker uses only where the server has it.
+    public static let probedCommands: [String] = [
+        "json.get", "json.set", "ts.info", "ts.range", "ts.create", "ts.add", "ts.del", "bf.info", "bf.reserve",
+        "bf.add", "bf.exists", "cf.info", "cf.reserve", "cf.add", "cf.exists", "cf.del", "topk.info", "topk.list",
+        "topk.add", "topk.reserve", "cms.info", "cms.query", "cms.incrby", "cms.initbydim", "tdigest.info",
+        "tdigest.quantile", "tdigest.add", "tdigest.create", "tdigest.min", "tdigest.max", "vcard", "vdim", "vinfo",
+        "vrandmember", "vrange", "vemb", "vgetattr", "vsim", "vadd", "vrem", "hpttl", "hpexpire", "hpersist", "geopos",
+        "geoadd", "pfcount", "pfadd", "bitcount", "object", "memory", "copy", "unlink",
+    ]
+
+    /// The commands of a reply to `COMMAND INFO name…`: an entry per name, null for one
+    /// the server does not have.
+    static func commands(from reply: RESPValue) -> Set<String> {
+        var result: Set<String> = []
+        for entry in reply.array ?? [] {
+            if let name = entry.array?.first?.string { result.insert(name.lowercased()) }
+        }
+        return result
+    }
+
+    /// What a server that refuses `COMMAND` must have, from its version and modules.
+    static func assumedCommands(version: String, modules: Set<String>) -> Set<String> {
+        let parts = version.split(separator: ".").map { Int($0) ?? 0 }
+        let major = parts.first ?? 0
+        let minor = parts.count > 1 ? parts[1] : 0
+        func atLeast(_ wantedMajor: Int, _ wantedMinor: Int) -> Bool {
+            major > wantedMajor || (major == wantedMajor && minor >= wantedMinor)
+        }
+        let names = Set(modules.map { $0.lowercased() })
+        var prefixes: [String] = []
+        if names.contains("rejson") || names.contains("json") { prefixes.append("json.") }
+        if names.contains("timeseries") { prefixes.append("ts.") }
+        if names.contains("bf") { prefixes += ["bf.", "cf.", "topk.", "cms.", "tdigest."] }
+        var result = Set(probedCommands.filter { command in prefixes.contains { command.hasPrefix($0) } })
+        result.formUnion(["geopos", "geoadd", "pfcount", "pfadd", "bitcount", "object"])
+        if atLeast(4, 0) { result.formUnion(["memory", "unlink"]) }
+        if atLeast(6, 2) { result.insert("copy") }
+        if atLeast(7, 4) { result.formUnion(["hpttl", "hpexpire", "hpersist"]) }
+        if names.contains("vectorset") {
+            result.formUnion(probedCommands.filter { $0.hasPrefix("v") })
+        }
+        return result
+    }
 }
 
 /// A Redis connection as the app uses it: resolved once from a ``ConnectionConfig``
@@ -187,6 +249,7 @@ public actor RedisSession {
     static func describe(_ connection: RedisConnection) async throws -> RedisServerInfo {
         let replies = try await connection.pipeline([
             ["INFO", "server"], ["CONFIG", "GET", "databases"], ["MODULE", "LIST"], ["INFO", "replication"],
+            ["COMMAND", "INFO"] + RedisServerInfo.probedCommands.map { RedisArgument($0) },
         ])
         let server = RedisInfo.parse(replies[0].string ?? "")
         let fields = server.values
@@ -210,9 +273,12 @@ public actor RedisSession {
             }
         }
         let role = RedisInfo.parse(replies[3].string ?? "").values["role"] ?? "master"
+        // A server that refuses COMMAND (an ACL, a proxy) is taken at its version's word.
+        var commands = RedisServerInfo.commands(from: replies[4])
+        if case .error = replies[4] { commands = RedisServerInfo.assumedCommands(version: version, modules: modules) }
         return RedisServerInfo(
             version: version, product: product, mode: fields["redis_mode"] ?? "standalone",
-            databaseCount: max(1, databases), modules: modules, role: role)
+            databaseCount: max(1, databases), modules: modules, role: role, commands: commands)
     }
 }
 

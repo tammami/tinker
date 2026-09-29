@@ -18,13 +18,23 @@ public struct XLSXReadError: Error, Hashable, CustomStringConvertible, Sendable 
 /// temporary file that is mapped and unlinked at once, so memory holds one row at a
 /// time however large the sheet; the shared-string table is the only part kept whole.
 public final class XLSXWorkbook: Sendable {
-    /// The sheet that is read: the workbook's first.
+    /// The sheet that is read: the workbook's first unless another was asked for.
     public let sheetName: String
+    /// Every worksheet of the workbook, in the order of its tabs.
+    public let sheets: [XLSXSheetInfo]
+    /// Where the sheet that is read sits in `sheets`.
+    public let sheetIndex: Int
     let sheet: Data
     let sharedStrings: [String]
     /// Index in `cellXfs` → what kind of date the cell's number stands for.
     let dateStyles: [Int: ExcelDateKind]
     let uses1904Dates: Bool
+    /// True for a workbook a spreadsheet wrote, whose numbers are doubles saved with up
+    /// to 17 digits. False for Tinker's own export, whose numbers are the server's exact
+    /// text and must come back digit for digit.
+    let numbersAreDoubles: Bool
+    /// The archive, kept so another sheet can be opened without reading the rest again.
+    private let archive: ZipArchive
 
     /// Sheets up to this size are inflated in memory; larger ones go through a file.
     static let inMemoryLimit: UInt64 = 16 * 1_024 * 1_024
@@ -33,47 +43,139 @@ public final class XLSXWorkbook: Sendable {
         try self.init(data: Data(contentsOf: url, options: .mappedIfSafe))
     }
 
-    public init(data: Data) throws {
+    /// Opens the workbook on its first sheet.
+    public convenience init(data: Data) throws {
+        try self.init(data: data, sheet: nil)
+    }
+
+    /// Opens the workbook on the sheet at `sheet` in `sheets`, or on the first when nil.
+    public init(data: Data, sheet index: Int?) throws {
         let zip = try ZipArchive(data: data)
-        let workbookXML = try zip.readAll("xl/workbook.xml")
-        var firstSheet: (name: String, relation: String?)?
+        let workbookXML = try Self.part("xl/workbook.xml", from: zip)
+        var listed: [(name: String, relation: String?, isHidden: Bool)] = []
         var uses1904 = false
         XMLScanner.walk(workbookXML) { token in
             guard case let .open(name, attributes, _) = token else { return true }
             if name == "workbookPr" { uses1904 = ["1", "true"].contains(attributes["date1904"] ?? "") }
-            if name == "sheet", firstSheet == nil {
+            if name == "sheet" {
                 let relation = attributes.first { $0.key == "r:id" || $0.key.hasSuffix(":id") }?.value
-                firstSheet = (attributes["name"] ?? "Sheet1", relation)
+                let state = attributes["state"] ?? "visible"
+                listed.append((attributes["name"] ?? "Sheet\(listed.count + 1)", relation, state != "visible"))
             }
             return true
         }
-        guard let firstSheet else { throw XLSXReadError("The workbook has no sheets.") }
+        guard !listed.isEmpty else { throw XLSXReadError("The workbook has no sheets.") }
 
-        // The sheet's part, from the workbook's relationships; `sheet1.xml` if they say nothing.
-        var sheetPath = "xl/worksheets/sheet1.xml"
-        if let relation = firstSheet.relation, let rels = try? zip.readAll("xl/_rels/workbook.xml.rels") {
+        // Each sheet's part, from the workbook's relationships.
+        var targets: [String: (path: String, isWorksheet: Bool)] = [:]
+        if zip.contains("xl/_rels/workbook.xml.rels"),
+            let rels = try? Self.part("xl/_rels/workbook.xml.rels", from: zip)
+        {
             XMLScanner.walk(rels) { token in
-                guard case let .open("Relationship", attributes, _) = token, attributes["Id"] == relation,
+                guard case let .open("Relationship", attributes, _) = token, let id = attributes["Id"],
                     let target = attributes["Target"]
                 else { return true }
-                sheetPath = Self.resolve(target)
-                return false
+                // A chart sheet or a macro sheet has a tab but no rows.
+                let type = attributes["Type"] ?? ""
+                let isOther = ["/chartsheet", "/dialogsheet", "/macrosheet"].contains { type.hasSuffix($0) }
+                targets[id] = (Self.resolve(target), !isOther)
+                return true
             }
         }
-        guard zip.contains(sheetPath) else { throw XLSXReadError("The workbook's first sheet is missing.") }
+        var found: [XLSXSheetInfo] = []
+        for (position, entry) in listed.enumerated() {
+            let target = entry.relation.flatMap { targets[$0] }
+            if let target, !target.isWorksheet { continue }
+            // `sheetN.xml` when the relationships say nothing.
+            let path = target?.path ?? "xl/worksheets/sheet\(position + 1).xml"
+            found.append(XLSXSheetInfo(index: found.count, name: entry.name, isHidden: entry.isHidden, path: path))
+        }
+        guard !found.isEmpty else { throw XLSXReadError("The workbook has no worksheets, only charts.") }
+        let chosen = index ?? 0
+        guard found.indices.contains(chosen) else {
+            throw XLSXReadError("The workbook has \(found.count) sheets; there is no sheet \(chosen + 1).")
+        }
+        guard zip.contains(found[chosen].path) else {
+            throw XLSXReadError(
+                chosen == 0
+                    ? "The workbook's first sheet is missing." : "The sheet “\(found[chosen].name)” is missing.")
+        }
 
-        sheetName = firstSheet.name
+        archive = zip
+        sheets = found
+        sheetIndex = chosen
+        sheetName = found[chosen].name
         uses1904Dates = uses1904
+        // Tinker's export writes neither part: its strings are inline and it has no
+        // application to name.
+        numbersAreDoubles = zip.contains("docProps/app.xml") || zip.contains("xl/sharedStrings.xml")
         sharedStrings =
-            zip.contains("xl/sharedStrings.xml") ? try Self.sharedStrings(zip.readAll("xl/sharedStrings.xml")) : []
-        dateStyles = zip.contains("xl/styles.xml") ? try Self.dateStyles(zip.readAll("xl/styles.xml")) : [:]
-        sheet = try Self.inflate(sheetPath, from: zip)
+            zip.contains("xl/sharedStrings.xml")
+            ? try Self.sharedStrings(Self.part("xl/sharedStrings.xml", from: zip)) : []
+        dateStyles = zip.contains("xl/styles.xml") ? try Self.dateStyles(Self.part("xl/styles.xml", from: zip)) : [:]
+        sheet = try Self.inflate(found[chosen].path, from: zip)
+    }
+
+    /// Another sheet of the same workbook: the strings and styles read once are shared.
+    private init(_ other: XLSXWorkbook, sheet index: Int) throws {
+        guard other.sheets.indices.contains(index) else {
+            throw XLSXReadError("The workbook has \(other.sheets.count) sheets; there is no sheet \(index + 1).")
+        }
+        let info = other.sheets[index]
+        guard other.archive.contains(info.path) else { throw XLSXReadError("The sheet “\(info.name)” is missing.") }
+        archive = other.archive
+        sheets = other.sheets
+        sheetIndex = index
+        sheetName = info.name
+        uses1904Dates = other.uses1904Dates
+        numbersAreDoubles = other.numbersAreDoubles
+        sharedStrings = other.sharedStrings
+        dateStyles = other.dateStyles
+        sheet = try Self.inflate(info.path, from: other.archive)
+    }
+
+    /// The same workbook read from another of its sheets.
+    public func selecting(sheet index: Int) throws -> XLSXWorkbook {
+        index == sheetIndex ? self : try XLSXWorkbook(self, sheet: index)
     }
 
     /// Opens a workbook away from the caller's actor: inflating a large sheet takes a
     /// moment, and the import sheet must not freeze while it does.
-    public static func open(data: Data) async throws -> XLSXWorkbook {
-        try XLSXWorkbook(data: data)
+    public static func open(data: Data, sheet: Int? = nil) async throws -> XLSXWorkbook {
+        try XLSXWorkbook(data: data, sheet: sheet)
+    }
+
+    /// A small part read whole, refused when it is not in an encoding the scanner reads.
+    private static func part(_ name: String, from zip: ZipArchive) throws -> Data {
+        let data = try zip.readAll(name)
+        try checkEncoding(data, of: name)
+        return data
+    }
+
+    /// The scanner walks UTF-8, which is what every spreadsheet writes. XML allows
+    /// UTF-16 too; read as UTF-8 it would come out as noise, so it is refused by name.
+    static func checkEncoding(_ data: Data, of name: String) throws {
+        let head = Array(data.prefix(200))
+        let refusal = XLSXReadError(
+            "\(name) is encoded as UTF-16, which Tinker cannot read. Open the workbook in Excel or Numbers and "
+                + "save it again as .xlsx.")
+        if head.starts(with: [0xFF, 0xFE]) || head.starts(with: [0xFE, 0xFF]) { throw refusal }
+        if head.count >= 4, (head[0] == 0x3C && head[1] == 0) || (head[0] == 0 && head[1] == 0x3C) { throw refusal }
+        let declaration = String(decoding: head, as: UTF8.self).lowercased()
+        guard declaration.hasPrefix("<?xml") || declaration.hasPrefix("\u{FEFF}<?xml"),
+            let end = declaration.range(of: "?>"),
+            let encoding = declaration[..<end.lowerBound].range(of: "encoding")
+        else { return }
+        let rest = declaration[encoding.upperBound ..< end.lowerBound]
+        guard let open = rest.firstIndex(where: { $0 == "\"" || $0 == "'" }),
+            let close = rest[rest.index(after: open)...].firstIndex(of: rest[open])
+        else { return }
+        let value = String(rest[rest.index(after: open) ..< close])
+        guard ["utf-8", "utf8", "us-ascii", "ascii"].contains(value) else {
+            throw XLSXReadError(
+                "\(name) is encoded as \(value.uppercased()), which Tinker cannot read. Open the workbook in Excel "
+                    + "or Numbers and save it again as .xlsx.")
+        }
     }
 
     /// A reader over the sheet's rows, from the first. Cheap: nothing is re-read.
@@ -92,6 +194,12 @@ public final class XLSXWorkbook: Sendable {
     }
 
     private static func inflate(_ path: String, from zip: ZipArchive) throws -> Data {
+        let data = try inflateUnchecked(path, from: zip)
+        try checkEncoding(data, of: path)
+        return data
+    }
+
+    private static func inflateUnchecked(_ path: String, from zip: ZipArchive) throws -> Data {
         guard let size = zip.uncompressedSize(of: path), size > inMemoryLimit else { return try zip.readAll(path) }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("tinker-xlsx-\(UUID().uuidString).xml")
         try FileManager.default.createPrivateFile(at: url)
@@ -163,7 +271,20 @@ public final class XLSXWorkbook: Sendable {
     }
 }
 
-/// The rows of a workbook's first sheet, one `[String]` per row, as `CSVReader` gives
+/// One worksheet of a workbook, as its tab shows it.
+public struct XLSXSheetInfo: Sendable, Hashable, Identifiable {
+    /// Where the sheet sits among the workbook's worksheets, from zero.
+    public let index: Int
+    public let name: String
+    /// Hidden in Excel (`hidden` or `veryHidden`). It still holds rows and can be read.
+    public let isHidden: Bool
+    /// The sheet's part in the archive.
+    let path: String
+
+    public var id: Int { index }
+}
+
+/// The rows of a workbook's sheet, one `[String]` per row, as `CSVReader` gives
 /// them — so the import's header, mapping and coercion work the same.
 ///
 /// Empty rows are skipped, as blank lines are in CSV. A cell the file leaves out is an
@@ -263,8 +384,29 @@ public struct XLSXRowReader: RecordSource {
             {
                 return text
             }
-            return raw
+            return workbook.numbersAreDoubles ? Self.typedNumber(raw) : raw
         }
+    }
+
+    /// A number as it was typed, where Excel wrote out the binary fraction behind it.
+    ///
+    /// Excel keeps numbers as doubles and saves them with up to 17 digits, so a cell
+    /// showing `-8.59940239` is stored as `-8.5994023899999995`. When the text is such a
+    /// dump — 16 or 17 significant digits — and a number of at most 15 digits is the very
+    /// same double, that shorter number is what the cell shows and what was entered.
+    /// Anything else is returned untouched: an exact decimal Tinker exported keeps every
+    /// digit, and a number with more digits than a double holds was never one.
+    static func typedNumber(_ raw: String) -> String {
+        guard raw.utf8.count >= 16, raw.utf8.count <= 26 else { return raw }
+        let mantissa = raw.split(whereSeparator: { $0 == "e" || $0 == "E" }).first ?? Substring(raw)
+        let significant = mantissa.filter(\.isNumber).drop { $0 == "0" }.count
+        guard significant == 16 || significant == 17, let value = Double(raw), value.isFinite else { return raw }
+        var short = "\(value)"
+        guard !short.contains("e"), !short.contains("E") else { return raw }
+        if short.hasSuffix(".0") { short.removeLast(2) }
+        let shortDigits = short.filter(\.isNumber).drop { $0 == "0" }.count
+        guard shortDigits <= 15, Double(short) == value else { return raw }
+        return short
     }
 
     /// Excel's last column, `XFD`, is index 16 383.
@@ -522,7 +664,9 @@ struct ZipArchive {
         // is a zip bomb or damage; real spreadsheets compress XML ten to fifty times.
         guard entry.uncompressedSize <= Self.partLimit,
             entry.uncompressedSize <= max(UInt64(compressed), 1_024) * 1_000
-        else { throw XLSXReadError("\(name) claims \(entry.uncompressedSize >> 20) MiB; the file is refused as unsafe.") }
+        else {
+            throw XLSXReadError("\(name) claims \(entry.uncompressedSize >> 20) MiB; the file is refused as unsafe.")
+        }
         let base = data.startIndex
         let piece = 64 * 1_024
         switch entry.method {

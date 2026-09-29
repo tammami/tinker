@@ -141,7 +141,7 @@ struct TinkerCommands: Commands {
             Button("Back Up Connections…") { workspace?.backUpConnections() }
             Button("Restore Connections…") { workspace?.chooseConnectionBackup() }
             Divider()
-            Button("Import from CSV…") { workspace?.importCSV() }
+            Button("Import Data…") { workspace?.importCSV() }
             Button("Export Result…") { workspace?.workspace.isExportPresented = true }
                 .keyboardShortcut("e", modifiers: [.command, .option])
         }

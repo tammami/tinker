@@ -265,7 +265,7 @@ public final class XLSXWorkbookWriter {
             default:
                 let text = Self.clip(ClipboardFormatter.cellText(value))
                 xml += "<c r=\"\(ref)\" t=\"inlineStr\"\(styleAttribute)><is><t xml:space=\"preserve\">"
-                xml += Self.escape(text) + "</t></is></c>"
+                xml += Self.escapeCell(text) + "</t></is></c>"
             }
         }
         xml += "</row>\n"
@@ -336,6 +336,31 @@ public final class XLSXWorkbookWriter {
             }
         }
         return sawDigit && (!sawExponent || exponentDigits > 0)
+    }
+
+    /// `escape` for a cell's text, in the spelling Excel itself uses for what XML cannot
+    /// carry: a carriage return is `_x000D_` (an XML reader would make a bare one a line
+    /// feed), a control character is `_x0001_`, and text that already looks like such an
+    /// escape — `_x0041_` typed by a person — gets `_x005F_` in front, so it reads back
+    /// as the seven characters it is rather than as `A`.
+    static func escapeCell(_ text: String) -> String {
+        let scalars = Array(text.unicodeScalars)
+        var prepared = String.UnicodeScalarView()
+        var index = 0
+        while index < scalars.count {
+            let scalar = scalars[index]
+            if scalar == "_", index + 6 < scalars.count, scalars[index + 1] == "x", scalars[index + 6] == "_",
+                scalars[index + 2 ... index + 5].allSatisfy({ $0.properties.isASCIIHexDigit })
+            {
+                prepared.append(contentsOf: "_x005F_".unicodeScalars)
+            } else if scalar == "\r" || (scalar.value < 0x20 && scalar != "\t" && scalar != "\n") {
+                prepared.append(contentsOf: String(format: "_x%04X_", scalar.value).unicodeScalars)
+            } else {
+                prepared.append(scalar)
+            }
+            index += 1
+        }
+        return escape(String(prepared))
     }
 
     /// Escapes the five XML characters and drops control characters XML 1.0 forbids.

@@ -166,7 +166,7 @@ public struct CommandPaletteView: View {
             ("Query History…", Icon.history, "⌘Y", { ws.isHistoryPresented = true }),
             ("Snippets…", Icon.snippet, "⌘⇧K", { ws.isSnippetsPresented = true }),
             ("Export Result…", Icon.export, "⌘⌥E", { ws.isExportPresented = true }),
-            ("Import from CSV…", Icon.importData, nil, { controller.importCSV() }),
+            ("Import Data…", Icon.importData, nil, { controller.importCSV() }),
             ("Back Up Connections…", Icon.backup, nil, { controller.backUpConnections() }),
             ("Restore Connections…", Icon.restore, nil, { controller.chooseConnectionBackup() }),
             ("Structure Sync…", Icon.structure, nil, { ws.isStructureSyncPresented = true }),

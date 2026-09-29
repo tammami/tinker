@@ -976,7 +976,7 @@ struct SidebarRow: View {
                     kind: .importCSV, table: info.ref, connectionID: connectionID
                 )
             } label: {
-                Label("Import Data (CSV, TSV, JSON)…", systemImage: Icon.importData)
+                Label("Import Data…", systemImage: Icon.importData)
             }
             Menu {
                 ForEach(MaintenanceAction.available(for: dialect), id: \.self) { action in

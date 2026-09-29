@@ -20,9 +20,9 @@ public enum ValueCoercion {
                 return Int64(text).map { .int($0) }
             }
         case .int:
-            return Int64(text).map { .int($0) }
+            return (Int64(text) ?? booleanNumber(text)).map { .int($0) }
         case .uint:
-            return UInt64(text).map { .uint($0) }
+            return (UInt64(text) ?? booleanNumber(text).map(UInt64.init)).map { .uint($0) }
         case .double:
             return Double(text).map { .double($0) }
         case .decimal:
@@ -55,6 +55,29 @@ public enum ValueCoercion {
             return .raw(typeName: kind.rawValue, text: text, bytes: nil)
         }
     }
+
+    /// A workbook's boolean cell reads as `true`/`false`; a column that keeps its flags
+    /// as integers — SQLite's, or a MySQL `tinyint` wider than one digit — takes 1 and 0.
+    private static func booleanNumber(_ text: String) -> Int64? {
+        switch text {
+        case "true", "TRUE", "True": 1
+        case "false", "FALSE", "False": 0
+        default: nil
+        }
+    }
+
+    /// Takes off the apostrophe Tinker's CSV export puts before text a spreadsheet would
+    /// run as a formula (`'=SUM(A1)`), so a file exported and imported again holds what
+    /// the table held. Only that exact shape is touched: an apostrophe followed by `=`,
+    /// `+`, `-`, `@`, a tab or a carriage return.
+    public static func removingFormulaGuard(_ text: String) -> String {
+        var scalars = text.unicodeScalars.makeIterator()
+        guard scalars.next() == "'", let second = scalars.next() else { return text }
+        switch second {
+        case "=", "+", "-", "@", "\t", "\r": return String(text.unicodeScalars.dropFirst())
+        default: return text
+        }
+    }
 }
 
 /// Reads CSV one record at a time from bytes, so a file is never held twice.
@@ -83,6 +106,28 @@ public struct CSVReader {
         {
             position = bytes.startIndex + 3
         }
+        // Excel's `sep=;` first line names the delimiter; it is not a record.
+        if Self.declaredSeparator(in: data) != nil {
+            while position < bytes.endIndex, bytes[position] != 10, bytes[position] != 13 { position += 1 }
+            if position < bytes.endIndex, bytes[position] == 13 { position += 1 }
+            if position < bytes.endIndex, bytes[position] == 10 { position += 1 }
+        }
+    }
+
+    /// The delimiter a leading `sep=` line declares, the way Excel reads and writes it.
+    static func declaredSeparator(in data: Data) -> UInt8? {
+        var start = data.startIndex
+        if data.count >= 3, data[start] == 0xEF, data[start + 1] == 0xBB, data[start + 2] == 0xBF { start += 3 }
+        let prefix = Array("sep=".utf8)
+        guard data.endIndex - start > prefix.count else { return nil }
+        for (offset, byte) in prefix.enumerated() where data[start + offset] | 0x20 != byte {
+            return nil
+        }
+        let separator = data[start + prefix.count]
+        guard separator < 0x80, separator != 10, separator != 13 else { return nil }
+        let after = start + prefix.count + 1
+        guard after >= data.endIndex || data[after] == 10 || data[after] == 13 else { return nil }
+        return separator
     }
 
     public var isAtEnd: Bool { position >= bytes.endIndex }
@@ -153,11 +198,28 @@ public struct CSVReader {
     }
 }
 
-/// How the CSV's columns map onto the table's.
+/// One table column and the file column that fills it.
+public struct ImportAssignment: Sendable, Hashable {
+    /// The table column's name.
+    public var column: String
+    /// The zero-based position of the file's column.
+    public var source: Int
+
+    public init(column: String, source: Int) {
+        self.column = column
+        self.source = source
+    }
+}
+
+/// How the file's columns map onto the table's.
 public struct CSVImportPlan: Sendable, Hashable {
     public let table: TableRef
-    /// For each CSV column, the table column it fills, or nil to skip it.
-    public var mapping: [String?]
+    /// The table columns the import fills, each with the file column it takes its value
+    /// from, in the order the `INSERT` names them. One file column may fill several
+    /// table columns; a table column appears at most once.
+    public var assignments: [ImportAssignment]
+    /// How many columns the file has, which is how long `mapping` is.
+    public var sourceCount: Int
     public var hasHeader: Bool
     /// A field equal to this is inserted as NULL. Empty fields are always NULL.
     public var nullText: String
@@ -167,17 +229,94 @@ public struct CSVImportPlan: Sendable, Hashable {
     /// of hundreds of millions of rows is better committed along the way than held in
     /// one transaction the server may not be able to keep.
     public var commitEveryRows: Int
+    /// Take the apostrophe of a formula guard off text fields (see
+    /// `ValueCoercion.removingFormulaGuard`). Off unless asked for: it changes data.
+    public var removesFormulaGuard: Bool
 
+    /// A plan from the file's side: for each file column, the table column it fills, or
+    /// nil to skip it.
     public init(
         table: TableRef, mapping: [String?], hasHeader: Bool = true, nullText: String = "", batchSize: Int = 200,
         commitEveryRows: Int = 0
     ) {
+        self.init(
+            table: table, assignments: Self.assignments(from: mapping), sourceCount: mapping.count,
+            hasHeader: hasHeader, nullText: nullText, batchSize: batchSize, commitEveryRows: commitEveryRows)
+    }
+
+    /// A plan from the table's side: each table column names the file column it takes.
+    public init(
+        table: TableRef, assignments: [ImportAssignment], sourceCount: Int, hasHeader: Bool = true,
+        nullText: String = "", batchSize: Int = 200, commitEveryRows: Int = 0, removesFormulaGuard: Bool = false
+    ) {
         self.table = table
-        self.mapping = mapping
+        var seen = Set<String>()
+        let kept = assignments.filter { $0.source >= 0 && seen.insert($0.column).inserted }
+        self.assignments = kept
+        self.sourceCount = max(sourceCount, (kept.map(\.source).max() ?? -1) + 1)
         self.hasHeader = hasHeader
         self.nullText = nullText
         self.batchSize = min(max(1, batchSize), 1_000)
         self.commitEveryRows = max(0, commitEveryRows)
+        self.removesFormulaGuard = removesFormulaGuard
+    }
+
+    /// The plan seen from the file: for each file column, the first table column it
+    /// fills, or nil when it fills none. Setting it replaces the assignments.
+    public var mapping: [String?] {
+        get {
+            var result = [String?](repeating: nil, count: sourceCount)
+            for assignment in assignments where result.indices.contains(assignment.source) {
+                if result[assignment.source] == nil { result[assignment.source] = assignment.column }
+            }
+            return result
+        }
+        set {
+            assignments = Self.assignments(from: newValue)
+            sourceCount = newValue.count
+        }
+    }
+
+    private static func assignments(from mapping: [String?]) -> [ImportAssignment] {
+        var seen = Set<String>()
+        return mapping.enumerated().compactMap { index, name in
+            guard let name, seen.insert(name).inserted else { return nil }
+            return ImportAssignment(column: name, source: index)
+        }
+    }
+
+    /// For each table column, the file column of the same name — compared without case
+    /// or surrounding spaces, the first of two that share a name — in the table's order.
+    /// A generated column is never filled: the server computes it and refuses a value.
+    public static func assignmentsByName(header: [String], columns: [ColumnInfo]) -> [ImportAssignment] {
+        var byName: [String: Int] = [:]
+        for (index, name) in header.enumerated() {
+            let key = name.trimmingCharacters(in: .whitespaces).lowercased()
+            if !key.isEmpty, byName[key] == nil { byName[key] = index }
+        }
+        return columns.compactMap { column in
+            guard !column.isGenerated, let source = byName[column.name.lowercased()] else { return nil }
+            return ImportAssignment(column: column.name, source: source)
+        }
+    }
+
+    /// The first file column fills the first table column, and so on, for as many as
+    /// both have. A generated column keeps its place but is not filled.
+    public static func assignmentsByPosition(sourceCount: Int, columns: [ColumnInfo]) -> [ImportAssignment] {
+        columns.enumerated().compactMap { index, column in
+            guard index < sourceCount, !column.isGenerated else { return nil }
+            return ImportAssignment(column: column.name, source: index)
+        }
+    }
+
+    /// The table columns an insert must supply and these assignments do not: `NOT NULL`,
+    /// with no default, not numbered by the server and not generated.
+    public static func missingRequired(_ assignments: [ImportAssignment], columns: [ColumnInfo]) -> [ColumnInfo] {
+        let filled = Set(assignments.map(\.column))
+        return columns.filter { column in
+            !column.isNullable && column.defaultExpression == nil && !column.isAutoIncrement && !column.isGenerated
+                && !filled.contains(column.name)
+        }
     }
 
     /// Matches CSV header names to table columns by name, case-insensitively.
@@ -217,21 +356,24 @@ public struct CSVImporter: Sendable {
         self.dialect = dialect
     }
 
-    /// The table columns the plan fills, in CSV order.
+    /// The table columns the plan fills, in the order the `INSERT` names them.
     public var targetColumns: [ColumnInfo] {
-        plan.mapping.compactMap { name in name.flatMap { n in columns.first { $0.name == n } } }
+        plan.assignments.compactMap { assignment in columns.first { $0.name == assignment.column } }
     }
 
     /// Coerces one CSV record into the values of the target columns.
     public func values(for record: [String], number: Int) throws -> [DBValue] {
         var result: [DBValue] = []
         result.reserveCapacity(targetColumns.count)
-        for (index, target) in plan.mapping.enumerated() {
-            guard let target, let column = columns.first(where: { $0.name == target }) else { continue }
-            let text = index < record.count ? record[index] : ""
+        for assignment in plan.assignments {
+            guard let column = columns.first(where: { $0.name == assignment.column }) else { continue }
+            var text = assignment.source < record.count ? record[assignment.source] : ""
             if text == plan.nullText {
                 result.append(.null)
                 continue
+            }
+            if plan.removesFormulaGuard, [.string, .json, .raw, .array].contains(column.kind) {
+                text = ValueCoercion.removingFormulaGuard(text)
             }
             guard let value = ValueCoercion.coerce(text, to: column.kind) else {
                 throw CSVImportError(record: number, column: column.name, text: text, expected: column.nativeType)

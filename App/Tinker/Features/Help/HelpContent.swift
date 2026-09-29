@@ -237,7 +237,7 @@ enum HelpContent {
                 HelpSection(
                     heading: "Export and CSV import",
                     paragraphs: [
-                        "File › Export Result… (⌘⌥E) writes CSV, JSON, NDJSON, SQL INSERTs or Excel, streamed to disk. Text exports guard against spreadsheet formula injection. File › Import from CSV… maps columns and previews the first rows before inserting."
+                        "File › Export Result… (⌘⌥E) writes CSV, JSON, NDJSON, SQL INSERTs or Excel, streamed to disk. Text exports guard against spreadsheet formula injection. File › Import Data… reads CSV, TSV, Excel (.xlsx), JSON and JSON Lines, and lets you choose the file column that fills each table column before inserting."
                     ]),
                 HelpSection(
                     heading: "Server",

@@ -314,7 +314,7 @@ public struct TableTabView: View {
                 IconButton(icon: Icon.export, label: "Export… (⌘⌥E)") {
                     workspace.isExportPresented = true
                 }
-                IconButton(icon: Icon.importData, label: "Import from CSV…") {
+                IconButton(icon: Icon.importData, label: "Import Data…") {
                     workspace.pendingTableOperation = TableOperationRequest(
                         kind: .importCSV, table: controller.table, connectionID: tab.connectionID
                     )

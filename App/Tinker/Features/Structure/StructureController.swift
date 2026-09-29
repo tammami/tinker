@@ -24,6 +24,13 @@ public final class StructureController {
 
     public private(set) var isLoading = false
     public private(set) var errorText: String?
+    /// When the running execute began, for the preview's elapsed time. Nil when idle.
+    public private(set) var executionStartedAt: Date?
+    /// What the server last said the running statement was doing.
+    public private(set) var executionProgress: DDLProgress?
+    /// True from Stop until the run returns.
+    public private(set) var isStoppingExecution = false
+    private var runningExecutor: DDLExecutor?
     /// Set after a run so the user sees what happened without opening the preview again.
     public private(set) var statusText: String?
     /// Structure is read-only until this is turned on, so browsing cannot alter anything.
@@ -307,6 +314,31 @@ public final class StructureController {
         defer { isLoading = false }
 
         let executor = DDLExecutor(session: session, dialect: dialect)
+        runningExecutor = executor
+        executionStartedAt = .now
+        executionProgress = nil
+        isStoppingExecution = false
+        let dialect = dialect
+        // Watches the run from a second connection; the first sample waits a moment, so
+        // a statement that is over at once never costs a catalog query.
+        let watcher = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled, let backendID = await executor.runningBackendID else { continue }
+                let sample = await DDLProgressProbe.sample(
+                    session: session, dialect: dialect, backendID: backendID
+                )
+                guard !Task.isCancelled else { return }
+                self?.executionProgress = sample
+            }
+        }
+        defer {
+            watcher.cancel()
+            runningExecutor = nil
+            executionStartedAt = nil
+            executionProgress = nil
+            isStoppingExecution = false
+        }
         do {
             let result = try await executor.run(statements)
             await session.invalidateIntrospection()
@@ -332,6 +364,14 @@ public final class StructureController {
             await load(force: true)
             errorText = message
         }
+    }
+
+    /// Asks the server to stop the running statement. The run then ends as a failure with
+    /// the server's own message, and the tab reloads what the server has.
+    public func stopExecution() {
+        guard let runningExecutor, !isStoppingExecution else { return }
+        isStoppingExecution = true
+        Task { await runningExecutor.stop() }
     }
 
     /// The server's message, plus what it left behind when the engine could not undo it.

@@ -597,6 +597,84 @@ final class DDLExecutorTests: XCTestCase {
         }
     }
 
+    // MARK: - Stop and progress
+
+    /// An ALTER held up by another connection's lock is what the user sees as "it never
+    /// finishes". The probe must name the wait in the server's own words, and Stop must
+    /// end the statement on the server, not just in the app.
+    func testStopEndsAnAlterThatWaitsForALockAndTheProbeSaysWhy() async throws {
+        try await withSession { session, server in
+            let dialect = self.dialect(for: server)
+            let ref = self.table(self.scratchName("stop"), server, dialect: dialect)
+            await self.cleanUp(ref, session: session, dialect: dialect)
+            let name = Identifier.qualified(ref, dialect: dialect)
+            let executor = DDLExecutor(session: session, dialect: dialect)
+            let intType = dialect == .postgresql ? "integer" : "int"
+            _ = try await executor.run(
+                DDLGenerator(dialect: dialect).create(
+                    TableDefinition(
+                        ref: ref,
+                        columns: [ColumnDefinition(name: "id", type: intType, isNullable: false)],
+                        primaryKey: ["id"]
+                    )))
+
+            // Another connection holds the table open inside a transaction.
+            let (holderLease, holder) = try await session.lease()
+            try await holder.beginTransaction()
+            _ = try await holder.executeCollecting("SELECT * FROM \(name)")
+
+            let alter = GeneratedDDL(
+                kind: .addColumn,
+                sql: "ALTER TABLE \(name) ADD COLUMN extra \(intType)",
+                table: ref
+            )
+            let run = Task { try await executor.run([alter]) }
+
+            // Wait until the server reports the ALTER as blocked.
+            var seen: DDLProgress?
+            for _ in 0 ..< 50 {
+                try await Task.sleep(for: .milliseconds(200))
+                guard let backendID = await executor.runningBackendID else { continue }
+                seen = await DDLProgressProbe.sample(session: session, dialect: dialect, backendID: backendID)
+                if let state = seen?.state, state.localizedCaseInsensitiveContains("lock") { break }
+            }
+            let state = seen?.state ?? ""
+            if dialect == .postgresql {
+                XCTAssertTrue(state.hasPrefix("Waiting for lock"), "probe said: \(state)")
+            } else {
+                XCTAssertTrue(state.localizedCaseInsensitiveContains("metadata lock"), "probe said: \(state)")
+            }
+
+            await executor.stop()
+            let result = try await run.value
+            XCTAssertFalse(result.isSuccess, "a stopped statement is reported as failed")
+            XCTAssertTrue(result.applied.isEmpty)
+            XCTAssertFalse(result.errorText?.isEmpty ?? true, "the server's words are passed on")
+            let isRunning = await executor.runningBackendID
+            XCTAssertNil(isRunning, "the run let go of its connection")
+
+            try await holder.rollback()
+            await session.release(holderLease)
+
+            let (lease, connection) = try await session.lease()
+            let columns = try await connection.introspector.columns(of: ref)
+            await session.release(lease)
+            XCTAssertEqual(columns.map(\.name), ["id"], "the stopped ALTER changed nothing")
+
+            // The session is still usable for the next run.
+            let again = try await executor.run([alter])
+            XCTAssertTrue(again.isSuccess, again.errorText ?? "")
+            await self.cleanUp(ref, session: session, dialect: dialect)
+        }
+    }
+
+    func testProgressFractionIgnoresMissingOrZeroTotals() {
+        XCTAssertNil(DDLProgressProbe.fraction(done: 5, total: nil))
+        XCTAssertNil(DDLProgressProbe.fraction(done: 5, total: 0))
+        XCTAssertEqual(DDLProgressProbe.fraction(done: 5, total: 10), 0.5)
+        XCTAssertEqual(DDLProgressProbe.fraction(done: 12, total: 10), 1)
+    }
+
     func testRunningNothingDoesNothing() async throws {
         try await withSession { session, server in
             let dialect = self.dialect(for: server)

@@ -87,6 +87,9 @@ public struct StructureView: View {
                 isTransactional: controller.isTransactional,
                 tableName: controller.table.name,
                 isProduction: isProduction,
+                startedAt: controller.executionStartedAt,
+                progress: controller.executionProgress,
+                isStopping: controller.isStoppingExecution,
                 onExecute: {
                     await controller.execute()
                     isPreviewPresented.wrappedValue = false
@@ -101,7 +104,8 @@ public struct StructureView: View {
                 onCancel: {
                     finishAfterRun = false
                     isPreviewPresented.wrappedValue = false
-                }
+                },
+                onStop: { controller.stopExecution() }
             )
         }
     }

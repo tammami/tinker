@@ -1,4 +1,5 @@
 import DBCore
+import DBGrid
 import DBSQL
 import SwiftUI
 
@@ -10,8 +11,15 @@ struct DDLPreviewView: View {
     let isTransactional: Bool
     let tableName: String
     let isProduction: Bool
+    /// When the running execute began; nil until Execute is pressed.
+    var startedAt: Date?
+    /// What the server says the running statement is doing, when it says.
+    var progress: DDLProgress?
+    var isStopping = false
     let onExecute: () async -> Void
     let onCancel: () -> Void
+    /// Stops the running statement on the server. Closing the sheet would not.
+    var onStop: () -> Void = {}
 
     @State private var isExecuting = false
     @State private var productionDelayRemaining = 0.0
@@ -55,9 +63,19 @@ struct DDLPreviewView: View {
                     .foregroundStyle(.red)
                     .font(.callout.weight(.semibold))
             }
+            if isExecuting, let startedAt {
+                runningStatus(since: startedAt)
+            }
             Spacer()
-            Button("Cancel", action: onCancel)
-                .keyboardShortcut(.cancelAction)
+            if isExecuting {
+                Button(isStopping ? "Stopping…" : "Stop", action: onStop)
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(isStopping)
+                    .help("Ask the server to stop the running statement")
+            } else {
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+            }
             Button(executeTitle) {
                 isExecuting = true
                 Task {
@@ -70,6 +88,8 @@ struct DDLPreviewView: View {
             .tint(destructive.isEmpty && !isProduction ? nil : .red)
             .disabled(isExecuting || statements.isEmpty || productionDelayRemaining > 0)
         }
+        // Closing the sheet mid-run would hide a statement that is still running.
+        .interactiveDismissDisabled(isExecuting)
         .task {
             guard isProduction else { return }
             productionDelayRemaining = Self.productionDelay
@@ -106,6 +126,38 @@ struct DDLPreviewView: View {
             }
         }
         .frame(minHeight: 240, maxHeight: 420)
+    }
+
+    /// Elapsed time, then the server's own words for what it is doing, then how far along
+    /// it is when the server estimates that.
+    private func runningStatus(since startedAt: Date) -> some View {
+        HStack(spacing: DesignTokens.Spacing.sm) {
+            if let fraction = progress?.fraction {
+                ProgressView(value: fraction).frame(width: 80)
+                Text(fraction.formatted(.percent.precision(.fractionLength(0))))
+                    .monospacedDigit()
+            } else {
+                ProgressView().controlSize(.small)
+            }
+            TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                Text(Self.elapsed(from: startedAt, to: context.date)).monospacedDigit()
+            }
+            if let state = progress?.state {
+                Text(state)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(state)
+            }
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+    }
+
+    static func elapsed(from start: Date, to now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(start)))
+        return seconds < 3600
+            ? String(format: "%d:%02d", seconds / 60, seconds % 60)
+            : String(format: "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
     }
 
     private var executeTitle: String {

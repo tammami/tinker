@@ -970,3 +970,107 @@ the table. Converting to `Double` is for placing a pin only; §5's precision rul
 holds for everything the user sees or copies. `testenv/fixtures/*/005_latlng.sql` adds
 `latlng_places` on every engine.
 
+## ADR-0065 — A type is named as its engine's manual names it, with its aliases beside it
+Date: 2026-09-30
+
+**Context.** The designer offered some thirty types per engine under one spelling each.
+The report was that it read as generic next to Navicat, which shows PostgreSQL's integers
+as `int2`, `int4`, `int8`. PostgreSQL's manual (Table 8.1) leads with `smallint`,
+`integer`, `bigint` and lists the others as aliases; `format_type`, which the introspector
+reads, writes the manual's names. There is no `int16`.
+
+**Decision.** `ColumnTypeCatalog` (DBSQL) carries every type the manual of each engine
+lists, under the manual's name, in the manual's chapters, with a one-line summary of size
+and range. Aliases travel with the type and are shown beside it (`bigint · int8`);
+`choice(named:)` answers to either, a name winning over an alias. The list is narrowed by
+`ServerVersion`: MariaDB has its own types and lacks some of MySQL's. SQLite's names are
+written in capitals as its manual writes them, and matched whatever their case.
+`isCreationOnly` marks shorthand (`serial`) that a column can be created with but not
+altered to. `TypeCatalogIntegrationTests` creates a column of every offered name and alias
+on every configured server and requires what the server writes back to be a type the list
+knows.
+
+**Rejected.** *Showing the catalog names only* (`int8`): they are not what the server
+writes back, so an untouched column would read as changed. *One list for MySQL and
+MariaDB*: the test found MariaDB refusing `geomcollection`.
+
+**Consequences.** A new server release means a catalog entry and a version check. PostGIS
+types are listed under "PostGIS (extension)" and are left out of the integration test,
+since the local server has no PostGIS.
+
+## ADR-0066 — A foreign key is chosen from what exists, and advised before it is sent
+Date: 2026-09-30
+
+**Context.** The Foreign Keys pane was six text fields a row. Table and column names were
+typed, nothing said what an action does, and a mistake was found by the server.
+
+**Decision.** The pane lists the keys and edits the selected one beneath
+(`ForeignKeysPane.swift`). Schema, table and both columns of each pair are pop-ups filled
+from introspection; the referenced table's key columns come first. Choosing a table fills
+in its primary key and guesses the local column by name. `ForeignKeyAdvice` (DBSQL) holds
+what can be tested without a server: the actions each engine carries out (MySQL is not
+offered `SET DEFAULT`, which InnoDB refuses), what each action does, the engine's naming,
+and the problems of a key. A key with no table, or a column with nothing to point at, is
+*incomplete* and Preview is disabled; any other problem is advice, and the server remains
+the judge, its message shown verbatim.
+
+**Rejected.** *Blocking on every problem*: PostgreSQL accepts a key between comparable
+types, so a differing type is a warning there and an error only on MySQL.
+
+**Consequences.** Opening the pane reads the schema's table list once, and a referenced
+table's columns, key and indexes on one leased connection when it is chosen.
+
+## ADR-0067 — A number typed in Excel is imported as typed; SPEC §5 is not weakened by it
+Date: 2026-09-30
+
+**Context.** Excel stores every number as a double and writes its 17-digit form:
+`-8.59940239` is `-8.5994023899999995` in the file. Imported as written, a coordinate or
+a price arrives with a tail the user never typed. CLAUDE.md forbids routing values that
+carry precision through `Double`.
+
+**Decision.** For a workbook written by a spreadsheet, a cell whose text has 16 or 17
+significant digits is read as the shortest decimal of at most 15 digits that is the same
+double, when there is one. The user chose this on 2026-09-30 over importing the stored
+text. The rule in §5 protects values a *server* holds; here the value was already a double
+in the file before Tinker read it, and nothing exact is lost by naming it as it was typed.
+A workbook Tinker exported (no `docProps/app.xml`, no shared strings) is never touched, so
+a `numeric` of 29 digits comes back digit for digit.
+
+**Rejected.** *Importing the stored text*: correct to the file and wrong to the person.
+*Shortening every long number*: a value that really has 17 digits has no shorter decimal
+that is the same double, and is left alone.
+
+**Consequences.** A file made by another program that writes 17 meaningful digits into a
+cell Excel could not hold is shortened only when a 15-digit decimal is the same double.
+
+## ADR-0068 — A chart has a budget of marks, and no question to ask
+Date: 2026-09-30
+
+**Context.** Opening Chart on a wide result of many rows drew up to 5,000 marks on a
+categorical axis, worked out on the main actor, and rebuilt all of them on every movement
+of the pointer. The window stalled.
+
+**Decision.** `ChartBudget` (DBGrid) caps what is drawn: 50 bars (20 or 100 by choice)
+with the rest as "Other" where a sum means something, 8 slices, 1,000 points of a line by
+min–max buckets, 2,000 of a scatter by an even stride. Up to 100,000 resident rows are
+read. The plot is built by an actor from a copy of the two or three columns it needs, and
+is cancelled when the choice changes. The highlight is a layer of its own. The bar says
+what was drawn.
+
+**Rejected.** *Asking before drawing a large result*: a question on every accidental click
+is the stall in another form. *Drawing everything faster*: past a few hundred marks a
+chart is a smear whatever it costs.
+
+**Consequences.** The aggregate defaults to Sum when labels repeat and to each row when
+they do not; an explicit choice is kept until the result changes.
+
+## ADR-0069 — One way to add a connection
+Date: 2026-09-30
+
+**Context.** The New menu and the menu bar had "New Redis Connection…" beside "New
+Connection…". Both opened the same sheet, whose Engine picker already offers Redis.
+
+**Decision.** The Redis item is removed. An engine is chosen in the sheet, Redis like the
+others.
+
+**Consequences.** A new engine adds a row to the picker, not an item to two menus.

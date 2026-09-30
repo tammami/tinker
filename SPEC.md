@@ -2,8 +2,8 @@
 
 Version: 0.1 (MVP scope)
 Target: macOS, Apple Silicon only
-Databases in scope: PostgreSQL, MySQL/MariaDB, SQLite (added 2026-09-09, Phase 10)
-Explicitly out of scope for v0.1: Redis, MongoDB, SQL Server, Oracle, cloud sync, collaboration, ER modeling, scheduler, server monitor.
+Databases in scope: PostgreSQL, MySQL/MariaDB, SQLite (added 2026-09-09, Phase 10), Redis (shipped 2026-09-29 in 0.1.15, recorded by ADR-0070)
+Explicitly out of scope for v0.1: MongoDB, SQL Server, Oracle, cloud sync, collaboration, ER modeling, scheduler, server monitor.
 
 This document is the source of truth. Where this spec is silent, follow `CLAUDE.md` conventions. Where this spec conflicts with a library's idiom, this spec wins unless the conflict makes the feature impossible; in that case stop and report before deviating.
 
@@ -880,7 +880,7 @@ Each phase lists deliverables and acceptance criteria. Do not reorder.
 - Tests: the SQLite suite runs against a temporary database file the suite creates itself, so it never skips and needs no environment variable (`TINKER_TEST_SQLITE_DISABLED` leaves it out); the grid, transfer and sync suites run against SQLite alongside the configured servers. Fixtures in `testenv/fixtures/sqlite/` mirror the other engines' where SQLite can.
 - Accept: every §12.6 and §13.3 criterion that a file can meet, on the SQLite fixture; the rebuild of a column change verified by reading the table back; a trigger body imported whole; `EXPLAIN QUERY PLAN` recognised as read-only.
 
-Deferred to v0.2 (do not build now, do not stub): EXPLAIN visual, editing of multi-table results, client-cert TLS, Redis, other engines, attached SQLite databases beyond listing them. (Amended: import, data transfer, dump/restore, snippets and the table designer were pulled into Phases 8–9 by ADR-0028 and exist; they are no longer deferred.)
+Deferred to v0.2 (do not build now, do not stub): EXPLAIN visual, editing of multi-table results, client-cert TLS, other engines, attached SQLite databases beyond listing them. (Amended: import, data transfer, dump/restore, snippets and the table designer were pulled into Phases 8–9 by ADR-0028 and exist; they are no longer deferred. Redis shipped in 0.1.15 and is no longer deferred; ADR-0070 records it.)
 
 ---
 

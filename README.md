@@ -1,12 +1,12 @@
 # Tinker
 
-**A native macOS client for PostgreSQL, MySQL and SQLite that treats your data like production data. Because it is.**
+**A native macOS client for PostgreSQL, MySQL, SQLite and Redis that treats your data like production data. Because it is.**
 
 ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-1d1d1f?style=flat-square&logo=apple&logoColor=white)
 ![Architecture](https://img.shields.io/badge/arch-Apple%20Silicon-1d1d1f?style=flat-square)
 ![Swift](https://img.shields.io/badge/Swift-6%20%C2%B7%20strict%20concurrency-F05138?style=flat-square&logo=swift&logoColor=white)
 ![UI](https://img.shields.io/badge/UI-SwiftUI%20%2B%20AppKit-0A84FF?style=flat-square)
-![Engines](https://img.shields.io/badge/engines-PostgreSQL%20%C2%B7%20MySQL%20%C2%B7%20MariaDB%20%C2%B7%20SQLite-336791?style=flat-square)
+![Engines](https://img.shields.io/badge/engines-PostgreSQL%20%C2%B7%20MySQL%20%C2%B7%20MariaDB%20%C2%B7%20SQLite%20%C2%B7%20Redis-336791?style=flat-square)
 ![Tests](https://img.shields.io/badge/tests-300%2B%20%C2%B7%20integration%20against%20real%20servers-2ea44f?style=flat-square)
 ![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-8250df?style=flat-square)
 
@@ -60,6 +60,12 @@ Most database clients optimise for the demo: a pretty grid, a few hundred rows, 
 - **Dump, import and transfer** between databases without ever holding them in memory.
 - **Server view** for sessions, users, settings and object definitions.
 
+### Redis beside them
+- **Added like any other connection**, from the same New Connection sheet, with TLS, SSH, read-only and production.
+- **Every key in the view its type needs**, under the name the Redis manual gives it: strings, hashes, lists, sets, sorted sets, streams, JSON, time series, Bloom and Cuckoo filters, Top-K, Count-min sketch, t-digest, vector sets, HyperLogLog, bitmaps and geospatial indexes.
+- **A console** that prints what `redis-cli` prints, refuses a write on a read-only connection and confirms one on production; **INFO**, clients, the slow log and the configuration.
+- **Transfer Keys, Data Synchronization and Structure Synchronization** between Redis databases. They pair Redis only with Redis.
+
 ---
 
 ## Architecture
@@ -74,6 +80,7 @@ App/Tinker            SwiftUI shell, AppKit grid and editor, menus, commands
 ├── DBPostgres        SQLDriver over postgres-nio (PostgresClient, binary results)
 ├── DBMySQL           SQLDriver over mysql-nio (prepared-statement protocol, text fallback)
 ├── DBSQLite          SQLDriver over the system libsqlite3, one dedicated thread per file
+├── DBRedis           Redis over RESP on SwiftNIO: its own session, key browser and transfer
 ├── DBTunnel          SSH port forwarding over Citadel, known-hosts, TLS helpers
 ├── DBStore           Connection store, Keychain, query history, settings
 ├── DBTestKit         Fixtures, env-var server resolution, skip-with-reason helpers
@@ -191,7 +198,9 @@ A feature is done when the build is warning-free under strict concurrency, the t
 
 ## Scope
 
-Version 0.1 targets PostgreSQL, MySQL/MariaDB and SQLite on Apple Silicon. Redis, MongoDB, SQL Server, Oracle, cloud sync, collaboration and ER modelling are explicitly out of scope and are neither built nor stubbed.
+Version 0.1 targets PostgreSQL, MySQL/MariaDB, SQLite and Redis on Apple Silicon. MongoDB, SQL Server, Oracle, cloud sync, collaboration and ER modelling are explicitly out of scope and are neither built nor stubbed.
+
+Redis is not a SQL engine, so it does not open as a grid: a Redis connection opens as its keys, a console and the server, and its tools pair Redis only with Redis. See ADR-0070.
 
 SQLite has no server, so some panes say so instead of pretending: there are no users or sessions to manage, no stored routines, and no profiler. A column change SQLite's `ALTER TABLE` cannot express is applied the way SQLite's own documentation prescribes, by rebuilding the table inside one transaction.
 
@@ -209,6 +218,7 @@ Signed and notarized distribution is implemented in `Scripts/release.sh` but req
 | Logging | [apple/swift-log](https://github.com/apple/swift-log) |
 | Updates | [sparkle-project/Sparkle](https://github.com/sparkle-project/Sparkle) |
 | SQLite | the `libsqlite3` macOS ships, through the system `SQLite3` module |
+| Redis | none: RESP is written on the SwiftNIO the other drivers already bring |
 
 Nothing else is added without an ADR.
 

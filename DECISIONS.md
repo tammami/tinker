@@ -1074,3 +1074,28 @@ Connection…". Both opened the same sheet, whose Engine picker already offers R
 others.
 
 **Consequences.** A new engine adds a row to the picker, not an item to two menus.
+
+## ADR-0070 — Redis is in scope, recorded after it shipped
+Date: 2026-09-30
+
+**Context.** SPEC §1 named Redis as out of scope for v0.1, and SPEC §16 deferred it to
+v0.2. Release 0.1.15 (2026-09-29) nevertheless shipped a Redis connection with a key
+browser, a console, a server view and Redis-to-Redis tools, and 0.1.19 gave every Redis
+data type its own view and removed the separate New Redis Connection item (ADR-0069). No
+ADR recorded the change of scope, so SPEC.md and README.md went on calling Redis out of
+scope while the CHANGELOG and the published site described it as shipped.
+
+**Decision.** Redis is in scope, as built. SPEC §1 and §16 and the README are amended to
+say so. What this records is the shape that shipped, read from the code and the
+CHANGELOG rather than decided anew: `DBRedis` speaks RESP on the SwiftNIO already in the
+graph, adds no Redis client library, and never imports `DBSQL`; it has its own session,
+browser and transfer rather than a `SQLDriver`. A Redis connection is added from the same
+sheet as every other engine and keeps TLS, SSH, read-only and production. Commands that
+change the server are refused on a read-only connection and confirmed on a production
+one. The Redis tools pair Redis only with Redis, and the SQL tools never offer a Redis
+connection.
+
+**Consequences.** SPEC.md has no section with Redis's screens and acceptance criteria;
+until one is written, the CHANGELOG entries for 0.1.15 and 0.1.19 and the `DBRedisTests`
+suite are the record of what Redis support promises. The reason Redis was brought forward
+ahead of v0.2 is not written down anywhere in the repository and is not guessed at here.

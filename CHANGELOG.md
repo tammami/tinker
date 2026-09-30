@@ -4,6 +4,15 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.20] - 2026-09-30
+
+### Fixed
+- **A PostgreSQL statement no longer hangs after the server drops the connection.** When
+  the server ended an idle session (an administrator's `pg_terminate_backend`,
+  `idle_session_timeout`, a failover), the next statement on that connection waited for
+  ever and the tab stayed busy. It now fails at once as a lost connection, so Tinker can
+  reconnect.
+
 ## [0.1.19] - 2026-09-30
 
 ### Added

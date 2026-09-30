@@ -51,8 +51,8 @@ enum HelpContent {
                 HelpSection(
                     heading: "Add a connection",
                     paragraphs: [
-                        "Choose Database › New Connection… (⌘⌥N) or press + at the bottom of the sidebar. Pick the engine — PostgreSQL, MySQL/MariaDB or SQLite — and fill in host, port, user and password. Test connects once and reports the server's own words if anything is wrong.",
-                        "Passwords go to the macOS Keychain and nowhere else. The connection file on disk holds only a reference.",
+                        "Choose Database › New Connection… (⌘⌥N) or press + at the bottom of the sidebar. Pick the engine — PostgreSQL, MySQL/MariaDB, SQLite or Redis — and fill in host, port, user and password. Test connects once and reports the server's own words if anything is wrong.",
+                        "Passwords go to the macOS Keychain. The connection file on disk holds only a reference, and a connections backup carries them only sealed, under a passphrase you type.",
                         "A SQLite database is a file: drop a .sqlite or .db file on the window, open it from Finder, or use File › Open SQLite Database… (⌘⌥O).",
                     ]),
                 HelpSection(

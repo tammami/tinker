@@ -489,7 +489,7 @@ public struct WorkspaceView: View {
                 EmptyStateView(
                     icon: Icon.connection,
                     title: "No connections yet",
-                    message: "Add a PostgreSQL, MySQL or SQLite database to start browsing tables and running queries."
+                    message: "Add a PostgreSQL, MySQL, SQLite or Redis database to start browsing its data and running queries."
                 ) {
                     Button {
                         workspace.presentNewConnection()

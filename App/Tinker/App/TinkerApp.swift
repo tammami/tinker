@@ -104,7 +104,7 @@ struct TinkerCommands: Commands {
                 NSApp.orderFrontStandardAboutPanel(options: [
                     .applicationName: Product.name,
                     .credits: NSAttributedString(
-                        string: "\(Product.credit)\nA native client for PostgreSQL, MySQL and SQLite.",
+                        string: "\(Product.credit)\nA native client for PostgreSQL, MySQL, SQLite and Redis.",
                         attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)]
                     ),
                 ])

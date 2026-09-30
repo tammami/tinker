@@ -116,7 +116,7 @@ struct FirstRunView: View {
                 .tracking(-0.6)
                 .foregroundStyle(.white)
                 .padding(.top, DesignTokens.Spacing.sm)
-            Text("\(Product.tagline). PostgreSQL, MySQL, MariaDB and SQLite, native on your Mac.")
+            Text("\(Product.tagline). PostgreSQL, MySQL, MariaDB, SQLite and Redis, native on your Mac.")
                 .font(.system(size: DesignTokens.Typography.lede))
                 .foregroundStyle(DesignTokens.Brand.ice.opacity(0.72))
                 .multilineTextAlignment(.center)
@@ -136,6 +136,8 @@ struct FirstRunView: View {
                     EngineMark(dialect: .postgresql, size: DesignTokens.Brand.tileBadge)
                     EngineMark(dialect: .mysql, size: DesignTokens.Brand.tileBadge)
                     EngineMark(dialect: .mysql, flavor: .mariadb, size: DesignTokens.Brand.tileBadge)
+                    // Redis is added from the same sheet as the SQL servers (ADR-0069).
+                    EngineMark(redis: true, size: DesignTokens.Brand.tileBadge)
                 }
             }
             .keyboardShortcut(.defaultAction)

@@ -2,6 +2,7 @@ import DBCore
 import DBSQL
 import DBTestKit
 import Logging
+import NIOConcurrencyHelpers
 import XCTest
 
 @testable import DBPostgres
@@ -564,7 +565,9 @@ final class PostgresIntegrationTests: XCTestCase {
             let before = residentMemoryBytes()
             var rows = 0
             var batches = 0
-            for try await event in connection.execute("SELECT g, g * 2 FROM generate_series(1, 2000000) AS g", parameters: []) {
+            for try await event in connection.execute(
+                "SELECT g, g * 2 FROM generate_series(1, 2000000) AS g", parameters: [])
+            {
                 guard case let .rows(batch) = event else { continue }
                 rows += batch.count
                 batches += 1
@@ -626,6 +629,71 @@ final class PostgresIntegrationTests: XCTestCase {
                 XCTFail("a terminated backend must not answer")
             } catch let error as DBError {
                 XCTAssertTrue(error.indicatesLostConnection, "got \(error)")
+            }
+        }
+    }
+
+    /// The backend is terminated while the connection is idle (a DBA, an
+    /// `idle_session_timeout`, a failover) and a statement is sent afterwards. It must fail
+    /// at once as a lost connection, whatever the timing: PostgresNIO drops a write on a
+    /// closed channel without settling its promise, and the statement used to wait for
+    /// ever — the hang that stalled CI.
+    func testAStatementOnABackendKilledWhileIdleFailsAtOnce() async throws {
+        for delay in [0, 1, 5, 20, 100, 400] {
+            for _ in 0 ..< 2 {
+                try await withEachServer { connection, server in
+                    let killer = try await PostgresDriver.connect(server.resolvedConfig(), logger: logger)
+                    let victim = Int32(connection.backendID) ?? -1
+                    _ = try await killer.executeCollecting("SELECT pg_terminate_backend(\(victim))")
+                    await killer.close()
+                    try? await Task.sleep(for: .milliseconds(delay))
+                    let started = ContinuousClock.now
+                    let outcome = await Self.within(.seconds(10)) {
+                        try await connection.executeCollecting("SELECT pg_sleep(30)")
+                    }
+                    switch outcome {
+                    case .finished(.success):
+                        XCTFail("a terminated backend must not answer (delay \(delay) ms)")
+                    case let .finished(.failure(error)):
+                        XCTAssertTrue(
+                            (error as? DBError)?.indicatesLostConnection == true,
+                            "delay \(delay) ms: expected a lost-connection error, got \(error)")
+                        XCTAssertLessThan(started.duration(to: .now), .seconds(5), "delay \(delay) ms")
+                    case .timedOut:
+                        XCTFail("the statement hung on the terminated backend (delay \(delay) ms)")
+                    }
+                }
+            }
+        }
+    }
+
+    enum Outcome<Value: Sendable>: Sendable {
+        case finished(Result<Value, any Error>)
+        case timedOut
+    }
+
+    /// The body's result, or `timedOut` when it has not answered in `limit`: a hung
+    /// statement then fails the test instead of stalling the whole run. The hung task is
+    /// left to itself; the test is over.
+    static func within<Value: Sendable>(
+        _ limit: Duration, _ body: @escaping @Sendable () async throws -> Value
+    ) async -> Outcome<Value> {
+        let box = NIOLockedValueBox<CheckedContinuation<Outcome<Value>, Never>?>(nil)
+        return await withCheckedContinuation { continuation in
+            box.withLockedValue { $0 = continuation }
+            func settle(_ outcome: Outcome<Value>) {
+                if let waiting = box.withLockedValue({
+                    let c = $0; $0 = nil; return c
+                }) {
+                    waiting.resume(returning: outcome)
+                }
+            }
+            Task {
+                do { settle(.finished(.success(try await body()))) } catch { settle(.finished(.failure(error))) }
+            }
+            Task {
+                try? await Task.sleep(for: limit)
+                settle(.timedOut)
             }
         }
     }

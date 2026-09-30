@@ -29,7 +29,11 @@ public actor PostgresSQLConnection: SQLConnection {
     /// status is not exposed by PostgresNIO. Updated both by the transaction methods and
     /// by observing transaction keywords in statements the user runs (ADR-0009).
     private var transactionOpen = false
+    /// True once the session is gone, whether this side closed it or the server did.
     private var closed = false
+    /// True once `close()` has run. Apart from `closed`, because a session the server
+    /// ended still has a socket to close.
+    private var didClose = false
     /// Set when this client asked the server to cancel, so that the 57014 that follows is
     /// reported as `.cancelled` and a `statement_timeout`'s 57014 is not.
     private var cancelRequested = false
@@ -120,6 +124,77 @@ public actor PostgresSQLConnection: SQLConnection {
         }
     }
 
+    /// Refuses a statement on a connection whose socket is gone.
+    ///
+    /// PostgresNIO hands a statement to its channel with no promise of its own; on a
+    /// channel that has closed — the server terminated an idle backend, an idle timeout
+    /// ran out, a failover — the write is dropped and the statement's promise is never
+    /// settled, so the caller waits for ever. The check comes first, and ``settled``
+    /// covers the moment between it and the write.
+    static func requireOpen(_ connection: PostgresConnection) throws {
+        if connection.isClosed { throw DBError.notConnected }
+    }
+
+    /// The future's value, or `notConnected` the moment the connection closes without
+    /// settling it — the write that PostgresNIO dropped on a closing channel.
+    static func settled<Value: Sendable>(
+        _ future: EventLoopFuture<Value>, on connection: PostgresConnection
+    ) async throws -> Value {
+        let raced = future.eventLoop.makePromise(of: Value.self)
+        // Both callbacks run on the channel's loop; the flag keeps the second from
+        // completing a promise the first already did.
+        let done = NIOLockedValueBox(false)
+        future.whenComplete { result in
+            if done.withLockedValue({
+                let was = $0; $0 = true; return !was
+            }) {
+                raced.completeWith(result)
+            }
+        }
+        connection.closeFuture.whenComplete { _ in
+            if done.withLockedValue({
+                let was = $0; $0 = true; return !was
+            }) {
+                raced.fail(DBError.notConnected)
+            }
+        }
+        return try await raced.futureResult.get()
+    }
+
+    /// `body`'s value, or `notConnected` the moment the connection closes without it
+    /// answering — for PostgresNIO's async entry points, whose promise cannot be reached.
+    ///
+    /// The body runs in a task of its own so that a promise PostgresNIO never settles
+    /// holds that task and nothing else; the caller is answered by the close instead.
+    /// Cancelling the caller cancels the body.
+    static func untilClosed<Value: Sendable>(
+        _ connection: PostgresConnection, _ body: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+        let waiting = NIOLockedValueBox<CheckedContinuation<Result<Value, any Error>, Never>?>(nil)
+        @Sendable func settle(_ result: Result<Value, any Error>) {
+            let continuation = waiting.withLockedValue {
+                slot -> CheckedContinuation<Result<Value, any Error>, Never>? in
+                let taken = slot
+                slot = nil
+                return taken
+            }
+            continuation?.resume(returning: result)
+        }
+        let work = Task {
+            do { settle(.success(try await body())) } catch { settle(.failure(error)) }
+        }
+        let result = await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Result<Value, any Error>, Never>) in
+                waiting.withLockedValue { $0 = continuation }
+                // Fires at once when the connection is already gone.
+                connection.closeFuture.whenComplete { _ in settle(.failure(DBError.notConnected)) }
+            }
+        } onCancel: {
+            work.cancel()
+        }
+        return try result.get()
+    }
+
     /// Runs a statement with no parameters and collects it, used during connection setup
     /// and by the introspector, where result sets are small and known.
     static func rawQuery(
@@ -128,14 +203,16 @@ public actor PostgresSQLConnection: SQLConnection {
         logger: Logger,
         decoder: PostgresBinaryDecoder
     ) async throws -> QueryResult {
+        try requireOpen(connection)
         let collected = NIOLockedValueBox<(columns: [ColumnMeta], rows: [[DBValue]])>(([], []))
         let started = ContinuousClock.now
-        let metadata = try await connection.query(PostgresQuery(unsafeSQL: sql), logger: logger) { row in
+        let future = connection.query(PostgresQuery(unsafeSQL: sql), logger: logger) { row in
             collected.withLockedValue { state in
                 if state.columns.isEmpty { state.columns = Self.columns(of: row, decoder: decoder) }
                 state.rows.append(Self.values(of: row, decoder: decoder))
             }
-        }.get()
+        }
+        let metadata = try await settled(future, on: connection)
         let state = collected.withLockedValue { $0 }
         return QueryResult(
             columns: state.columns,
@@ -189,6 +266,8 @@ public actor PostgresSQLConnection: SQLConnection {
         for name in [table.schema, table.name] + columns where name.contains("\"") {
             throw DBError.protocolError("COPY cannot target a name containing a double quote: \(name)")
         }
+        if closed { throw DBError.notConnected }
+        try Self.requireOpen(underlying)
         let previousPath =
             try await Self.rawQuery("SHOW search_path", on: underlying, logger: logger, decoder: decoder)
             .rows.first?.first?.text ?? "\"$user\", public"
@@ -197,6 +276,8 @@ public actor PostgresSQLConnection: SQLConnection {
             on: underlying, logger: logger, decoder: decoder)
         var failure: (any Error)?
         do {
+            // Not raced against the close: `body` cannot escape into a task of its own.
+            // The writer's own writes fail on a channel that closes during the copy.
             try await underlying.copyFrom(table: table.name, columns: columns, logger: logger) { writer in
                 try await body(CopyWriter(writer: writer))
             }
@@ -206,9 +287,11 @@ public actor PostgresSQLConnection: SQLConnection {
         // Put back before anything else can run on this connection, whichever way it went.
         // The previous value is bound, not interpolated: it is text the server gave us,
         // and `set_config` takes it as a value rather than as SQL.
-        _ = try? await underlying.query(
-            "SELECT set_config('search_path', \(previousPath), false)", logger: logger
-        ).get()
+        if !underlying.isClosed {
+            _ = try? await Self.settled(
+                underlying.query("SELECT set_config('search_path', \(previousPath), false)", logger: logger),
+                on: underlying)
+        }
         if let failure { throw PostgresErrorMapper.map(failure, user: config.user) }
     }
 
@@ -265,6 +348,8 @@ public actor PostgresSQLConnection: SQLConnection {
         if !statementInFlight { statementGeneration += 1 }
         statementInFlight = true
         do {
+            if closed { throw DBError.notConnected }
+            try Self.requireOpen(underlying)
             if Self.streamsManyRows(sql) {
                 try await runStreaming(query, sql: sql, into: channel, started: started)
             } else {
@@ -313,7 +398,9 @@ public actor PostgresSQLConnection: SQLConnection {
         into channel: QueryEventChannel,
         started: ContinuousClock.Instant
     ) async throws {
-        let rows = try await underlying.query(query, logger: logger)
+        let underlying = underlying
+        let logger = logger
+        let rows = try await Self.untilClosed(underlying) { try await underlying.query(query, logger: logger) }
         var emittedColumns = false
         var batch: [[DBValue]] = []
         var batchBytes = 0
@@ -373,12 +460,13 @@ public actor PostgresSQLConnection: SQLConnection {
     ) async throws {
         let decoder = decoder
         let collected = NIOLockedValueBox<(columns: [ColumnMeta], rows: [[DBValue]])>(([], []))
-        let metadata = try await underlying.query(query, logger: logger) { row in
+        let future = underlying.query(query, logger: logger) { row in
             collected.withLockedValue { state in
                 if state.columns.isEmpty { state.columns = Self.columns(of: row, decoder: decoder) }
                 state.rows.append(Self.values(of: row, decoder: decoder))
             }
-        }.get()
+        }
+        let metadata = try await Self.settled(future, on: underlying)
 
         // The server has answered; only the hand-off to the consumer is left.
         statementInFlight = false
@@ -516,8 +604,11 @@ public actor PostgresSQLConnection: SQLConnection {
     }
 
     public func close() async {
-        guard !closed else { return }
+        guard !didClose else { return }
+        didClose = true
         closed = true
+        // Also when the server ended the session first: its socket is still ours to
+        // give back, and PostgresNIO asserts on a connection let go of without it.
         try? await underlying.close()
     }
 

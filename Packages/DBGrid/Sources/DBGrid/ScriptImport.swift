@@ -36,14 +36,24 @@ private actor ImportState {
 /// between them holds a few statements at most — which is what lets a file larger
 /// than memory, with hundreds of millions of rows, import without the app growing.
 public enum ScriptImportRunner {
+    /// Runs the file at `url` on `connection`.
+    ///
+    /// `database` is where the file's unqualified names land on MySQL, whose databases
+    /// all share one session: a `USE` goes out before the first statement, and a `USE`
+    /// inside the file still wins after it. PostgreSQL picks its database when it
+    /// connects, so the caller hands over a connection already on it and this is ignored.
     public static func run(
         url: URL,
         dialect: SQLDialect,
         options: ScriptExecutionOptions,
+        database: String? = nil,
         on connection: any SQLConnection,
         progress: @escaping @Sendable (ScriptImportProgress) -> Void
     ) async throws -> ScriptExecutionOutcome {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        if dialect == .mysql, let database, !database.isEmpty {
+            _ = try await connection.executeCollecting("USE \(Identifier.quote(database, dialect: .mysql))")
+        }
         let state = ImportState(totalBytes: (attributes[.size] as? NSNumber)?.int64Value ?? 0)
         let channel = ScriptChannel()
         let executor = ScriptExecutor(dialect: dialect, options: options)

@@ -292,7 +292,7 @@ public final class TransferController {
                 }
                 let started = ContinuousClock.now
                 let outcome = try await ScriptImportRunner.run(
-                    url: url, dialect: dialect, options: options, on: connection
+                    url: url, dialect: dialect, options: options, database: request.database, on: connection
                 ) { [weak self] progress in
                     Task { @MainActor in self?.show(progress, since: started) }
                 }

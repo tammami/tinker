@@ -44,8 +44,11 @@ final class ScriptTransferIntegrationTests: XCTestCase {
     }
 
     /// Runs `body` on a connected session per server: by default one server per engine.
+    /// `withoutDatabase` opens the connection with no default database, the way a MySQL
+    /// connection that browses every database on the server is set up.
     func withSession(
-        on servers: [TestServer]? = nil, _ body: (ConnectionSession, TestServer, SQLDialect) async throws -> Void
+        on servers: [TestServer]? = nil, withoutDatabase: Bool = false,
+        _ body: (ConnectionSession, TestServer, SQLDialect) async throws -> Void
     ) async throws {
         let chosen: [TestServer]
         if let servers { chosen = servers } else { chosen = try await allServers() }
@@ -53,7 +56,7 @@ final class ScriptTransferIntegrationTests: XCTestCase {
             let dialect = server.engine.dialect
             let config = ConnectionConfig(
                 name: "transfer-test", dialect: dialect, host: server.host, port: server.port, user: server.user,
-                database: server.database)
+                database: withoutDatabase ? nil : server.database)
             let secrets = EphemeralSecretStore()
             var withPassword = config
             if let password = server.password {
@@ -582,6 +585,45 @@ final class ScriptTransferIntegrationTests: XCTestCase {
                 "\(dialect): plain SELECT streamed \(rows) rows in \(selectTime); dumped in \(dumpTime), imported in \(importTime), file \(writer.bytesWritten) bytes"
             )
             try await dropFixture(dialect: dialect, on: connection)
+        }
+    }
+
+    /// A MySQL connection with no default database, importing a dump without a `USE` into
+    /// the database the sheet was opened on: the file's unqualified names land there
+    /// instead of failing with "No database selected".
+    func testMySQLImportRunsInTheChosenDatabaseOnAConnectionWithoutOne() async throws {
+        let servers = try TestEnvironment.servers(for: .mysql)
+        if servers.isEmpty { throw XCTSkip("no MySQL test server is configured") }
+        try await withSession(on: servers, withoutDatabase: true) { session, server, dialect in
+            let database = try XCTUnwrap(server.database)
+            _ = try await session.connect()
+            let (lease, connection) = try await session.lease()
+            let qualified = "\(Identifier.quote(database, dialect: .mysql)).xfer_script"
+            _ = try await connection.executeCollecting("DROP TABLE IF EXISTS \(qualified)")
+            let script = """
+                CREATE TABLE xfer_script (id int PRIMARY KEY, name varchar(20));
+                INSERT INTO xfer_script VALUES (1, 'one'), (2, 'two');
+                """
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "xfer-nodb-\(UUID().uuidString).sql")
+            defer { try? FileManager.default.removeItem(at: url) }
+            try Data(script.utf8).write(to: url)
+
+            let outcome = try await ScriptImportRunner.run(
+                url: url, dialect: dialect, options: ScriptExecutionOptions(), database: database, on: connection
+            ) { _ in }
+            XCTAssertTrue(outcome.failures.isEmpty, outcome.failures.map(\.description).joined(separator: "\n"))
+            let restored = try await count(qualified, on: connection)
+            XCTAssertEqual(restored, 2)
+            _ = try await connection.executeCollecting("DROP TABLE IF EXISTS \(qualified)")
+            await session.release(lease)
+
+            // The USE cannot be undone on a connection without a default database, so the
+            // pool drops that connection: the next lease is on no database again.
+            let (next, fresh) = try await session.lease()
+            let current = try await fresh.executeCollecting("SELECT DATABASE()")
+            XCTAssertEqual(current.rows.first?.first, .null, "the import's database must not leak to the next lease")
+            await session.release(next)
         }
     }
 

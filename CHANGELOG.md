@@ -4,6 +4,15 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.21] - 2026-10-21
+
+### Fixed
+- **Importing a SQL file into a MySQL database works on a connection without a default
+  database.** Opening Import SQL File on a database in the sidebar and running a dump
+  without a `USE` line stopped at the first `CREATE TABLE` with "No database selected".
+  The file now runs in the database the import was opened on; a `USE` inside the file
+  still takes precedence.
+
 ## [0.1.20] - 2026-09-30
 
 ### Fixed

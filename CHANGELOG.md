@@ -4,6 +4,13 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.22] - 2026-10-27
+
+### Changed
+- **Connection badges show each engine's own logo.** PostgreSQL, MySQL, Redis and SQLite
+  connections now carry their project's logo on a white tile, so they read clearly in both
+  light and dark appearance. MariaDB connections use the MySQL logo.
+
 ## [0.1.21] - 2026-10-21
 
 ### Fixed

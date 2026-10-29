@@ -260,8 +260,9 @@ struct TinkerCommands: Commands {
         }
 
         CommandGroup(after: .sidebar) {
+            // ⌘B, as most editors bind it; the older ⌘⌥S still works (WorkspaceView).
             Button("Toggle Sidebar") { workspace?.isSidebarVisible.toggle() }
-                .keyboardShortcut("s", modifiers: [.command, .option])
+                .keyboardShortcut("b", modifiers: .command)
             Button("Toggle Inspector") { workspace?.workspace.toggleInspector() }
                 .keyboardShortcut("i", modifiers: [.command, .option])
             Button("Toggle Filter Bar") { workspace?.workspace.isFilterBarVisible.toggle() }

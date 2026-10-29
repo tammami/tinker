@@ -310,7 +310,7 @@ enum HelpContent {
                 HelpSection(
                     heading: "View",
                     shortcuts: [
-                        HelpShortcut(keys: "⌘⌥S", action: "Toggle sidebar"),
+                        HelpShortcut(keys: "⌘B", action: "Toggle sidebar"),
                         HelpShortcut(keys: "⌘⌥I", action: "Toggle inspector"),
                         HelpShortcut(keys: "⌘⇧F", action: "Toggle filter bar"),
                         HelpShortcut(keys: "⌘,", action: "Settings"),

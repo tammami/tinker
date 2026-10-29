@@ -180,7 +180,7 @@ public struct CommandPaletteView: View {
             ("Refresh", Icon.refresh, "F5", { controller.refresh() }),
             ("Toggle Inspector", Icon.inspector, "⌘⌥I", { ws.toggleInspector() }),
             ("Toggle Filter Bar", Icon.filter, "⌘⇧F", { ws.isFilterBarVisible.toggle() }),
-            ("Toggle Sidebar", Icon.sidebar, "⌘⌥S", { controller.isSidebarVisible.toggle() }),
+            ("Toggle Sidebar", Icon.sidebar, "⌘B", { controller.isSidebarVisible.toggle() }),
             ("Toggle Read-Only", Icon.lock, "⌘⇧L", { controller.toggleReadOnly() }),
             ("Close Tab", Icon.close, "⌘W", { controller.closeSelectedTab() }),
         ]

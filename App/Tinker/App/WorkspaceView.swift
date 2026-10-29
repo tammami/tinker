@@ -83,6 +83,19 @@ public struct WorkspaceView: View {
         .onChange(of: controller.isSidebarVisible) { _, visible in
             columnVisibility = visible ? .all : .detailOnly
         }
+        // The toolbar's own sidebar button changes the split view directly; the flag
+        // follows, or the next ⌘B would "hide" a sidebar already hidden and do nothing.
+        .onChange(of: columnVisibility) { _, visibility in
+            controller.isSidebarVisible = visibility != .detailOnly
+        }
+        .background {
+            // ⌘⌥S, the shortcut before ⌘B, keeps working; the menu shows only ⌘B.
+            Button("Toggle Sidebar") { controller.isSidebarVisible.toggle() }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+                .opacity(0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
         .onDisappear { CommandCenter.shared.deactivate(controller) }
         .task {
             await environment.load()

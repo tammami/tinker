@@ -31,6 +31,8 @@ public struct CommandPaletteView: View {
     private var workspace: WorkspaceModel { controller.workspace }
 
     public var body: some View {
+        // Matched once per render: the rows, the headings and the count all read this list.
+        let matches = matches
         VStack(spacing: 0) {
             HStack(spacing: DesignTokens.Spacing.sm) {
                 Image(systemName: Icon.command).foregroundStyle(.secondary)
@@ -39,6 +41,16 @@ public struct CommandPaletteView: View {
                     .font(.title3)
                     .focused($isFieldFocused)
                     .onSubmit(runHighlighted)
+                    // On the field itself: with text in it, the field editor takes the arrows
+                    // for its caret before a handler further out ever sees them.
+                    .onKeyPress(.upArrow) {
+                        moveHighlight(by: -1)
+                        return .handled
+                    }
+                    .onKeyPress(.downArrow) {
+                        moveHighlight(by: 1)
+                        return .handled
+                    }
                 KeyCap(keys: "esc")
             }
             .padding(.horizontal, DesignTokens.Spacing.lg)
@@ -52,22 +64,30 @@ public struct CommandPaletteView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
+                            // Keyed by the command, never by its position: rows keyed by
+                            // index kept drawing the commands that used to stand there, so a
+                            // search showed "1 result" over the wrong row and the highlight
+                            // never visibly moved.
                             ForEach(Array(matches.enumerated()), id: \.element.id) { index, command in
-                                if index == 0 || matches[index - 1].group != command.group {
-                                    SectionHeading(text: command.group.rawValue, inset: DesignTokens.Spacing.lg)
-                                }
-                                row(command, isHighlighted: index == highlighted)
-                                    .id(index)
-                                    .onTapGesture {
-                                        highlighted = index
-                                        runHighlighted()
+                                VStack(alignment: .leading, spacing: 0) {
+                                    if index == 0 || matches[index - 1].group != command.group {
+                                        SectionHeading(text: command.group.rawValue, inset: DesignTokens.Spacing.lg)
                                     }
+                                    row(command, isHighlighted: index == highlighted)
+                                        .onTapGesture {
+                                            highlighted = index
+                                            runHighlighted()
+                                        }
+                                }
                             }
                         }
                         .padding(.bottom, DesignTokens.Spacing.sm)
                     }
                     .frame(height: 360)
-                    .onChange(of: highlighted) { _, new in proxy.scrollTo(new) }
+                    .onChange(of: highlighted) { _, new in
+                        guard matches.indices.contains(new) else { return }
+                        proxy.scrollTo(matches[new].id)
+                    }
                 }
             }
             Divider()
@@ -78,14 +98,6 @@ public struct CommandPaletteView: View {
         .frame(width: 600)
         .onAppear { isFieldFocused = true }
         .onChange(of: query) { _, _ in highlighted = 0 }
-        .onKeyPress(.upArrow) {
-            highlighted = max(0, highlighted - 1)
-            return .handled
-        }
-        .onKeyPress(.downArrow) {
-            highlighted = min(matches.count - 1, highlighted + 1)
-            return .handled
-        }
         .onKeyPress(.escape) {
             workspace.isCommandPalettePresented = false
             return .handled
@@ -205,6 +217,12 @@ public struct CommandPaletteView: View {
         let ordered = all.sorted { $0.group.rawValue < $1.group.rawValue }
         return Array(
             FuzzyMatch.filter(ordered, query: needle, text: { $0.title + " " + ($0.subtitle ?? "") }).prefix(60))
+    }
+
+    private func moveHighlight(by step: Int) {
+        let count = matches.count
+        guard count > 0 else { return }
+        highlighted = min(count - 1, max(0, highlighted + step))
     }
 
     private func runHighlighted() {

@@ -5,6 +5,19 @@ import XCTest
 
 /// What a table definition becomes on another engine.
 final class SchemaTranslatorTests: XCTestCase {
+    /// MariaDB reports `int(11)` where MySQL 8.0.19+ says `int`; compared across engines
+    /// the width is not a difference. A boolean's `tinyint(1)` and every other type keep it.
+    func testAnIntegerDisplayWidthIsNotComparedAcrossEngines() {
+        let cases: [(String, String)] = [
+            ("int(11)", "int"), ("bigint(20)", "bigint"), ("int(10) unsigned", "int unsigned"),
+            ("INT(11)", "INT"), ("tinyint(4)", "tinyint"), ("tinyint(1)", "tinyint(1)"),
+            ("varchar(100)", "varchar(100)"), ("decimal(10,2)", "decimal(10,2)"), ("int", "int"),
+        ]
+        for (type, expected) in cases {
+            XCTAssertEqual(SchemaTranslator.withoutDisplayWidth(type), expected, type)
+        }
+    }
+
     func testMySQLTypesBecomePostgresTypesInPostgresSpelling() {
         let cases: [(String, String)] = [
             ("tinyint(1)", "boolean"), ("tinyint", "smallint"), ("int", "integer"), ("int unsigned", "bigint"),
@@ -307,6 +320,46 @@ final class CrossEngineLiteralTests: XCTestCase {
         let plain = DBValue.timestamp(
             DBTimestamp(date: DBDate(year: 2026, month: 1, day: 2), time: DBTime(hour: 3, minute: 4, second: 5), hasTimeZone: false))
         XCTAssertEqual(plain.sqlLiteral(dialect: .mysql), "TIMESTAMP '2026-01-02 03:04:05'")
+    }
+
+    private func zoned(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, offsetHours: Double) -> DBTimestamp {
+        DBTimestamp(
+            date: DBDate(year: year, month: month, day: day),
+            time: DBTime(
+                hour: hour, minute: 30, second: 5, microsecond: 114_178, tzOffsetSeconds: Int(offsetHours * 3_600)),
+            hasTimeZone: true)
+    }
+
+    /// The UTC instant is worked out on the calendar, across days, months, leap days and
+    /// years, with every microsecond kept.
+    func testAZonedTimestampIsTakenToUTCExactly() {
+        XCTAssertEqual(zoned(2026, 10, 29, 19, offsetHours: 8).inUTC?.serverText, "2026-10-29 11:30:05.114178")
+        XCTAssertEqual(zoned(2026, 1, 1, 3, offsetHours: 8).inUTC?.serverText, "2025-12-31 19:30:05.114178")
+        XCTAssertEqual(zoned(2024, 2, 28, 22, offsetHours: -3.5).inUTC?.serverText, "2024-02-29 02:00:05.114178")
+        XCTAssertEqual(zoned(1960, 1, 1, 0, offsetHours: 8).inUTC?.serverText, "1959-12-31 16:30:05.114178")
+        let plain = DBTimestamp(
+            date: DBDate(year: 2026, month: 1, day: 1), time: DBTime(hour: 0, minute: 0, second: 0), hasTimeZone: false)
+        XCTAssertNil(plain.inUTC)
+    }
+
+    /// MariaDB refuses `'… +08:00'`: the instant goes as UTC through CONVERT_TZ, which
+    /// lands it in the session's zone the way MySQL reads the offset. Outside the range
+    /// CONVERT_TZ converts, it is written in UTC and said so.
+    func testAZonedTimestampForMariaDBGoesThroughConvertTZ() {
+        let inRange = DBValue.timestamp(zoned(2026, 10, 29, 19, offsetHours: 8))
+        XCTAssertEqual(
+            inRange.sqlLiteral(dialect: .mysql, acceptsZoneOffsets: false),
+            "CONVERT_TZ(TIMESTAMP '2026-10-29 11:30:05.114178', '+00:00', @@session.time_zone)")
+        XCTAssertEqual(
+            inRange.sqlLiteral(dialect: .mysql), "TIMESTAMP '2026-10-29 19:30:05.114178+08:00'",
+            "MySQL 8.0.19+ still gets the offset")
+        let old = zoned(1960, 1, 1, 0, offsetHours: 8)
+        XCTAssertTrue(SQLLiteral.isWrittenInUTC(old))
+        XCTAssertEqual(
+            DBValue.timestamp(old).sqlLiteral(dialect: .mysql, acceptsZoneOffsets: false),
+            "TIMESTAMP '1959-12-31 16:30:05.114178'")
+        XCTAssertFalse(SQLLiteral.isWrittenInUTC(zoned(2038, 1, 19, 2, offsetHours: 0)))
+        XCTAssertTrue(SQLLiteral.isWrittenInUTC(zoned(2038, 1, 19, 3, offsetHours: 0)))
     }
 
 }

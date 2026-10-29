@@ -168,6 +168,10 @@ public enum TransferRunner {
             let tables = (try? await target.introspector.tables(in: schema)) ?? []
             renaming.existingTargetTables = Set(tables.map(\.name))
         }
+        var options = options
+        if (targetDialect ?? dialect) == .mysql {
+            options.targetAcceptsZoneOffsets = Self.acceptsZoneOffsets(await target.serverVersion)
+        }
         let dumped = ScriptChannel()
         let dumper = DatabaseDumper(dialect: dialect, targetDialect: targetDialect, options: options, renaming: renaming)
         let executor = ScriptExecutor(dialect: targetDialect ?? dialect, options: execution)
@@ -234,6 +238,12 @@ public enum TransferRunner {
             }
             return result
         }
+    }
+
+    /// Whether a MySQL-dialect server reads `'… +07:00'` in a datetime literal: MySQL from
+    /// 8.0.19 does; MariaDB does not in any version.
+    static func acceptsZoneOffsets(_ version: ServerVersion) -> Bool {
+        version.flavor != .mariadb && version.isAtLeast(8, 0, 19)
     }
 
     /// Buffers the structure phase, asks, then forwards it and everything after it.

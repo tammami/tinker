@@ -47,6 +47,11 @@ public struct DumpOptions: Sendable, Hashable {
     /// MySQL: leave `DEFINER=` out of views, routines and triggers so they restore under
     /// any account.
     public var stripDefiners = true
+    /// False when the target is a MySQL-dialect server that refuses a zone offset in a
+    /// datetime literal (MariaDB, MySQL before 8.0.19): a zoned timestamp is then
+    /// converted for it (`SQLLiteral.mysqlZonedTimestamp`). A dump to a file does not
+    /// know its server and keeps the offset, which MySQL 8.0.19+ reads.
+    public var targetAcceptsZoneOffsets = true
 
     public init() {}
 
@@ -351,6 +356,11 @@ public struct DatabaseDumper: Sendable {
                         report()
                     }
                     outcome.statements += rows.statements
+                    if rows.wroteUTC {
+                        outcome.notes.append(
+                            "\(table.name): timestamps outside 1970–2038 were written in UTC; the server converts to its time zone only inside that range"
+                        )
+                    }
                     if targetDialect == .postgresql {
                         for column in columns where column.isAutoIncrement {
                             let target = targetName(table.ref, selection)
@@ -466,7 +476,7 @@ public struct DatabaseDumper: Sendable {
         on connection: any SQLConnection,
         into channel: ScriptChannel,
         onBatch: (Int64) -> Void
-    ) async throws -> (statements: Int, rows: Int64) {
+    ) async throws -> (statements: Int, rows: Int64, wroteUTC: Bool) {
         let sourceName = Identifier.qualified(table.ref, dialect: dialect)
         let target = targetName(table.ref, selection)
         let sourceColumnList = columns.map { Identifier.quote($0.name, dialect: dialect) }.joined(separator: ", ")
@@ -475,6 +485,8 @@ public struct DatabaseDumper: Sendable {
         let useCopy = targetDialect == .postgresql && options.dataStyle == .copy
         var statements = 0
         var rows: Int64 = 0
+        var wroteUTC = false
+        let acceptsOffsets = options.targetAcceptsZoneOffsets
 
         if useCopy {
             let targetRef = targetRef(table.ref, selection)
@@ -515,7 +527,14 @@ public struct DatabaseDumper: Sendable {
                 } else {
                     if batchRows > 0 { batch.append(contentsOf: ",\n".utf8) }
                     batch.append(contentsOf: "(".utf8)
-                    batch.append(contentsOf: row.map { $0.sqlLiteral(dialect: targetDialect) }.joined(separator: ", ").utf8)
+                    if !acceptsOffsets, targetDialect == .mysql, !wroteUTC {
+                        wroteUTC = row.contains { value in
+                            if case let .timestamp(stamp) = value { return SQLLiteral.isWrittenInUTC(stamp) }
+                            return false
+                        }
+                    }
+                    let literals = row.map { $0.sqlLiteral(dialect: targetDialect, acceptsZoneOffsets: acceptsOffsets) }
+                    batch.append(contentsOf: literals.joined(separator: ", ").utf8)
                     batch.append(contentsOf: ")".utf8)
                 }
                 batchRows += 1
@@ -528,7 +547,7 @@ public struct DatabaseDumper: Sendable {
         }
         try await flush()
         if useCopy { try await channel.send(.copyEnd) }
-        return (statements, rows)
+        return (statements, rows, wroteUTC)
     }
 
     /// One value in PostgreSQL's COPY text format.

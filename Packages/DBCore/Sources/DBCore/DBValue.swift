@@ -96,6 +96,52 @@ public struct DBTimestamp: Sendable, Hashable, Codable, CustomStringConvertible 
     }
 
     public var description: String { serverText }
+
+    /// The same instant in UTC, without an offset; nil when the value carries none.
+    ///
+    /// Integer arithmetic on the proleptic Gregorian calendar, never `Foundation.Date`, so
+    /// every microsecond and every year survives.
+    public var inUTC: DBTimestamp? {
+        guard let offset = time.tzOffsetSeconds else { return nil }
+        var seconds = time.hour * 3_600 + time.minute * 60 + time.second - offset
+        var days = Self.daysFromCivil(year: date.year, month: date.month, day: date.day)
+        // Floor division: an offset east of Greenwich can move the instant to the day before.
+        let carry = seconds >= 0 ? seconds / 86_400 : (seconds - 86_399) / 86_400
+        days += carry
+        seconds -= carry * 86_400
+        let civil = Self.civilFromDays(days)
+        return DBTimestamp(
+            date: DBDate(year: civil.year, month: civil.month, day: civil.day),
+            time: DBTime(
+                hour: seconds / 3_600, minute: (seconds % 3_600) / 60, second: seconds % 60,
+                microsecond: time.microsecond),
+            hasTimeZone: false)
+    }
+
+    // Howard Hinnant's `days_from_civil` and `civil_from_days`, exact for the whole Int range.
+
+    static func daysFromCivil(year: Int, month: Int, day: Int) -> Int {
+        let y = month <= 2 ? year - 1 : year
+        let era = (y >= 0 ? y : y - 399) / 400
+        let yearOfEra = y - era * 400
+        let monthPrime = month > 2 ? month - 3 : month + 9
+        let dayOfYear = (153 * monthPrime + 2) / 5 + day - 1
+        let dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+        return era * 146_097 + dayOfEra - 719_468
+    }
+
+    static func civilFromDays(_ days: Int) -> (year: Int, month: Int, day: Int) {
+        let shifted = days + 719_468
+        let era = (shifted >= 0 ? shifted : shifted - 146_096) / 146_097
+        let dayOfEra = shifted - era * 146_097
+        let yearOfEra = (dayOfEra - dayOfEra / 1_460 + dayOfEra / 36_524 - dayOfEra / 146_096) / 365
+        let year = yearOfEra + era * 400
+        let dayOfYear = dayOfEra - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100)
+        let monthPrime = (5 * dayOfYear + 2) / 153
+        let day = dayOfYear - (153 * monthPrime + 2) / 5 + 1
+        let month = monthPrime < 10 ? monthPrime + 3 : monthPrime - 9
+        return (month <= 2 ? year + 1 : year, month, day)
+    }
 }
 
 /// Which `DBValue` case a column produces. Mirrors `DBValue` one-for-one so the UI can

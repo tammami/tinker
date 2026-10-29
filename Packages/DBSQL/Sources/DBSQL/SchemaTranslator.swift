@@ -153,6 +153,7 @@ public enum SchemaTranslator {
             plain.characterSet = nil
             plain.collation = nil
             plain.comment = nil
+            plain.type = withoutDisplayWidth(column.type)
             return plain
         }
         result.indexes = definition.indexes.map { index in
@@ -168,6 +169,22 @@ public enum SchemaTranslator {
             return plain
         }
         return result
+    }
+
+    /// `int(11)` → `int`: an integer's display width changes nothing it holds. MariaDB
+    /// still reports one and MySQL 8.0.19+ does not, so a table created from PostgreSQL's
+    /// `integer` compared as altered on one and not the other. `tinyint(1)` keeps its
+    /// width, which is how MySQL marks a boolean.
+    static func withoutDisplayWidth(_ type: String) -> String {
+        guard let open = type.firstIndex(of: "("), let close = type.firstIndex(of: ")"), open < close else {
+            return type
+        }
+        let base = type[..<open].trimmingCharacters(in: .whitespaces).lowercased()
+        let width = type[type.index(after: open) ..< close]
+        guard ["tinyint", "smallint", "mediumint", "int", "integer", "bigint"].contains(base),
+            !width.isEmpty, width.allSatisfy(\.isNumber), !(base == "tinyint" && width == "1")
+        else { return type }
+        return String(type[..<open]) + type[type.index(after: close)...]
     }
 
     // MARK: - Types

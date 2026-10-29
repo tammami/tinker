@@ -7,7 +7,11 @@ extension DBValue {
     /// Literals are for **display and export only** — the commit preview sheet, copy-as-INSERT,
     /// and SQL export. Statements the app executes bind values as parameters instead, which is
     /// the injection and type-safety boundary (SPEC §7.1).
-    public func sqlLiteral(dialect: SQLDialect) -> String {
+    ///
+    /// `acceptsZoneOffsets` is false for a MySQL-dialect server that refuses an offset in
+    /// a datetime literal: MariaDB, and MySQL before 8.0.19. A zoned timestamp is then
+    /// converted for it rather than refused (see `SQLLiteral.mysqlZonedTimestamp`).
+    public func sqlLiteral(dialect: SQLDialect, acceptsZoneOffsets: Bool = true) -> String {
         switch self {
         case .null:
             return "NULL"
@@ -59,6 +63,7 @@ extension DBValue {
             case .mysql:
                 // MySQL reads a zone offset only as `±HH:MM`; PostgreSQL writes `+07`.
                 guard let offset = value.time.tzOffsetSeconds else { return "TIMESTAMP \(text)" }
+                guard acceptsZoneOffsets else { return SQLLiteral.mysqlZonedTimestamp(value) }
                 let sign = offset < 0 ? "-" : "+"
                 let hours = abs(offset) / 3_600
                 let minutes = (abs(offset) % 3_600) / 60
@@ -77,9 +82,10 @@ extension DBValue {
             let text = SQLLiteral.quoteString(value, dialect: dialect)
             switch dialect {
             case .postgresql: return "\(text)::jsonb"
-            case .mysql: return "CAST(\(text) AS JSON)"
+            // A JSON column parses the string it is given. `CAST(… AS JSON)` would say the
+            // same to MySQL, and is a syntax error to MariaDB, which has no JSON type.
             // SQLite's JSON functions take text; there is no JSON type to cast to.
-            case .sqlite: return text
+            case .mysql, .sqlite: return text
             }
         case let .array(items):
             // Arrays are PostgreSQL-only; elsewhere the closest honest rendering is a JSON array.
@@ -106,6 +112,29 @@ extension DBValue {
 
 /// Escaping rules for SQL string and byte literals.
 public enum SQLLiteral {
+    /// A zoned timestamp for a MySQL-dialect server that refuses an offset in a literal.
+    ///
+    /// MySQL 8.0.19+ reads `TIMESTAMP '… +07:00'` as that instant in the session's time
+    /// zone; this gives MariaDB the same value. The instant is taken to UTC exactly here
+    /// and handed to `CONVERT_TZ`, which both servers have. `CONVERT_TZ` converts only
+    /// inside the TIMESTAMP range and returns anything else unchanged, so an instant
+    /// outside it is written in UTC — on purpose, rather than left for the server to
+    /// return as an unconverted UTC value that looks local. `isWrittenInUTC` tells which.
+    public static func mysqlZonedTimestamp(_ value: DBTimestamp) -> String {
+        guard let utc = value.inUTC else { return "TIMESTAMP \(quoteString(value.serverText, dialect: .mysql))" }
+        let literal = "TIMESTAMP \(quoteString(utc.serverText, dialect: .mysql))"
+        if isWrittenInUTC(value) { return literal }
+        return "CONVERT_TZ(\(literal), '+00:00', @@session.time_zone)"
+    }
+
+    /// True for a zoned timestamp outside 1970-01-01 00:00:01 – 2038-01-19 03:14:07 UTC,
+    /// which `mysqlZonedTimestamp` writes in UTC.
+    public static func isWrittenInUTC(_ value: DBTimestamp) -> Bool {
+        guard let utc = value.inUTC else { return false }
+        let key = (utc.date.year, utc.date.month, utc.date.day, utc.time.hour, utc.time.minute, utc.time.second)
+        return key < (1970, 1, 1, 0, 0, 1) || key > (2038, 1, 19, 3, 14, 7)
+    }
+
     /// A PostgreSQL array literal — `{a,b,NULL}` — with each element quoted when it could
     /// otherwise be misread.
     ///

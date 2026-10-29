@@ -4,6 +4,34 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.23] - 2026-10-29
+
+### Added
+- **⌘B shows and hides the sidebar**, as in most editors. ⌘⌥S still works.
+
+### Fixed
+- **Refresh shows what someone else changed in a table.** A column added by another
+  person appeared only after the connection was closed and opened again. Refresh now
+  reads the table's columns again, rebuilds the grid when they changed, and updates the
+  Structure view and the sidebar too. If the table changed while you have unsaved edits,
+  Tinker asks you to commit or discard them first rather than throwing them away.
+- **Values are never shown under the wrong column.** After a column was added in the
+  middle of a table or dropped by someone else, the grid could show each value under its
+  neighbour's name. Such a page is now held back with a message asking for a Refresh.
+- **The command palette (⌘K) works while you type.** Searching for a command showed the
+  wrong row (typing “query builder” found nothing to pick), and the arrow keys did not
+  move through the results.
+- **MariaDB tables keep their defaults in the designer and Structure Sync.** A string
+  default such as `'abc'` was quoted a second time and an expression default was treated
+  as text. MySQL expression defaults are now written back correctly too, and a MySQL
+  string default of `'NULL'` is no longer mistaken for no default.
+- **MariaDB's own default collation can be chosen.** `utf8mb4_uca1400_ai_ci` and the
+  other UCA 14 collations of MariaDB 10.10 and later were missing from the list.
+- **Tables move from PostgreSQL to MariaDB.** A transfer stopped at the first
+  `timestamptz` or JSON value. Timestamps now arrive as the same moment in the server's
+  time zone; ones before 1970 or after 2038 arrive in UTC, and the transfer says so.
+  Structure Sync no longer reports MariaDB's `int(11)` as a change.
+
 ## [0.1.22] - 2026-10-27
 
 ### Changed

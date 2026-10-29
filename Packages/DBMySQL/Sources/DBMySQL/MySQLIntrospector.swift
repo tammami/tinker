@@ -146,6 +146,8 @@ public struct MySQLIntrospector: SchemaIntrospector {
             ORDER BY c.ORDINAL_POSITION
             """, [.string(table.database), .string(table.name)])
 
+        // MariaDB 10.2.7 changed what `COLUMN_DEFAULT` holds (see `defaultExpression`).
+        let quotesDefaultLiterals = version.flavor == .mariadb && version.isAtLeast(10, 2, 7)
         return result.rows.compactMap { row in
             guard let name = row[1].text else { return nil }
             let ordinal = Self.integer(row[0]).map(Int.init) ?? 0
@@ -160,7 +162,8 @@ public struct MySQLIntrospector: SchemaIntrospector {
                 nativeType: columnType,
                 kind: Self.kind(dataType: row[3].text ?? "", columnType: columnType, decoder: decoder),
                 isNullable: (row[4].text ?? "YES").uppercased() == "YES",
-                defaultExpression: Self.defaultExpression(row[5].text, extra: extra),
+                defaultExpression: Self.defaultExpression(
+                    row[5].text, extra: extra, quotesLiterals: quotesDefaultLiterals),
                 isPrimaryKey: (row[6].text ?? "").uppercased() == "PRI",
                 isAutoIncrement: extra.contains("auto_increment"),
                 isGenerated: !generated.isEmpty || extra.contains("generated"),
@@ -176,13 +179,56 @@ public struct MySQLIntrospector: SchemaIntrospector {
     /// default bare (`plain`, not `'plain'`) and an expression default without its
     /// parentheses, marking the latter `DEFAULT_GENERATED` in `EXTRA`. A number, NULL and
     /// `CURRENT_TIMESTAMP` stay as they are.
-    static func defaultExpression(_ raw: String?, extra: String) -> String? {
+    ///
+    /// MariaDB from 10.2.7 stores it differently, as `quotesLiterals` says: a literal is
+    /// already written as SQL (`'it''s'`, `5`, `b'101'`), a column whose default is NULL
+    /// holds the text `NULL` where MySQL holds no value at all, and anything else is an
+    /// expression, with no `DEFAULT_GENERATED` to mark it. Read the MySQL way, `'abc'`
+    /// was quoted a second time and `concat('a','b')` became a string.
+    static func defaultExpression(_ raw: String?, extra: String, quotesLiterals: Bool = false) -> String? {
         guard let raw else { return nil }
+        if quotesLiterals { return mariaDBDefaultExpression(raw) }
         let upper = raw.uppercased()
-        if upper == "NULL" || upper.hasPrefix("CURRENT_TIMESTAMP") || upper == "NOW()" { return raw }
-        if extra.contains("default_generated") { return raw.hasPrefix("(") ? raw : "(\(raw))" }
+        // `DEFAULT NULL` arrives as no value at all; the text NULL is the string 'NULL'.
+        if upper.hasPrefix("CURRENT_TIMESTAMP") || upper == "NOW()" { return raw }
+        if extra.contains("default_generated") {
+            // The expression's quotes come escaped (`concat(_utf8mb4\'a\')`), which is
+            // not SQL outside a string.
+            let expression = unescapedExpression(raw)
+            return expression.hasPrefix("(") ? expression : "(\(expression))"
+        }
         if Double(raw) != nil { return raw }
         return SQLLiteral.quoteString(raw, dialect: .mysql)
+    }
+
+    /// Undoes the backslash escaping `information_schema` puts on quotes and backslashes
+    /// in a MySQL expression default.
+    static func unescapedExpression(_ raw: String) -> String {
+        guard raw.contains("\\") else { return raw }
+        var result = ""
+        var iterator = raw.makeIterator()
+        while let character = iterator.next() {
+            if character == "\\", let next = iterator.next() {
+                if next == "'" || next == "\\" || next == "\"" {
+                    result.append(next)
+                } else {
+                    result.append(character)
+                    result.append(next)
+                }
+            } else {
+                result.append(character)
+            }
+        }
+        return result
+    }
+
+    private static func mariaDBDefaultExpression(_ raw: String) -> String? {
+        let upper = raw.uppercased()
+        // The same as no default, which is how MySQL and PostgreSQL report it.
+        if upper == "NULL" { return nil }
+        if raw.hasPrefix("'") || upper.hasPrefix("B'") || upper.hasPrefix("X'") || Double(raw) != nil { return raw }
+        if upper.hasPrefix("CURRENT_TIMESTAMP") || upper == "NOW()" { return raw }
+        return raw.hasPrefix("(") ? raw : "(\(raw))"
     }
 
     /// The value kind a declared type produces, from `information_schema` rather than a
@@ -526,12 +572,23 @@ extension MySQLIntrospector {
     }
 
     public func collations(in database: String) async throws -> [CollationInfo] {
-        let result = try await query(
+        // MariaDB 10.10 lists its UCA 14 collations — the server default among them — in
+        // COLLATIONS once, as `uca1400_ai_ci` with no character set. The names a column
+        // carries (`utf8mb4_uca1400_ai_ci`) are only in the applicability table, which
+        // also has every older collation under its own name.
+        let sql =
+            version.flavor == .mariadb && version.isAtLeast(10, 10)
+            ? """
+            SELECT FULL_COLLATION_NAME, CHARACTER_SET_NAME, IS_DEFAULT
+            FROM information_schema.COLLATION_CHARACTER_SET_APPLICABILITY
+            ORDER BY CHARACTER_SET_NAME, FULL_COLLATION_NAME
             """
+            : """
             SELECT COLLATION_NAME, CHARACTER_SET_NAME, IS_DEFAULT
             FROM information_schema.COLLATIONS
             ORDER BY CHARACTER_SET_NAME, COLLATION_NAME
-            """, [])
+            """
+        let result = try await query(sql, [])
         return result.rows.compactMap { row in
             guard let name = row[0].text else { return nil }
             return CollationInfo(

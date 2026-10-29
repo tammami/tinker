@@ -723,6 +723,50 @@ final class MySQLIntegrationTests: XCTestCase {
         }
     }
 
+    /// MySQL and MariaDB store `COLUMN_DEFAULT` differently; the introspector reads both to
+    /// the same default, one that can be written back as it was declared.
+    func testColumnDefaultsReadTheSameOnEveryServer() async throws {
+        try await withEachServer(dropping: ["tinker_defaults"]) { connection, server in
+            _ = try await connection.executeCollecting("DROP TABLE IF EXISTS tinker_defaults")
+            _ = try await connection.executeCollecting(
+                """
+                CREATE TABLE tinker_defaults (
+                    id int PRIMARY KEY,
+                    plain varchar(10),
+                    explicit_null varchar(10) DEFAULT NULL,
+                    quoted varchar(10) DEFAULT 'it''s',
+                    word varchar(10) DEFAULT 'NULL',
+                    number int DEFAULT 5,
+                    stamp timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+                    expression varchar(10) DEFAULT (concat('a', 'b'))
+                )
+                """)
+            let table = TableRef(schema: SchemaRef.mysql(server.database), name: "tinker_defaults")
+            let columns = try await connection.introspector.columns(of: table)
+            let defaults = Dictionary(uniqueKeysWithValues: columns.map { ($0.name, $0.defaultExpression) })
+            let label = server.redactedDescription
+            XCTAssertEqual(defaults["id"] ?? "absent", nil, label)
+            XCTAssertEqual(defaults["plain"] ?? "absent", nil, label)
+            XCTAssertEqual(defaults["explicit_null"] ?? "absent", nil, label)
+            XCTAssertEqual(defaults["quoted"], "'it''s'", label)
+            XCTAssertEqual(defaults["word"], "'NULL'", label)
+            XCTAssertEqual(defaults["number"], "5", label)
+            XCTAssertEqual(defaults["stamp"]??.uppercased().hasPrefix("CURRENT_TIMESTAMP"), true, label)
+            let expression = try XCTUnwrap(defaults["expression"] ?? nil, label)
+            XCTAssertTrue(expression.hasPrefix("(") && expression.hasSuffix(")"), "\(label): \(expression)")
+            XCTAssertTrue(expression.lowercased().contains("concat("), "\(label): \(expression)")
+
+            // Written back, each default is the one it was declared with.
+            _ = try await connection.executeCollecting("DROP TABLE IF EXISTS tinker_defaults")
+            _ = try await connection.executeCollecting(
+                "CREATE TABLE tinker_defaults (id int PRIMARY KEY, quoted varchar(10) DEFAULT \(defaults["quoted"]!!), "
+                    + "expression varchar(10) DEFAULT \(expression))")
+            _ = try await connection.executeCollecting("INSERT INTO tinker_defaults (id) VALUES (1)")
+            let row = try await connection.executeCollecting("SELECT quoted, expression FROM tinker_defaults")
+            XCTAssertEqual(row.rows.first?.map(\.text), ["it's", "ab"], label)
+        }
+    }
+
     func testColumnIntrospectionDetails() async throws {
         try await withEachServer { connection, server in
             let table = TableRef(schema: SchemaRef.mysql(server.database), name: "all_types")
@@ -869,6 +913,15 @@ final class MySQLIntegrationTests: XCTestCase {
                 collations.contains { $0.characterSet != nil },
                 "MySQL groups collations under a character set"
             )
+            // The server's own default is offered by the name a column carries: on MariaDB
+            // 10.10+ that is `utf8mb4_uca1400_ai_ci`, which COLLATIONS lists only as
+            // `uca1400_ai_ci`.
+            let serverDefault = try await connection.executeCollecting("SELECT @@collation_server").firstText
+            let names = Set(collations.map(\.name))
+            XCTAssertTrue(names.contains(serverDefault ?? ""), "\(serverDefault ?? "nil") is offered")
+            let varchar = try await introspector.columns(of: table("all_types")).first { $0.name == "c_varchar" }
+            let columnCollation = try XCTUnwrap(varchar?.collation)
+            XCTAssertTrue(names.contains(columnCollation), "\(columnCollation) is offered")
         }
     }
 }
@@ -896,6 +949,42 @@ final class MySQLValueDecoderTests: XCTestCase {
             ["it's", "ok"]
         )
         XCTAssertNil(MySQLIntrospector.enumLabels(from: "varchar(255)", dataType: "varchar"))
+    }
+
+    /// MySQL keeps a string default bare and marks an expression `DEFAULT_GENERATED`.
+    func testMySQLDefaultsAreQuotedAsTheyAreWrittenBack() {
+        func read(_ raw: String?, _ extra: String = "") -> String? {
+            MySQLIntrospector.defaultExpression(raw, extra: extra)
+        }
+        XCTAssertNil(read(nil))
+        XCTAssertEqual(read("it's"), "'it''s'")
+        XCTAssertEqual(read("5"), "5")
+        XCTAssertEqual(read("CURRENT_TIMESTAMP", "default_generated"), "CURRENT_TIMESTAMP")
+        XCTAssertEqual(read("concat('a','b')", "default_generated"), "(concat('a','b'))")
+        // `DEFAULT NULL` arrives as no value; the text is the string.
+        XCTAssertEqual(read("NULL"), "'NULL'")
+        // An expression's quotes come escaped, which is not SQL outside a string.
+        XCTAssertEqual(
+            read(#"concat(_utf8mb4\'a\',_utf8mb4\'b\')"#, "default_generated"),
+            "(concat(_utf8mb4'a',_utf8mb4'b'))")
+    }
+
+    /// MariaDB (10.2.7+) already writes a literal as SQL, says NULL in text, and does not
+    /// mark an expression: each comes back once, unquoted again, and NULL is no default.
+    func testMariaDBDefaultsAreTakenAsWritten() {
+        func read(_ raw: String?) -> String? {
+            MySQLIntrospector.defaultExpression(raw, extra: "", quotesLiterals: true)
+        }
+        XCTAssertNil(read(nil))
+        XCTAssertNil(read("NULL"), "a nullable column with no default")
+        XCTAssertEqual(read("'it''s'"), "'it''s'")
+        XCTAssertEqual(read("'NULL'"), "'NULL'", "the string NULL is a literal")
+        XCTAssertEqual(read("5"), "5")
+        XCTAssertEqual(read("-1.5"), "-1.5")
+        XCTAssertEqual(read("b'101'"), "b'101'")
+        XCTAssertEqual(read("current_timestamp()"), "current_timestamp()")
+        XCTAssertEqual(read("concat('a','b')"), "(concat('a','b'))")
+        XCTAssertEqual(read("(1 + 2)"), "(1 + 2)")
     }
 
     func testDeclaredTypeToKind() {

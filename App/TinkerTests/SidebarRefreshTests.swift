@@ -129,6 +129,24 @@ final class SidebarRefreshTests: XCTestCase {
         XCTAssertFalse(sidebar.isOpened(id), "Disconnect takes the chevron away")
     }
 
+    /// A Tables folder opened while the search shows only some of its tables still holds
+    /// all of them once the search is cleared. The filter hands the row its own copy with
+    /// just the matches, and that copy used to be cached as the folder's contents.
+    func testAFolderOpenedWhileFilteringKeepsEveryTable() async throws {
+        let connection = try XCTUnwrap(sidebar.find(id: config.id.uuidString))
+        await sidebar.expand(connection)
+        let database = try XCTUnwrap(sidebar.find(id: connection.id)?.children?.first)
+        await sidebar.expand(database)
+        var filtered = try XCTUnwrap(
+            sidebar.find(id: database.id)?.children?.first { if case .tableFolder = $0.kind { true } else { false } })
+        filtered.children = filtered.children?.filter { $0.title == "beta" }
+        await sidebar.expand(filtered)
+        XCTAssertEqual(tables(under: filtered.id), ["alpha", "beta", "gamma"])
+        sidebar.collapse(filtered.id)
+        await sidebar.expand(filtered)
+        XCTAssertEqual(tables(under: filtered.id), ["alpha", "beta", "gamma"])
+    }
+
     /// Opening and closing still work during a refresh and after one.
     func testRowsStillOpenAndCloseAroundARefresh() async throws {
         let ids = try await openToTables()

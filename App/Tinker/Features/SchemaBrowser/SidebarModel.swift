@@ -253,9 +253,14 @@ public final class SidebarModel {
     public func isOpened(_ connectionID: UUID) -> Bool { openedConnections.contains(connectionID) }
 
     /// Loads a node's children if they have not been read yet.
+    ///
+    /// The row handed in may be the search filter's copy, which carries only the children
+    /// that matched; the tree's own row is what gets loaded. A Tables folder opened while
+    /// filtering otherwise cached its two matches as all it held, and kept showing just
+    /// those once the search was cleared.
     public func loadChildrenIfNeeded(_ item: SidebarItem) async {
         guard childCache[item.id] == nil || stale.contains(item.id), !loading.contains(item.id) else { return }
-        await loadChildren(of: item)
+        await loadChildren(of: find(id: item.id) ?? item)
     }
 
     /// Expands a node, loading its children the first time.

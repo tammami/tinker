@@ -4,6 +4,14 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.24] - 2026-10-30
+
+### Fixed
+- **Clearing the sidebar search shows every table again.** A Tables folder opened while
+  the search was narrowing it kept showing only the tables that had matched, even after
+  the search was cleared, while its badge still counted them all. Closing and reopening
+  the connection was the only way back.
+
 ## [0.1.23] - 2026-10-29
 
 ### Added

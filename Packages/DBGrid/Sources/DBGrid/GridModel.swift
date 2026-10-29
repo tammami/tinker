@@ -17,6 +17,16 @@ public enum GridSource: Sendable, Hashable {
     case query(String)
 }
 
+/// A table's page came back with columns other than the ones the grid was built with:
+/// the table was altered on the server since its columns were read.
+public struct GridColumnsChangedError: Error, Sendable, CustomStringConvertible {
+    public init() {}
+
+    public var description: String {
+        "The table's columns changed on the server since it was opened. Refresh to read them again."
+    }
+}
+
 /// A page the grid asked for.
 public struct PageRequest: Sendable, Hashable {
     public let page: Int
@@ -410,6 +420,16 @@ public final class GridModel {
             // win, so the rows could be sorted by one column while the header pointed at
             // another. Only the load of the current generation may store anything.
             guard generation == loadGeneration else { return }
+            // A table's page is `SELECT *`, but its columns were read when the tab opened.
+            // After someone else adds, drops or reorders one, each value would be drawn —
+            // and edited, and used as an original value in a WHERE — under its neighbour's
+            // name. Such a page is refused until the columns are read again.
+            if case .table = source, !columns.isEmpty, !loaded.columns.isEmpty,
+                loaded.columns.map(\.name) != columns.map(\.name)
+            {
+                lastError = GridColumnsChangedError()
+                return
+            }
             if columns.isEmpty { columns = loaded.columns }
             buffer.store(page: page, rows: loaded.rows)
             let end = page * buffer.pageSize + loaded.rows.count

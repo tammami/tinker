@@ -292,12 +292,39 @@ public final class TableTabController: DataGridDelegate, WriteLogOwner {
 
     // MARK: - Commands
 
+    /// Reads the table again: its columns as well as its rows.
+    ///
+    /// Someone else may have altered the table since the tab opened, so nothing cached
+    /// about it is trusted. When the columns changed the grid is built again from them;
+    /// with edits still pending that would throw the edits away, so the rows on screen
+    /// stay and the user is asked to commit or discard first.
     public func refresh() async {
-        guard let model else { return }
-        await session?.invalidateIntrospection(.rowCount(table))
+        guard let model, let session else { return }
+        await session.invalidateIntrospection(for: table)
+        let table = table
+        let columns: [ColumnInfo]
+        do {
+            columns = try await session.introspection(.columns(table)) { try await $0.columns(of: table) }
+        } catch {
+            errorText = (error as? DBError)?.errorDescription ?? String(describing: error)
+            return
+        }
+        if columns != columnsInfo {
+            guard model.edits.isEmpty else {
+                errorText =
+                    "The table's columns changed on the server. Commit or discard the pending changes, then refresh again to load them."
+                return
+            }
+            errorText = nil
+            await start()
+            if let structureController { await structureController.load(force: true, keepingEdits: true) }
+            return
+        }
         await model.reload()
+        surfaceLoadError()
         bumpRevision()
         updateStatus()
+        if let structureController { await structureController.load(force: true, keepingEdits: true) }
     }
 
     /// The conditions the server sees: the filter rows plus the quick search, if any.

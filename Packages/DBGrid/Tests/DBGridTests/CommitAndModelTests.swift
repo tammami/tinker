@@ -317,6 +317,41 @@ final class GridModelTests: XCTestCase {
         XCTAssertFalse(model.isExhausted)
     }
 
+    /// Someone added a column after the tab read the table's shape: the page's values no
+    /// longer line up with the grid's columns, so they are refused rather than drawn (and
+    /// edited) under the wrong names.
+    func testATablePageWhoseColumnsChangedIsRefused() async {
+        let loader = FixtureLoader(totalRows: 10)
+        let model = GridModel(
+            source: .table(table),
+            dialect: .postgresql,
+            loader: loader,
+            columns: [
+                ColumnMeta(id: 0, name: "id", nativeTypeName: "int4", kind: .int, isPrimaryKey: true),
+                ColumnMeta(id: 1, name: "email", nativeTypeName: "text", kind: .string),
+                ColumnMeta(id: 2, name: "name", nativeTypeName: "text", kind: .string),
+            ],
+            identityColumns: ["id"],
+            identityKind: .int
+        )
+        await model.load(page: 0)
+        XCTAssertTrue(model.lastError is GridColumnsChangedError)
+        XCTAssertEqual(model.rowCount, 0, "no row is stored under columns it does not have")
+        XCTAssertEqual(model.columns.map(\.name), ["id", "email", "name"])
+    }
+
+    /// The columns the tab read are the ones the server sends: the page loads as before.
+    func testATablePageWithTheSameColumnsLoads() async {
+        let loader = FixtureLoader(totalRows: 10)
+        let model = GridModel(
+            source: .table(table), dialect: .postgresql, loader: loader,
+            columns: FixtureLoader.columns, identityColumns: ["id"], identityKind: .int
+        )
+        await model.load(page: 0)
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(model.rowCount, 10)
+    }
+
     func testAShortPageMarksTheResultExhausted() async {
         let (model, _) = makeModel(rows: 1_500)
         await model.load(page: 0)

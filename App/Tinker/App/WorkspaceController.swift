@@ -597,7 +597,13 @@ public final class WorkspaceController {
 
     public func refresh() {
         if let controller = activeTableController {
-            Task { await controller.refresh() }
+            // The tree too: a table someone else created belongs in it as much as their
+            // new column belongs in the grid.
+            let connectionID = controller.connectionID
+            Task {
+                await controller.refresh()
+                await sidebar.refresh(connectionID: connectionID)
+            }
             return
         }
         if let tab = workspace.selectedTab, case .redis = tab.kind, let redis = redisControllers[tab.id] {

@@ -348,6 +348,8 @@ Model types (`TableInfo`, `ColumnInfo` etc.) carry: name, kind, comment, and for
 
 Introspection results are cached per session with explicit invalidation (user "Refresh", or after the app itself executes DDL). Never auto-refresh on a timer.
 
+Amended by ADR-0071: Refresh on a table tab drops everything cached about that table and reads its columns again, so a column someone else added, dropped or reordered appears without reconnecting; the grid is rebuilt from the new columns (pending edits first have to be committed or discarded). A page whose columns no longer match the grid's is refused with a message asking for a Refresh, never drawn under the wrong names.
+
 A cache lookup must distinguish "not read yet" from "read, and the answer was nothing". Several of these reads return an optional, and a cache that cannot tell the two apart silently answers every one of them with `nil` and never calls the driver.
 
 ---
@@ -415,7 +417,7 @@ One `NSWindow` per workspace. A workspace contains:
 └──────────┴────────────────────────────────────────────────────┘
 ```
 
-- Sidebar: `NavigationSplitView` with SwiftUI `List`/`OutlineGroup`. Collapsible with `⌘⌥S`.
+- Sidebar: `NavigationSplitView` with SwiftUI `List`/`OutlineGroup`. Collapsible with `⌘B` (`⌘⌥S` also works; ADR-0072).
 - Tabs: custom SwiftUI tab bar (not `NSTabView`). Drag reorder, middle-click close, `⌘W` closes tab, `⌘⇧W` closes window, `⌘1–9` selects tab, `⌘⇧]`/`⌘⇧[` cycles.
 - Each tab is either a **Table tab** (data grid for one table/view) or a **Query tab** (editor + results). Tabs belong to one connection; the tab bar shows the connection's color as a stripe.
 - Multiple windows: `⌘N` opens a new workspace. Connection sessions are shared across windows (one session per config app-wide).
@@ -423,7 +425,7 @@ One `NSWindow` per workspace. A workspace contains:
 
 ### 10.2 Keyboard shortcuts (complete list, must all work)
 
-Amended by ADR-0041: Run is ⌘R, Run All ⌘⌥R, Run Selected ⌘⌃R, Refresh F5, Export ⌘⌥E and Copy as INSERT ⌘⌃C, for the reasons recorded there. Every other row below is as the app has it.
+Amended by ADR-0041: Run is ⌘R, Run All ⌘⌥R, Run Selected ⌘⌃R, Refresh F5, Export ⌘⌥E and Copy as INSERT ⌘⌃C, for the reasons recorded there. Amended by ADR-0072: Toggle sidebar is ⌘B, with ⌘⌥S kept. Every other row below is as the app has it.
 
 | Action | Shortcut |
 |---|---|
@@ -438,7 +440,7 @@ Amended by ADR-0041: Run is ⌘R, Run All ⌘⌥R, Run Selected ⌘⌃R, Refresh
 | Find in editor / grid | ⌘F |
 | Find & replace in editor | ⌘⌥F |
 | Filter grid | ⌘⇧F |
-| Toggle sidebar | ⌘⌥S |
+| Toggle sidebar | ⌘B (also ⌘⌥S) |
 | New window | ⌘N |
 | Close tab / window | ⌘W / ⌘⇧W |
 | Save query to file | ⌘S |

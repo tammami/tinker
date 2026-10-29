@@ -1099,3 +1099,50 @@ connection.
 until one is written, the CHANGELOG entries for 0.1.15 and 0.1.19 and the `DBRedisTests`
 suite are the record of what Redis support promises. The reason Redis was brought forward
 ahead of v0.2 is not written down anywhere in the repository and is not guessed at here.
+
+## ADR-0071 — Refresh reads a table's shape again, and a grid never outlives it
+Date: 2026-10-29
+
+**Context.** Two people had the same database open. One added a column and changed a
+row; the other pressed Refresh and saw neither until they disconnected. A table tab read
+its columns once, when it opened, and Refresh only re-ran the page query: the cached
+columns were never dropped. Worse, the page query is `SELECT *` while the grid kept the
+columns it was built with, so after a column was added in the middle (`ADD … AFTER x` on
+MySQL) or dropped, every value was drawn under its neighbour's name — and an edit made
+there, with that value as its original in the WHERE, would have gone to the wrong column.
+
+**Decision.** Refresh on a table tab drops everything the session cached about the table
+and reads its columns again. When they differ from the grid's, the grid is built again
+from them (filter and sort are kept; the page returns to the first). With edits still
+pending, the grid is left as it is and the user is asked to commit or discard first,
+since rebuilding would throw the edits away. The Structure view is re-read with it, and
+the toolbar's Refresh also refreshes the sidebar tree for the connection. Independently,
+`GridModel` refuses a table page whose column names are not the grid's, and shows
+"The table's columns changed on the server since it was opened. Refresh to read them
+again." instead of the rows. That text is the app's own, not a server message.
+
+**Rejected.** *Selecting an explicit column list instead of `*`*: it keeps the values
+aligned but hides the change rather than showing it, and starts listing MySQL's INVISIBLE
+columns that `*` leaves out. *Re-reading the columns before every page*: a catalogue
+query per page for a change that is rare and that Refresh now handles.
+
+**Consequences.** Refresh on a table tab costs one columns read more than before. A query
+tab's Refresh still only refreshes the tree; its statement is re-run with ⌘R, never by
+Refresh, since it may write. `GridModelTests.testATablePageWhoseColumnsChangedIsRefused`
+and `testATablePageWithTheSameColumnsLoads` cover the guard.
+
+## ADR-0072 — ⌘B toggles the sidebar
+Date: 2026-10-29
+
+**Context.** The user asked for ⌘B, the binding most editors use for the sidebar.
+SPEC §10.1–10.2 named ⌘⌥S. ⌘B is Bold in rich-text editing, but the SQL editor is plain
+text and has no Format menu, so nothing in the app answers it.
+
+**Decision.** View › Toggle Sidebar is ⌘B, as shown in the menu, the command palette and
+Help. ⌘⌥S keeps working through a hidden button in the workspace window, so existing
+habits do not break; the menu shows only ⌘B (one item per action). The split view's own
+toolbar button now updates the same flag, so ⌘B after hiding the sidebar from the toolbar
+shows it in one press rather than two.
+
+**Consequences.** SPEC §10.1 and §10.2 are amended. ⌘B is no longer free for anything
+else in the app.

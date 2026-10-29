@@ -120,8 +120,8 @@ extension SyncIntegrationTests {
         let sqlite = try TestEnvironment.servers(for: .sqlite)
         if !sqlite.isEmpty { try await SQLiteFixtures.prepare() }
         let servers =
-            (try TestEnvironment.primaryServer(for: .postgresql))
-            + (try TestEnvironment.primaryServer(for: .mysql)) + sqlite
+            (try TestEnvironment.servers(for: .postgresql))
+            + (try TestEnvironment.servers(for: .mysql)) + sqlite
         var sessions: [(ConnectionSession, TestServer)] = []
         for server in servers {
             let config = ConnectionConfig(
@@ -169,21 +169,43 @@ extension SyncIntegrationTests {
                     let selection = DumpSelection(schema: pair.source.server.fixtureSchema, tables: [allTypes])
                     let renaming = DumpRenaming(
                         schema: pair.target.server.fixtureSchema, tableNames: ["all_types": "all_types_xfer"])
+                    // MariaDB's json_valid() refuses a document nested deeper than 32
+                    // levels, and the PostgreSQL and SQLite fixtures nest one 50 deep. One
+                    // row per statement lets every other row cross; the refusal is then
+                    // checked to be that document's and nothing else.
+                    let targetFlavor = await target.serverVersion.flavor
+                    let mariaDB = targetDialect == .mysql && targetFlavor == .mariadb
+                    var options = DumpOptions.preferred(for: targetDialect)
+                    var execution = ScriptExecutionOptions()
+                    if mariaDB {
+                        options.rowsPerInsert = 1
+                        execution.stopOnError = false
+                    }
                     let outcome = try await TransferRunner.run(
                         selection, from: source, to: target, dialect: sourceDialect, targetDialect: targetDialect,
-                        options: .preferred(for: targetDialect), renaming: renaming
+                        options: options, renaming: renaming, execution: execution
                     ) { _ in }
-                    XCTAssertTrue(
-                        outcome.execution.failures.isEmpty,
-                        "\(label): " + outcome.execution.failures.map(\.description).joined(separator: "\n"))
+                    let refused = outcome.execution.failures
+                    if mariaDB {
+                        XCTAssertLessThanOrEqual(refused.count, 1, "\(label): only the deep document is refused")
+                        XCTAssertTrue(
+                            refused.allSatisfy { $0.message.contains("c_json") },
+                            "\(label): " + refused.map(\.description).joined(separator: "\n"))
+                    } else {
+                        XCTAssertTrue(
+                            refused.isEmpty, "\(label): " + refused.map(\.description).joined(separator: "\n"))
+                    }
 
                     let sourceRows = try await source.executeCollecting(
-                        "SELECT c_bool, c_text, c_varchar, c_date, c_json FROM all_types ORDER BY id")
+                        "SELECT c_bool, c_text, c_varchar, c_date, c_json, id FROM all_types ORDER BY id")
                     let targetRows = try await target.executeCollecting(
-                        "SELECT c_bool, c_text, c_varchar, c_date, c_json FROM \(Identifier.qualified(copy, dialect: targetDialect)) ORDER BY id"
+                        "SELECT c_bool, c_text, c_varchar, c_date, c_json, id FROM \(Identifier.qualified(copy, dialect: targetDialect)) ORDER BY id"
                     )
-                    XCTAssertEqual(targetRows.rows.count, sourceRows.rows.count, "\(label): every row crosses")
-                    for (before, after) in zip(sourceRows.rows, targetRows.rows) {
+                    XCTAssertEqual(
+                        targetRows.rows.count, sourceRows.rows.count - refused.count, "\(label): every row crosses")
+                    let crossed = Set(targetRows.rows.compactMap { $0[5].text })
+                    let compared = sourceRows.rows.filter { crossed.contains($0[5].text ?? "") }
+                    for (before, after) in zip(compared, targetRows.rows) {
                         // Text is text everywhere; the rest is compared as "value or NULL"
                         // plus its text where the engines agree on a canonical form.
                         XCTAssertEqual(after[1], before[1], "\(label): c_text")

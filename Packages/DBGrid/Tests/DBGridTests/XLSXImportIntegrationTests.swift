@@ -10,7 +10,7 @@ import XCTest
 /// CSV and its header was the zip's binary.
 extension ScriptTransferIntegrationTests {
     func testRowsExportedToExcelImportBackOnEveryEngine() async throws {
-        let servers = try await everyServer()
+        let servers = try await allServers()
         var reached: [String] = []
         try await withSession(on: servers) { session, server, dialect in
             _ = try await session.connect()
@@ -80,7 +80,7 @@ extension ScriptTransferIntegrationTests {
     /// every engine, with the table's columns choosing their file column — one file
     /// column filling two of them.
     func testTextInAnyScriptSurvivesExcelOnEveryEngine() async throws {
-        let servers = try await everyServer()
+        let servers = try await allServers()
         var reached: [String] = []
         let texts = [
             "Café Münster", "日本語のテキスト", "Ωμέγα", "emoji 🎉 selesai", "Rp 1.500,00", "\"dikutip\" & <tag> 'apos'",

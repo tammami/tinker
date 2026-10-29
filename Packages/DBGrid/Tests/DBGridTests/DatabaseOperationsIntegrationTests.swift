@@ -11,7 +11,7 @@ import XCTest
 /// never for syntax — and that the refusal comes back verbatim.
 extension ScriptTransferIntegrationTests {
     func testDatabaseStatementsParseOnEveryServer() async throws {
-        let servers = try await everyServer().filter { $0.engine != .sqlite }
+        let servers = try await allServers().filter { $0.engine != .sqlite }
         guard !servers.isEmpty else { throw XCTSkip("no PostgreSQL or MySQL server is configured") }
         var reached = 0
         try await withSession(on: servers) { session, server, dialect in

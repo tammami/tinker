@@ -22,28 +22,20 @@ final class ScriptTransferIntegrationTests: XCTestCase {
         DriverRegistry([.postgresql: PostgresDriver.self, .mysql: MySQLDriver.self, .sqlite: SQLiteDriver.self])
     }
 
+    /// Every configured server of every engine, MariaDB included beside MySQL: the
+    /// differences between those two are silent ones (ADR-0073), and only a run against
+    /// both finds them.
     func allServers() async throws -> [TestServer] {
         let sqlite = try TestEnvironment.servers(for: .sqlite)
         if !sqlite.isEmpty { try await SQLiteFixtures.prepare() }
         let all =
-            (try TestEnvironment.primaryServer(for: .postgresql))
-            + (try TestEnvironment.primaryServer(for: .mysql)) + sqlite
+            (try TestEnvironment.servers(for: .postgresql))
+            + (try TestEnvironment.servers(for: .mysql)) + sqlite
         if all.isEmpty { throw XCTSkip("no test server is configured and SQLite is disabled") }
         return all
     }
 
-    /// Every server of every engine, MariaDB included: for a check that is about what each
-    /// server hands back rather than about pairs of engines.
-    func everyServer() async throws -> [TestServer] {
-        let sqlite = try TestEnvironment.servers(for: .sqlite)
-        if !sqlite.isEmpty { try await SQLiteFixtures.prepare() }
-        let all =
-            (try TestEnvironment.servers(for: .postgresql)) + (try TestEnvironment.servers(for: .mysql)) + sqlite
-        if all.isEmpty { throw XCTSkip("no test server is configured and SQLite is disabled") }
-        return all
-    }
-
-    /// Runs `body` on a connected session per server: by default one server per engine.
+    /// Runs `body` on a connected session per server: by default every configured one.
     /// `withoutDatabase` opens the connection with no default database, the way a MySQL
     /// connection that browses every database on the server is set up.
     func withSession(
@@ -530,11 +522,14 @@ final class ScriptTransferIntegrationTests: XCTestCase {
                         "INSERT INTO xfer_big SELECT g, 'row ' || g, g * 1.5 FROM generate_series(1, \(rows)) g",
                     ], on: connection)
             case .mysql:
+                // MariaDB spells this one `max_recursive_iterations`, and knows no other.
+                let recursion =
+                    await connection.serverVersion.flavor == .mariadb
+                    ? "max_recursive_iterations" : "cte_max_recursion_depth"
                 try await run(
                     [
                         "CREATE TABLE xfer_big (id int PRIMARY KEY, label varchar(40), amount decimal(10,2))",
-                        // MariaDB spells this one `max_recursive_iterations`.
-                        "SET SESSION cte_max_recursion_depth = \(rows + 10)",
+                        "SET SESSION \(recursion) = \(rows + 10)",
                         "INSERT INTO xfer_big WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < \(rows)) SELECT n, CONCAT('row ', n), n * 1.5 FROM s",
                     ], on: connection)
             case .sqlite:

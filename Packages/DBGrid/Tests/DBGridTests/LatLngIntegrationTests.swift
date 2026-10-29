@@ -9,7 +9,7 @@ import XCTest
 /// (`testenv/fixtures/*/005_latlng.sql`).
 extension ScriptTransferIntegrationTests {
     func testLatitudeLongitudeColumnsAreFoundAndPlacedOnEveryEngine() async throws {
-        let servers = try await everyServer()
+        let servers = try await allServers()
         var engines: [String] = []
         try await withSession(on: servers) { session, server, dialect in
             _ = try await session.connect()

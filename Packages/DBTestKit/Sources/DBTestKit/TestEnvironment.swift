@@ -158,19 +158,6 @@ public enum TestEnvironment {
         return servers
     }
 
-    /// Just the first server of an engine.
-    ///
-    /// The driver suites run against every server configured for their engine, which is how
-    /// MariaDB earns its coverage. The cross-engine suites pair one server per engine
-    /// instead: a second MySQL-family server there multiplies the pairings without testing
-    /// anything the driver suites have not already covered.
-    public static func primaryServer(
-        for engine: TestEngine,
-        environment: [String: String] = ProcessInfo.processInfo.environment
-    ) throws -> [TestServer] {
-        Array(try servers(for: engine, environment: environment).prefix(1))
-    }
-
     /// The SQLite database every suite in this process shares, under the temporary
     /// directory. Created empty on first use; the suites load the fixtures into it.
     public static let sqliteDatabaseURL: URL = {

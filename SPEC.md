@@ -856,6 +856,7 @@ Each phase lists deliverables and acceptance criteria. Do not reorder.
 - The app must require **zero** UI code changes to support MySQL. If a UI change is needed, the abstraction leaked; fix it in DBCore/DBSQL and record in DECISIONS.md.
 - Tests: mirror the PG suite against the local MySQL (`TINKER_TEST_MYSQL_URL`) and any URLs in `TINKER_TEST_MYSQL_URLS` (intended for a MariaDB 10.11+ and a MySQL 5.7 server if you have them), with special attention to caching_sha2 auth (TLS on and off), unsigned BIGINT max, DECIMAL precision, DATETIME vs TIMESTAMP, zero dates under permissive sql_mode.
 - Known gap: without a MySQL 5.7 and a MariaDB server in `TINKER_TEST_MYSQL_URLS`, `mysql_native_password` and MariaDB catalog differences are untested. Record this in `PROGRESS.md` at the end of the phase; do not claim coverage that did not run.
+- Amended by ADR-0073: the grid, DDL, transfer and synchronisation suites in `DBGridTests` also run against every MySQL-family server configured, not only the first; five MariaDB differences had gone unnoticed while only the driver suite covered it.
 - Accept: identical feature matrix to PG; MySQL 8.4 default install connects with no user configuration beyond host/user/password.
 
 ### Phase 7 — Release hardening (1 week)

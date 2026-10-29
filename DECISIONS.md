@@ -1146,3 +1146,70 @@ shows it in one press rather than two.
 
 **Consequences.** SPEC §10.1 and §10.2 are amended. ⌘B is no longer free for anything
 else in the app.
+
+## ADR-0073 — MariaDB is read as MariaDB, and tested beyond the driver
+Date: 2026-10-29
+
+**Context.** With the local MySQL down, the `DBGridTests` cross-engine suites fell back to
+MariaDB 11.8 and failed in ways nothing had reported, because those suites only ever took
+the first MySQL-family server (`TestEnvironment.primaryServer`), on the reasoning that a
+second one "tests nothing the driver suites have not already covered". It did. Five
+differences, each silent on MySQL:
+
+1. `information_schema.COLUMN_DEFAULT`. MariaDB (10.2.7+) stores a literal already written
+   as SQL (`'it''s'`), the text `NULL` for a nullable column without a default, and an
+   expression bare with no `DEFAULT_GENERATED`. Read the MySQL way, string defaults were
+   quoted twice and expressions became strings — in the designer and Structure Sync.
+2. MariaDB refuses a zone offset in a datetime literal, so PostgreSQL `timestamptz` rows
+   could not be transferred to it at all.
+3. `CAST(… AS JSON)` in a literal is a syntax error on MariaDB, which has no JSON type.
+4. From 10.10, COLLATIONS lists the UCA 14 collations — the server default
+   `utf8mb4_uca1400_ai_ci` among them — only as `uca1400_ai_ci`; the designer could not
+   offer the default and Structure Sync dropped it as unknown.
+5. MariaDB still reports an integer display width (`int(11)`), so a table created from
+   PostgreSQL compared as altered.
+
+The same new cross-server test also showed two MySQL faults in the default reader: the
+text `NULL` is the string `'NULL'` there (MySQL reports `DEFAULT NULL` as no value), and
+an expression default's quotes arrive backslash-escaped, which written back is a syntax
+error.
+
+**Decision.**
+- `MySQLIntrospector.defaultExpression` takes MariaDB's format when the server is MariaDB
+  10.2.7+, and unescapes a MySQL expression default. `collations(in:)` reads
+  `COLLATION_CHARACTER_SET_APPLICABILITY.FULL_COLLATION_NAME` on MariaDB 10.10+.
+- A zoned timestamp for a server that refuses offsets (MariaDB, MySQL before 8.0.19, as
+  `TransferRunner` reads from the target's version) is taken to UTC by integer calendar
+  arithmetic (`DBTimestamp.inUTC`, never `Date`) and written as
+  `CONVERT_TZ(TIMESTAMP '<utc>', '+00:00', @@session.time_zone)` — the value MySQL 8.0.19+
+  stores for the offset literal, checked on both servers. MySQL 8.0.19+ still gets the
+  offset literal, unchanged.
+- `CONVERT_TZ` converts only inside the TIMESTAMP range and silently returns anything
+  else unconverted. An instant outside 1970-01-01 00:00:01 – 2038-01-19 03:14:07 UTC is
+  therefore written in UTC on purpose, and the transfer says so in its notes for that
+  table, rather than letting the server store an unconverted UTC value that reads as
+  local time.
+- A JSON value is written to the MySQL dialect as a plain string literal, which a JSON
+  column parses on both servers; bound parameters already sent it that way.
+- `SchemaTranslator.comparable` drops an integer display width, keeping `tinyint(1)`.
+- `TestEnvironment.primaryServer` is removed; every `DBGridTests` suite takes every
+  configured server, MariaDB beside MySQL.
+
+**Rejected.** *`CONVERT_TZ` for every zoned timestamp*: wrong without a word for dates
+before 1970. *Dropping the offset and keeping the source's wall-clock text*: changes what
+MySQL users have been getting since cross-engine transfer shipped. *A MariaDB flag in
+`SQLDialect`*: ~90 exhaustive switches for what is a property of one server, read from its
+version where it matters.
+
+**Consequences.** `DBGridTests` takes about 40 s longer. PostgreSQL's 50-deep JSON
+document cannot enter a MariaDB JSON column (`json_valid()` stops at 32 levels); the
+transfer reports MariaDB's refusal verbatim, and `testAllTypesTransfersAcrossEngines`
+expects exactly that refusal for a MariaDB target. Tests:
+`MySQLValueDecoderTests.testMySQLDefaultsAreQuotedAsTheyAreWrittenBack`,
+`testMariaDBDefaultsAreTakenAsWritten`,
+`MySQLIntegrationTests.testColumnDefaultsReadTheSameOnEveryServer` and the collation
+checks in `testDesignerReadsCheckConstraintsTriggersAndPartitioning` (both servers);
+`CrossEngineLiteralTests.testAZonedTimestampIsTakenToUTCExactly`,
+`testAZonedTimestampForMariaDBGoesThroughConvertTZ`;
+`SchemaTranslatorTests.testAnIntegerDisplayWidthIsNotComparedAcrossEngines`; and the
+cross-engine, sync and transfer suites now on MariaDB.

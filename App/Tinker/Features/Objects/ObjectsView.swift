@@ -149,6 +149,28 @@ public final class ObjectsController {
         return filtered.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    /// Whether the events section shows under the current filter: its rows, or the
+    /// warning that says why there are none.
+    public var showsEvents: Bool {
+        guard kindFilter == .events || kindFilter == .all else { return false }
+        return !visibleEvents.isEmpty || schedulerWarning != nil
+    }
+
+    /// Nothing at all to list under the current filter and search.
+    public var isEmpty: Bool { visible.isEmpty && visibleRoutines.isEmpty && !showsEvents }
+
+    /// The status bar's count of what is listed; a kind with none is left out, so the
+    /// Events filter does not read "0 objects, 7 events".
+    static func summary(objects: Int, routines: Int, events: Int) -> String {
+        func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }
+        let parts = [
+            objects > 0 ? count(objects, "object") : nil,
+            routines > 0 ? count(routines, "function") : nil,
+            events > 0 ? count(events, "event") : nil,
+        ].compactMap { $0 }
+        return parts.isEmpty ? count(0, "object") : parts.joined(separator: ", ")
+    }
+
     /// Events is not offered where it could only ever be empty.
     public var kindFilters: [KindFilter] {
         dialect.hasScheduledEvents ? KindFilter.allCases : KindFilter.allCases.filter { $0 != .events }
@@ -241,7 +263,7 @@ public struct ObjectsView: View {
                 Divider()
             }
 
-            if controller.visible.isEmpty, controller.visibleRoutines.isEmpty {
+            if controller.isEmpty {
                 EmptyStateView(
                     icon: controller.isLoading ? Icon.refresh : Icon.objects,
                     title: controller.isLoading ? "Reading the catalog…" : "Nothing here",
@@ -253,13 +275,11 @@ public struct ObjectsView: View {
 
             Divider()
             StatusBarView {
-                let tables = controller.visible.count
-                let routines = controller.visibleRoutines.count
-                let events = controller.visibleEvents.count
                 Text(
-                    "\(tables) object\(tables == 1 ? "" : "s")"
-                        + (routines > 0 ? ", \(routines) function\(routines == 1 ? "" : "s")" : "")
-                        + (events > 0 ? ", \(events) event\(events == 1 ? "" : "s")" : "")
+                    ObjectsController.summary(
+                        objects: controller.visible.count,
+                        routines: controller.visibleRoutines.count,
+                        events: controller.visibleEvents.count)
                 )
                 .monospacedDigit()
                 Spacer()
@@ -293,7 +313,7 @@ public struct ObjectsView: View {
                         .background(.bar)
                 }
             }
-            if !controller.visibleEvents.isEmpty || controller.schedulerWarning != nil {
+            if controller.showsEvents {
                 Section {
                     ForEach(Array(controller.visibleEvents.enumerated()), id: \.element.id) {
                         index, event in

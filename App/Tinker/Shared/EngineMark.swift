@@ -4,7 +4,8 @@ import SwiftUI
 /// The badge that tells a PostgreSQL connection from a MySQL, SQLite or Redis one at a glance.
 ///
 /// Each engine shows its own logo from the asset catalogue (`Engine*` image sets, kept as
-/// vector artwork so they stay sharp at any size). MariaDB shares MySQL's logo.
+/// vector artwork so they stay sharp at any size, except MariaDB's, which exists only as a
+/// PNG). A MySQL connection shows MariaDB's sea lion once its server says it is MariaDB.
 struct EngineMark: View {
     let dialect: SQLDialect
     /// MySQL and MariaDB share a dialect; only a live server says which. Nil until it has.
@@ -56,7 +57,7 @@ struct EngineMark: View {
         if isRedis { return "EngineRedis" }
         switch dialect {
         case .postgresql: return "EnginePostgreSQL"
-        case .mysql: return "EngineMySQL"
+        case .mysql: return flavor == .mariadb ? "EngineMariaDB" : "EngineMySQL"
         case .sqlite: return "EngineSQLite"
         }
     }

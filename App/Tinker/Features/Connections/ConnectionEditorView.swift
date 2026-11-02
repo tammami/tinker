@@ -28,16 +28,26 @@ public struct ConnectionEditorView: View {
 
     enum TestOutcome { case success, failure }
 
-    /// What the engine picker offers: every SQL dialect, then Redis.
+    /// What the engine picker offers: every SQL dialect, MariaDB beside MySQL, then Redis.
+    ///
+    /// MariaDB is MySQL's dialect and driver; choosing it only says what the server is, so
+    /// the badge is right before the connection has ever been opened.
     enum EngineChoice: Hashable {
         case sql(SQLDialect)
+        case mariadb
         case redis
 
-        static var all: [EngineChoice] { SQLDialect.allCases.map(EngineChoice.sql) + [.redis] }
+        static var all: [EngineChoice] {
+            SQLDialect.allCases.flatMap { dialect -> [EngineChoice] in
+                dialect == .mysql ? [.sql(dialect), .mariadb] : [.sql(dialect)]
+            } + [.redis]
+        }
 
         var title: String {
             switch self {
+            case .sql(.mysql): "MySQL"
             case let .sql(dialect): dialect.displayName
+            case .mariadb: "MariaDB"
             case .redis: "Redis"
             }
         }
@@ -48,10 +58,15 @@ public struct ConnectionEditorView: View {
     /// The picker's value, read from and written to the config.
     private var engine: Binding<EngineChoice> {
         Binding(
-            get: { config.isRedis ? .redis : .sql(config.dialect) },
+            get: {
+                if config.isRedis { return .redis }
+                return config.dialect == .mysql && config.knownFlavor == .mariadb ? .mariadb : .sql(config.dialect)
+            },
             set: { choice in
                 let wasRedis = config.isRedis
                 let previous = config.dialect
+                // Overwritten by what the server says the first time it answers.
+                config.knownFlavor = choice == .mariadb ? .mariadb : nil
                 switch choice {
                 case .redis:
                     guard !wasRedis else { return }
@@ -65,7 +80,8 @@ public struct ConnectionEditorView: View {
                     config.database = "0"
                     config.tls = TLSConfig(mode: .disable)
                     config.options = [:]
-                case let .sql(dialect):
+                case .mariadb, .sql:
+                    let dialect: SQLDialect = if case let .sql(chosen) = choice { chosen } else { .mysql }
                     config.keyValueEngine = nil
                     if wasRedis {
                         config.user = NSUserName()
@@ -134,6 +150,7 @@ public struct ConnectionEditorView: View {
                                 } icon: {
                                     switch choice {
                                     case let .sql(dialect): EngineMark(dialect: dialect, size: 14)
+                                    case .mariadb: EngineMark(dialect: .mysql, flavor: .mariadb, size: 14)
                                     case .redis: EngineMark(redis: true, size: 14)
                                     }
                                 }

@@ -148,7 +148,8 @@ public struct ConnectionConfig: Sendable, Hashable, Codable, Identifiable {
     public var passwordRef: SecretRef?
     /// Database to open on connect.
     public var database: String?
-    /// What the server said it was the last time this connection was open.
+    /// What the server said it was the last time this connection was open, or, before it
+    /// has ever answered, the engine chosen for it (MariaDB rather than MySQL).
     ///
     /// MySQL and MariaDB share a dialect, a wire protocol and often a port, so nothing
     /// about a saved connection tells them apart until a server answers. Remembering the

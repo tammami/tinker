@@ -200,7 +200,10 @@ struct SidebarRow: View {
                 connectionLabel(id: id)
             } else {
                 Image(systemName: item.symbolName)
-                    .foregroundStyle(iconColor)
+                    // On the selected row the icon takes the title's colour: the accent
+                    // blue of a table icon vanished into the accent-blue highlight.
+                    .foregroundStyle(
+                        workspace.sidebarSelection == item.id ? AnyShapeStyle(.primary) : AnyShapeStyle(iconColor))
                     .frame(width: DesignTokens.Metrics.iconWidth)
                     .symbolVariant(isGroup ? .fill : .none)
                 // Snake-case names lose their meaning when cut in the middle; the tail goes.
@@ -467,6 +470,27 @@ struct SidebarRow: View {
             }
             collapseItem
         case let .database(id, name):
+            // Open, close and refresh lead, as they do on a connection.
+            if !sidebar.isExpanded(item.id) {
+                Button {
+                    toggleExpansion()
+                } label: {
+                    Label("Open Database", systemImage: Icon.expand)
+                }
+            }
+            // Closes this database like Navicat does: its tabs go (after asking) and
+            // everything opened beneath it folds; the connection itself stays up.
+            Button {
+                onCloseDatabase(id, name, item.id)
+            } label: {
+                Label("Close Database", systemImage: Icon.collapse)
+            }
+            Button {
+                Task { await sidebar.refresh(connectionID: id) }
+            } label: {
+                Label("Refresh", systemImage: Icon.refresh)
+            }
+            Divider()
             Button {
                 onNewQuery(id, "")
             } label: {
@@ -499,17 +523,6 @@ struct SidebarRow: View {
                 connectionID: id,
                 schema: pseudoSchema(connectionID: id, database: name) ?? SchemaRef(database: name, schema: "public"),
                 databaseName: name)
-            Divider()
-            if !sidebar.isExpanded(item.id) {
-                Button("Open Database") { toggleExpansion() }
-            }
-            // Closes this database like Navicat does: its tabs go (after asking) and
-            // everything opened beneath it folds; the connection itself stays up.
-            Button {
-                onCloseDatabase(id, name, item.id)
-            } label: {
-                Label("Close Database", systemImage: Icon.collapse)
-            }
             if !DatabaseOperations.isSystemDatabase(name, dialect: dialect(of: id)) {
                 Divider()
                 Button {
@@ -706,11 +719,13 @@ struct SidebarRow: View {
     }
 
     /// A Redis connection: browse, console, server, the Redis tools, then what every
-    /// connection has (edit, move, refresh, disconnect, delete).
+    /// connection has (edit, move, delete), below open, refresh and disconnect.
     @ViewBuilder
     func redisConnectionMenu(_ id: UUID) -> some View {
         if let config = workspace.environment.connections.first(where: { $0.id == id }) {
             let database = Int(config.database ?? "") ?? 0
+            connectionLifecycleItems(id)
+            Divider()
             Button {
                 workspace.pendingRedisOpen = RedisOpenRequest(connectionID: id, database: database)
             } label: {
@@ -772,6 +787,8 @@ struct SidebarRow: View {
     @ViewBuilder
     func connectionMenu(_ id: UUID) -> some View {
         if let config = workspace.environment.connections.first(where: { $0.id == id }) {
+            connectionLifecycleItems(id)
+            Divider()
             Button {
                 onNewQuery(id, "")
             } label: {
@@ -809,6 +826,39 @@ struct SidebarRow: View {
         }
     }
 
+    /// What every connection's menu starts with, SQL or Redis: open, refresh, reconnect
+    /// and disconnect, the things done to the connection itself.
+    @ViewBuilder
+    func connectionLifecycleItems(_ id: UUID) -> some View {
+        if !sidebar.isExpanded(item.id) {
+            Button {
+                toggleExpansion()
+            } label: {
+                Label("Open Connection", systemImage: Icon.expand)
+            }
+        }
+        Button {
+            Task { await sidebar.refresh(connectionID: id) }
+        } label: {
+            Label("Refresh", systemImage: Icon.refresh)
+        }
+        // A session that lost a transaction waits for this: it will not reconnect on
+        // its own, because that would discard the uncommitted work silently (SPEC §9.6).
+        if case .degraded = sidebar.state(of: id) {
+            Button {
+                Task { await sidebar.reconnect(connectionID: id) }
+            } label: {
+                Label("Reconnect", systemImage: Icon.refresh)
+            }
+        }
+        Button {
+            onDisconnect(id)
+        } label: {
+            Label("Disconnect", systemImage: Icon.disconnect)
+        }
+        .disabled(!sidebar.state(of: id).isUsable && workspace.tabs(for: id).isEmpty)
+    }
+
     /// What every connection's menu ends with, SQL or Redis.
     @ViewBuilder
     func commonConnectionItems(_ config: ConnectionConfig) -> some View {
@@ -841,27 +891,6 @@ struct SidebarRow: View {
         } label: {
             Label("Move to Folder", systemImage: Icon.group)
         }
-        Divider()
-        Button {
-            Task { await sidebar.refresh(connectionID: id) }
-        } label: {
-            Label("Refresh", systemImage: Icon.refresh)
-        }
-        // A session that lost a transaction waits for this: it will not reconnect on
-        // its own, because that would discard the uncommitted work silently (SPEC §9.6).
-        if case .degraded = sidebar.state(of: id) {
-            Button {
-                Task { await sidebar.reconnect(connectionID: id) }
-            } label: {
-                Label("Reconnect", systemImage: Icon.refresh)
-            }
-        }
-        Button {
-            onDisconnect(id)
-        } label: {
-            Label("Disconnect", systemImage: Icon.disconnect)
-        }
-        .disabled(!sidebar.state(of: id).isUsable && workspace.tabs(for: id).isEmpty)
         Divider()
         Button(role: .destructive) {
             let open = workspace.tabs(for: id).count

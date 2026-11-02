@@ -112,6 +112,10 @@ public struct ExportView: View {
                 }
                 .formStyle(.grouped)
                 .frame(height: 370)
+                // A changed setting is a new export, so Export comes back in place of Done.
+                .onChange(of: options) { outcome = nil }
+                .onChange(of: scope) { outcome = nil }
+                .onChange(of: datesFileName) { outcome = nil }
 
                 if let outcome {
                     // The receipt: what was written, where, and a way to it.
@@ -122,6 +126,8 @@ public struct ExportView: View {
                                 .font(.callout.weight(.semibold))
                             Text(outcome.url.path).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                 .truncationMode(.middle)
+                            Text("Change a setting above to export again.")
+                                .font(.caption).foregroundStyle(.tertiary)
                         }
                         Spacer()
                         Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([outcome.url]) }
@@ -147,19 +153,27 @@ public struct ExportView: View {
             }
         } footer: {
             Spacer()
-            Button(outcome == nil ? "Cancel" : "Done", role: .cancel) {
-                exportTask?.cancel()
-                onDismiss()
+            if outcome == nil {
+                Button("Cancel", role: .cancel) {
+                    exportTask?.cancel()
+                    onDismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+                Button {
+                    chooseDestination()
+                } label: {
+                    Label("Export…", systemImage: Icon.export)
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(isRunning)
+            } else {
+                // Finished: Done is the only way on, so the file is not written twice by a
+                // second press of a still-prominent Export.
+                Button("Done") { onDismiss() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
             }
-            .keyboardShortcut(.cancelAction)
-            Button {
-                chooseDestination()
-            } label: {
-                Label("Export…", systemImage: Icon.export)
-            }
-            .keyboardShortcut(.defaultAction)
-            .buttonStyle(.borderedProminent)
-            .disabled(isRunning)
         }
     }
 

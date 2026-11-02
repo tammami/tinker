@@ -4,6 +4,26 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.25] - 2026-11-02
+
+### Added
+- **MariaDB is its own choice in the connection editor**, with MariaDB's sea-lion logo in
+  the sidebar from the start, before the connection has ever been opened. It uses the same
+  driver as MySQL. If the server turns out to be the other one, the logo corrects itself
+  the first time it connects.
+
+### Changed
+- **Open, Close and Refresh come first** when you right-click a database, and Open,
+  Refresh, Reconnect and Disconnect come first when you right-click a connection.
+
+### Fixed
+- **The Events filter lists the scheduled events.** On the Objects tab, All showed the
+  events but the Events filter said "Nothing here".
+- **A selected table keeps its icon.** The blue table icon disappeared into the blue
+  selection highlight; it now turns white like the name.
+- **A finished export offers only Done.** Export stayed highlighted after a successful
+  export, so pressing Return again wrote a second file. Change any setting to export again.
+
 ## [0.1.24] - 2026-10-30
 
 ### Fixed

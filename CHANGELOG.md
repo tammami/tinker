@@ -4,6 +4,32 @@ All notable changes to Tinker are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.26] - 2026-11-05
+
+### Changed
+- **Add Row starts in the first column you would fill in.** An auto-increment key and a
+  generated column are passed over, since the server fills those in.
+- **Undo works on a production query tab**, and asks first. It used to be refused.
+
+### Fixed
+- **Commit no longer loses an edit.** With auto-commit off, an edit made right after another
+  write could say "Committed" without reaching the server, and leave its row locked.
+- **An edit on production is committed once.** In a query tab, Execute on the review sheet
+  is now the whole commit, as it already was in a table tab. A statement you type that writes
+  still waits for Commit.
+- **Add Row takes you to the new row.** On a long table the grid now scrolls to the row and
+  you can type straight away, with no scrolling and no click.
+- **The grid stays where it is after a save.** Saving an edit used to send it back to the
+  first row.
+- **The inspector stays on the Row pane while you edit.** Moving to the next field used to
+  switch it back to Cell and lose what you typed there.
+- **What you type in the Row pane is kept when you click another row.** It used to be dropped
+  without a word. It now goes to the row you typed it for.
+- **A connection shows its real state after you edit it.** A connected row could show a hollow
+  dot, look dimmed and have Disconnect turned off until the app was restarted.
+- **No more stray rows in the sidebar.** A row could be left behind, showing a second state dot
+  or printing its name across another row.
+
 ## [0.1.25] - 2026-11-02
 
 ### Added

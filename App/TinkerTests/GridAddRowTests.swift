@@ -13,9 +13,31 @@ import XCTest
 /// comes into view and can be typed in straight away, with no scrolling and no click.
 @MainActor
 final class GridAddRowTests: XCTestCase {
+    /// Holds a read back, so the grid can be looked at while one is on the server.
+    private actor ReadGate {
+        private var isShut = false
+        private var waiting: [CheckedContinuation<Void, Never>] = []
+
+        func shut() { isShut = true }
+
+        func open() {
+            isShut = false
+            waiting.forEach { $0.resume() }
+            waiting = []
+        }
+
+        func pass() async {
+            guard isShut else { return }
+            await withCheckedContinuation { waiting.append($0) }
+        }
+    }
+
     private struct NineHundredRows: GridDataLoader {
+        let gate: ReadGate
+
         func loadPage(_ request: PageRequest) async throws -> LoadedPage {
-            LoadedPage(
+            await gate.pass()
+            return LoadedPage(
                 columns: [
                     ColumnMeta(id: 0, name: "id", nativeTypeName: "integer", kind: .int, isPrimaryKey: true),
                     ColumnMeta(id: 1, name: "name", nativeTypeName: "text", kind: .string),
@@ -47,9 +69,10 @@ final class GridAddRowTests: XCTestCase {
     private var coordinator: GridCoordinator!
     private var recorder: Recorder!
     private var revision = 0
+    private let gate = ReadGate()
 
     override func setUp() async throws {
-        model = GridModel(source: .query("SELECT id, name FROM items"), dialect: .sqlite, loader: NineHundredRows())
+        model = GridModel(source: .query("SELECT id, name FROM items"), dialect: .sqlite, loader: NineHundredRows(gate: gate))
         await model.load(page: 0)
         model.editTarget = TableRef(database: "main", schema: "main", name: "items")
         model.setIdentity(columns: ["id"], kind: .int)
@@ -137,6 +160,34 @@ final class GridAddRowTests: XCTestCase {
         let editor = try XCTUnwrap(coordinator.inlineEditor)
         XCTAssertEqual(table.row(for: editor), lastRow)
         XCTAssertTrue(table.visibleRect.contains(table.rect(ofRow: lastRow)))
+    }
+
+    /// What the controllers do after a write. The revision moves during the read too, as
+    /// the write's own bookkeeping does; the table view used to find no rows then, lost its
+    /// scroll position and came back at the top.
+    func testRereadingAfterAWriteKeepsTheGridWhereItWas() async throws {
+        table.scrollRowToVisible(890)
+        settle()
+        let scrolled = table.visibleRect.origin.y
+        XCTAssertGreaterThan(scrolled, 0)
+
+        await gate.shut()
+        let read = Task { await model.rereadRows() }
+        // Gives the read its turn: this test holds the main actor, and `settle` does not let go.
+        try await Task.sleep(for: .milliseconds(50))
+        revision += 1
+        hosting.rootView = gridView(selection: GridSelection(row: 885, column: 1))
+        settle()
+        XCTAssertEqual(table.numberOfRows, 900, "the rows stay during the read")
+        XCTAssertEqual(table.visibleRect.origin.y, scrolled)
+
+        await gate.open()
+        await read.value
+        revision += 1
+        hosting.rootView = gridView(selection: GridSelection(row: 885, column: 1))
+        settle()
+        XCTAssertEqual(table.numberOfRows, 900)
+        XCTAssertEqual(table.visibleRect.origin.y, scrolled)
     }
 
     /// A focus moved to an existing row must not commit a half-typed cell on its own.

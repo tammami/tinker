@@ -145,7 +145,7 @@ final class GridCommitterTests: XCTestCase {
 
 /// A loader that serves a fixed table and records the requests it received.
 actor FixtureLoader: GridDataLoader {
-    let totalRows: Int
+    private(set) var totalRows: Int
     let pageSize: Int
     private(set) var requests: [PageRequest] = []
     private var failure: (any Error)?
@@ -156,6 +156,7 @@ actor FixtureLoader: GridDataLoader {
     }
 
     func setFailure(_ error: (any Error)?) { failure = error }
+    func setTotalRows(_ count: Int) { totalRows = count }
     func requestLog() -> [PageRequest] { requests }
 
     /// A sort on this column answers late, with rows that say so, so a test can prove a

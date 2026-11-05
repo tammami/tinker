@@ -409,6 +409,12 @@ public final class GridModel {
 
     /// Loads one page, ignoring a request for a page already in flight.
     public func load(page: Int) async {
+        await load(page: page, replacingRows: false)
+    }
+
+    /// With `replacingRows`, what is held goes the moment the answer is in, whatever the
+    /// answer is: new rows take its place, and a failure leaves nothing unvouched for.
+    private func load(page: Int, replacingRows: Bool) async {
         guard !loadingPages.contains(page) else { return }
         loadingPages.insert(page)
         let generation = loadGeneration
@@ -435,6 +441,7 @@ public final class GridModel {
             // win, so the rows could be sorted by one column while the header pointed at
             // another. Only the load of the current generation may store anything.
             guard generation == loadGeneration else { return }
+            if replacingRows { forgetLoadedRows() }
             // A table's page is `SELECT *`, but its columns were read when the tab opened.
             // After someone else adds, drops or reorders one, each value would be drawn —
             // and edited, and used as an original value in a WHERE — under its neighbour's
@@ -456,6 +463,7 @@ public final class GridModel {
             lastError = nil
         } catch {
             guard generation == loadGeneration else { return }
+            if replacingRows { forgetLoadedRows() }
             lastError = error
         }
     }
@@ -503,12 +511,28 @@ public final class GridModel {
     public func reload(keepingNewRows: Bool = true) async {
         _ = keepingNewRows
         loadGeneration += 1
+        forgetLoadedRows()
+        loadingPages.removeAll()
+        await load(page: 0)
+    }
+
+    /// Re-reads the rows on screen, which stay until the new ones arrive.
+    ///
+    /// For a write, where the user is still working where they were. `reload` empties the
+    /// grid first, which suits rows that are about to be different ones. Here a table view
+    /// that looked during the read found no rows, lost its scroll position and came back
+    /// at the top.
+    public func rereadRows() async {
+        loadGeneration += 1
+        loadingPages.removeAll()
+        await load(page: 0, replacingRows: true)
+    }
+
+    private func forgetLoadedRows() {
         buffer.removeAll()
         rowCount = 0
         totalCount = nil
         isExhausted = false
-        loadingPages.removeAll()
-        await load(page: 0)
     }
 
     /// Applies a new sort and reloads from the first page, as server-side sorting requires.

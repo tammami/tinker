@@ -852,7 +852,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
                 return written
             },
             afterDrain: { [weak self] in
-                await grid.reload(keepingNewRows: !grid.edits.pendingInserts.isEmpty)
+                await grid.rereadRows()
                 target.message = Self.pageMessage(grid, exactTotal: target.exactTotal, duration: .zero)
                 self?.writeTarget = nil
                 self?.bumpRevision()
@@ -891,7 +891,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     }
 
     /// A new row goes when the user leaves it; one left untouched holds nothing and is
-    /// dropped. Not while a write is on the server, whose reload briefly empties the grid.
+    /// dropped. Not while a write is on the server, whose re-read changes the rows under it.
     private func flushNewRowsIfLeft(focusRow: Int) {
         guard autoCommitsEdits, !isWritingEdits, let grid = selectedResult?.grid,
             !grid.edits.pendingInserts.isEmpty, !grid.isPendingInsertRow(focusRow)
@@ -982,7 +982,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         await readingPages {
             for result in results {
                 guard let grid = result.grid, grid.isPaged else { continue }
-                await grid.reload()
+                await grid.rereadRows()
             }
         }
         bumpRevision()

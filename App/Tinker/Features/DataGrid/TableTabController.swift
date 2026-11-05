@@ -481,7 +481,7 @@ public final class TableTabController: DataGridDelegate, WriteLogOwner {
     /// work) is what the grid shows. A new row still being filled in stays.
     private func reloadAfterWrite() async {
         guard let model else { return }
-        await model.reload(keepingNewRows: !model.edits.pendingInserts.isEmpty)
+        await model.rereadRows()
         bumpRevision()
         updateStatus()
     }
@@ -489,8 +489,8 @@ public final class TableTabController: DataGridDelegate, WriteLogOwner {
     /// A new row is written when the user leaves it, not while it is being filled in. A
     /// row the user added and then left untouched holds nothing, so it goes away.
     ///
-    /// Not while a write is on the server: its reload empties the row count for a moment,
-    /// during which the row the user is in would not read as a new row.
+    /// Not while a write is on the server: the rows are about to change under the row the
+    /// user is in, which could stop reading as a new row.
     private func flushNewRowsIfLeft(focusRow: Int) {
         guard autoCommitsEdits, !isWriting, let model, !model.edits.pendingInserts.isEmpty,
             !model.isPendingInsertRow(focusRow)

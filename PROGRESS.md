@@ -1378,3 +1378,31 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 
 ### Spec deviations
 - None.
+
+## 2026-11-05 — The grid stays where it is after a write
+
+### Done
+- Every auto-commit write sent the grid back to row 1. The re-read after a write emptied the model
+  first, a table view that looked during the read found no rows and lost its scroll position, and on a
+  long table the row just saved went out of view. `GridModel.rereadRows` holds the rows until the new
+  ones arrive, on table tabs and query tabs, Undo included.
+- A failed re-read still leaves no rows and shows the error, as it did.
+
+### Tests
+- `RereadRowsTests` (5): a row the write added or deleted, a failed read, staying on the page, and a
+  pending edit surviving.
+- `GridAddRowTests.testRereadingAfterAWriteKeepsTheGridWhereItWas`, on the real grid in a window with a
+  read held open. With the old `reload` in its place it fails as reported: 0 rows during the read, and
+  the scroll position at -28 where 19218 is expected.
+- By hand on an isolated store, a 900-row SQLite table: a new row saved by clicking away stays on screen
+  with the clicked row focused, and an edit to row 880 saved with Return leaves the grid where it was.
+  Both read back with `sqlite3`.
+
+### Not done / deferred
+- Sort, filter and paging still use `reload` and go to the top, since the rows are different ones.
+- Refresh also uses `reload` and goes to the top. Not changed: it was not part of this report.
+- Query tabs were not driven by hand; the smoke pass covers their writes against PostgreSQL.
+- The clipped three-digit row numbers in the gutter are still open.
+
+### Spec deviations
+- None.

@@ -111,6 +111,8 @@ public struct WorkspaceView: View {
         }
         .onChange(of: environment.connections) { _, _ in sidebar.rebuildRoots() }
         .onChange(of: environment.groups) { _, _ in sidebar.rebuildRoots() }
+        // Sessions are shared between windows; a save in one replaces them for all.
+        .onChange(of: environment.sessionGenerations) { _, _ in sidebar.followReplacedSessions() }
         .sheet(item: boundWorkspace.editingConnection) { config in
             ConnectionEditorView(
                 config: config,
@@ -122,6 +124,8 @@ public struct WorkspaceView: View {
                     Task {
                         await environment.save(edited)
                         await environment.invalidateSession(for: edited.id)
+                        // Before the refresh, which opens the new session on an open row.
+                        sidebar.followReplacedSessions()
                         sidebar.rebuildRoots()
                         await sidebar.refresh(connectionID: edited.id)
                     }

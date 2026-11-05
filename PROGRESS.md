@@ -1233,3 +1233,36 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 
 ### Spec deviations
 - None. ADR-0074 records the approach.
+
+## 2026-11-05 — An edited connection reports its new session
+
+### Done
+- Saving a connection replaces its session, and the sidebar kept following the old one: a
+  connected row showed a hollow dot, was dimmed, and had Disconnect disabled, and the status
+  bar said Disconnected, for the rest of the run.
+- `AppEnvironment.sessionGenerations` moves when `invalidateSession` drops a connection's
+  sessions. `SidebarModel.followReplacedSessions()` moves the watchers to the new sessions and
+  forgets the old session's state, degraded databases, flavour and Redis liveness. The editor's
+  Save and a backup restore call it before refreshing; every window also follows the generation
+  on its own, since sessions are shared between windows.
+- A deleted connection closes its sessions without moving the generation, so nothing makes a
+  new session for it.
+
+### Tests
+- `SidebarRefreshTests`: `testAnEditedOpenConnectionReportsItsNewSession`,
+  `testAnEditedClosedConnectionIsFollowedWhenItConnects`,
+  `testAnotherWindowsSidebarFollowsTheReplacement` and
+  `testDeletingAConnectionLeavesNoSessionBehind`. With `followReplacedSessions` disabled the
+  first three fail; with it, the suite passed in four runs in a row.
+- By hand on an isolated store: open a connection, change its colour, Save. On SQLite and on
+  the local PostgreSQL `tinker_test` the dot stayed green and the row lit; on SQLite, Disconnect
+  was enabled and took the dot back to hollow.
+
+### Not done / deferred
+- Tabs open on an edited connection were not looked at.
+- `closeSession(for:database:)`, used to drop a database, leaves that database's watcher on the
+  closed session, so a later session on a database of the same name is not followed. Not
+  changed; it needs a drop and a re-create to matter.
+
+### Spec deviations
+- None.

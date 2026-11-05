@@ -81,7 +81,8 @@ public final class AppEnvironment {
     /// Deletes a connection, its Keychain items and everything remembered about it,
     /// closing every session it had open — on its own database and on any other.
     public func delete(_ config: ConnectionConfig) async {
-        await invalidateSession(for: config.id)
+        // Not `invalidateSession`: nothing should go looking for a replacement.
+        await closeSessions(for: config.id)
         do {
             try await store?.deleteConnection(id: config.id)
             try await secrets.deleteSecrets(forConnection: config.id)
@@ -358,6 +359,15 @@ public final class AppEnvironment {
     /// Drops a cached session so the next use picks up an edited configuration. What was
     /// known about the old one — the database it sat on, the lifted lock — goes with it.
     public func invalidateSession(for id: UUID) async {
+        await closeSessions(for: id)
+        sessionGenerations[id, default: 0] += 1
+    }
+
+    /// How many times each connection's sessions have been dropped. A session can be
+    /// watched, and nothing tells the watcher that it has been replaced; this does.
+    public private(set) var sessionGenerations: [UUID: Int] = [:]
+
+    private func closeSessions(for id: UUID) async {
         let prefix = id.uuidString + "/"
         for key in databaseSessions.keys where key.hasPrefix(prefix) {
             if let other = databaseSessions.removeValue(forKey: key) { await other.disconnect() }

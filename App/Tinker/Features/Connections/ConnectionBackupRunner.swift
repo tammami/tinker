@@ -180,6 +180,7 @@ extension WorkspaceController {
         for config in plan.replaced {
             await environment.invalidateSession(for: config.id)
         }
+        sidebar.followReplacedSessions()
         sidebar.rebuildRoots()
         for config in plan.replaced {
             await sidebar.refresh(connectionID: config.id)

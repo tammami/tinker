@@ -67,6 +67,89 @@ final class SidebarRefreshTests: XCTestCase {
         try await session.withLease { _ = try await $0.executeCollecting(sql) }
     }
 
+    /// Waits for the state stream to reach the row; it arrives on a task of its own.
+    private func waitForState(
+        _ expected: ConnectionState, of sidebar: SidebarModel, file: StaticString = #filePath, line: UInt = #line
+    ) async throws {
+        let id: UUID = try XCTUnwrap(config).id
+        for _ in 0 ..< 200 {
+            if sidebar.state(of: id) == expected { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("still \(sidebar.state(of: id)), expected \(expected)", file: file, line: line)
+    }
+
+    /// What Save in the connection editor does, in its order.
+    private func saveEdit() async throws {
+        var edited = try XCTUnwrap(config)
+        edited.color = .orange
+        await environment.save(edited)
+        await environment.invalidateSession(for: edited.id)
+        sidebar.followReplacedSessions()
+        sidebar.rebuildRoots()
+        await sidebar.refresh(connectionID: edited.id)
+    }
+
+    /// An open connection is edited: the tree connects the new session and the row says so.
+    /// It used to go on reporting the old session, a hollow dot on a live connection.
+    func testAnEditedOpenConnectionReportsItsNewSession() async throws {
+        _ = try await openToTables()
+        try await waitForState(.connected, of: sidebar)
+        let old = try XCTUnwrap(environment.session(for: config.id))
+
+        try await saveEdit()
+
+        let new = try XCTUnwrap(environment.session(for: config.id))
+        XCTAssertFalse(old === new, "the edit replaces the session")
+        let newState = await new.state
+        XCTAssertEqual(newState, .connected, "the refresh connects an open row's session")
+        try await waitForState(.connected, of: sidebar)
+    }
+
+    /// A closed connection is edited and connected later, by a query tab say, with no tree
+    /// load to start a watcher. The row still follows it, both ways.
+    func testAnEditedClosedConnectionIsFollowedWhenItConnects() async throws {
+        sidebar.watchState(of: config.id)
+        try await saveEdit()
+        try await waitForState(.disconnected, of: sidebar)
+
+        let session = try XCTUnwrap(environment.session(for: config.id))
+        _ = try await session.connect()
+        try await waitForState(.connected, of: sidebar)
+
+        await session.disconnect()
+        try await waitForState(.disconnected, of: sidebar)
+    }
+
+    /// Another window has its own sidebar over the same sessions, and is not the one that
+    /// saved. It catches up when told, and goes on following the new session.
+    func testAnotherWindowsSidebarFollowsTheReplacement() async throws {
+        let other = SidebarModel(environment: environment)
+        other.watchState(of: config.id)
+        _ = try await openToTables()
+        try await waitForState(.connected, of: other)
+
+        try await saveEdit()
+        other.followReplacedSessions()
+
+        try await waitForState(.connected, of: other)
+        let session = try XCTUnwrap(environment.session(for: config.id))
+        await session.disconnect()
+        try await waitForState(.disconnected, of: other)
+    }
+
+    /// A deleted connection gets no fresh session from anyone following replacements.
+    func testDeletingAConnectionLeavesNoSessionBehind() async throws {
+        _ = try await openToTables()
+        let generations = environment.sessionGenerations
+        await environment.delete(try XCTUnwrap(config))
+        XCTAssertEqual(environment.sessionGenerations, generations)
+        sidebar.followReplacedSessions()
+        sidebar.rebuildRoots()
+        XCTAssertTrue(environment.sessions(for: config.id).isEmpty)
+        XCTAssertEqual(sidebar.state(of: config.id), .disconnected)
+    }
+
     /// The sweep of row views the list leaves behind runs when this moves, so opening and
     /// closing a row has to move it, a folder included: folders keep their state apart.
     func testTheTreeGenerationMovesWhenRowsCanChange() async throws {

@@ -60,9 +60,12 @@ public final class SidebarModel {
     private var childCache: [SidebarItem.ID: [SidebarItem]] = [:]
     private var loading: Set<SidebarItem.ID> = []
     private var stateWatchers: [UUID: Task<Void, Never>] = [:]
+    /// The session generations the watchers are on (`AppEnvironment.sessionGenerations`).
+    private var followedGenerations: [UUID: Int] = [:]
 
     public init(environment: AppEnvironment) {
         self.environment = environment
+        followedGenerations = environment.sessionGenerations
         rebuildRoots()
     }
 
@@ -168,7 +171,8 @@ public final class SidebarModel {
         }
         stateWatchers[connectionID] = Task { [weak self] in
             for await state in await session.states() {
-                guard let self else { return }
+                // A replaced session has nothing more to say about this connection.
+                guard let self, !Task.isCancelled else { return }
                 mainStates[connectionID] = state
                 // A database session that has failed keeps the dot red until it recovers.
                 if case .degraded = states[connectionID] ?? .disconnected,
@@ -178,12 +182,35 @@ public final class SidebarModel {
                 }
                 states[connectionID] = state
                 if case .connected = state, flavors[connectionID] == nil,
-                    let version = try? await session.connect()
+                    let version = try? await session.connect(), !Task.isCancelled
                 {
                     flavors[connectionID] = version.flavor
                     await rememberFlavor(version.flavor, of: connectionID)
                 }
             }
+        }
+    }
+
+    /// Moves every watcher onto the sessions that replaced the ones dropped since last
+    /// asked. Without this an edited connection reported its old session for the rest of
+    /// the run: a live connection with a hollow dot, a dimmed row and no Disconnect.
+    ///
+    /// Everything known about the old session goes with it, flavour included, since an
+    /// edit can point the connection at another server.
+    public func followReplacedSessions() {
+        for (id, generation) in environment.sessionGenerations where followedGenerations[id] != generation {
+            followedGenerations[id] = generation
+            stateWatchers.removeValue(forKey: id)?.cancel()
+            let prefix = id.uuidString + "/"
+            for key in databaseStateWatchers.keys where key.hasPrefix(prefix) {
+                databaseStateWatchers.removeValue(forKey: key)?.cancel()
+            }
+            states.removeValue(forKey: id)
+            mainStates.removeValue(forKey: id)
+            degradedDatabases.removeValue(forKey: id)
+            flavors.removeValue(forKey: id)
+            liveRedis.remove(id)
+            watchState(of: id)
         }
     }
 

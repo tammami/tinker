@@ -1294,3 +1294,30 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 
 ### Spec deviations
 - None. This brings query tabs in line with SPEC §12.3.
+
+## 2026-11-05 — Add Row goes to the new row, ready to type in
+
+### Done
+- On a table longer than the screen, Add Row left the grid where it was and needed a scroll and
+  a click. The new row's cell was only looked for among rows already on screen, so the editor
+  did not open. `beginEditingFocusedCell` now brings the row into view and makes its cell, which
+  also serves Return on a focused cell scrolled out of sight.
+- Add Row while still typing in the row before it commits that cell and moves on. It used to
+  leave the editor behind, so typing went to the old row. Only a pending new row does this, so
+  nothing else that moves the focus can commit a half-typed cell.
+- Typing starts in the first column shown, as a hidden column has no cell to open.
+
+### Tests
+- `GridAddRowTests` (5), on the real grid in a window with 900 rows: the row comes into view,
+  the keyboard is in its cell and typed text lands there, a second Add Row keeps what was typed,
+  and the two rules on their own. With the fix removed, the three window tests fail.
+- By hand on an isolated store: a 900-row SQLite table, Add Row, typing with no click, Tab, a
+  second Add Row, then clicking away; both rows were read back from the file with `sqlite3`.
+
+### Not done / deferred
+- On a table longer than one page, the new row goes to the end of the page on screen, not the
+  last page. That is where pending rows have always been shown; it is saved the same either way.
+- The first column is where typing starts even when it is an auto-increment key.
+
+### Spec deviations
+- None.

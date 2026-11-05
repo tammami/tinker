@@ -186,8 +186,13 @@ public struct DataGridView: NSViewRepresentable {
             coordinator.redrawVisibleCells()
         }
         // Add Row moves the selection onto the new row from the controller's side, which
-        // never goes through `setSelection`.
-        coordinator.beginEditingIfInsertRow()
+        // never goes through `setSelection`. A cell still open on the row before it ends
+        // first; that writes to the model, so not during this update.
+        if coordinator.hasEditorLeftBehindByAddRow {
+            Task { @MainActor [weak coordinator] in coordinator?.endEditorLeftBehindByAddRow() }
+        } else {
+            coordinator.beginEditingIfInsertRow()
+        }
     }
 
     public func makeCoordinator() -> GridCoordinator {
@@ -684,6 +689,30 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         beginEditingFocusedCell()
     }
 
+    /// True when Add Row moved the focus to a new row while a cell elsewhere has an editor
+    /// open. Clicking away ends an editor by itself; a button or ⌘+ does not take the focus.
+    var hasEditorLeftBehindByAddRow: Bool {
+        guard inlineEditor != nil, let cell = inlineEditorCell else { return false }
+        return Self.leavesEditorBehind(
+            editorCell: cell, focus: (selection.focusRow, selection.focusColumn),
+            focusIsPendingInsertRow: model.isPendingInsertRow(selection.focusRow))
+    }
+
+    /// The rule, apart from the table view so it can be tested. Only for a pending new row:
+    /// anything else moving the focus must not commit what the user is halfway through typing.
+    static func leavesEditorBehind(
+        editorCell: (row: Int, column: Int), focus: (row: Int, column: Int), focusIsPendingInsertRow: Bool
+    ) -> Bool {
+        focusIsPendingInsertRow && editorCell != focus
+    }
+
+    /// Commits the editor left on the previous row, then opens the one on the new row.
+    func endEditorLeftBehindByAddRow() {
+        guard hasEditorLeftBehindByAddRow, let tableView else { return }
+        tableView.window?.makeFirstResponder(tableView)
+        beginEditingIfInsertRow()
+    }
+
     /// The cell of a new row whose calendar or choice list last opened by itself.
     private var autoOpenedCell: (row: Int, column: Int)?
 
@@ -759,6 +788,8 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
 
     /// The cell editor on screen, if any; a reload waits for it.
     weak var inlineEditor: GridInlineEditor?
+    /// The model cell that editor is on.
+    private var inlineEditorCell: (row: Int, column: Int)?
     var reloadWaitsForEditor = false
 
     func reloadAfterRevision() {
@@ -821,9 +852,15 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         case .text:
             break
         }
-        guard let position = position(ofModelColumn: column),
-            let cell = tableView.view(atColumn: position, row: row, makeIfNecessary: false) as? GridCellView
-        else { return }
+        guard let position = position(ofModelColumn: column) else { return }
+        // A new row is added past the end, usually out of sight: bring it into view, and
+        // make its cell rather than ask for one that has no view yet. Without this the
+        // editor quietly did not open and the row stayed where the user had to scroll to it.
+        tableView.scrollRowToVisible(row)
+        tableView.scrollColumnToVisible(position)
+        guard let cell = tableView.view(atColumn: position, row: row, makeIfNecessary: true) as? GridCellView else {
+            return
+        }
         let current = model.value(row: row, column: column)
         let editor = GridInlineEditor(frame: cell.bounds)
         editor.stringValue =
@@ -838,6 +875,7 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
         editor.onFinish = { [weak self] movement in
             guard let self else { return }
             inlineEditor = nil
+            inlineEditorCell = nil
             if reloadWaitsForEditor {
                 reloadWaitsForEditor = false
                 reloadAfterRevision()
@@ -849,6 +887,7 @@ public final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableView
             }
         }
         inlineEditor = editor
+        inlineEditorCell = (row, column)
         cell.addSubview(editor)
         editor.frame = cell.bounds
         editor.autoresizingMask = [.width, .height]

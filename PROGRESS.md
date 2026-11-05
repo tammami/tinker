@@ -1321,3 +1321,30 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 
 ### Spec deviations
 - None.
+
+## 2026-11-05 — A write no longer lands on a connection on its way back to the pool
+
+### Done
+- Commit could report success and lose the edit. A query tab gives its connection back when
+  idle, and `releaseHeldConnection` kept hold of it until the pool had answered. A write arriving
+  in that gap began its transaction on the departing connection, then the tab forgot the
+  connection, so Commit had nothing to send on: "Committed" on screen, the edit not on the server,
+  and the row left locked on a pooled connection, which is what hung the smoke pass. The tab now
+  lets go before it suspends, so such a write takes a connection of its own.
+- This is the flaky smoke check recorded under ADR-0075's entry. It was not caused by that work.
+
+### Tests
+- `HeldConnectionReleaseTests.testAnEditWrittenAsTheConnectionGoesBackReachesItsCommit` (SQLite, 40
+  rounds). Before the fix it failed on the fourth round, reading back `written 3` where `held 3` was
+  committed.
+- Smoke pass against the local PostgreSQL `tinker_test`: 28 of 28 runs passed, where 7 of 10 failed
+  before (3 of 4 on 108d049, 4 of 6 with the ADR-0075 work).
+
+### Not done / deferred
+- The gap was reached by a script with no delay between steps. How often a person's clicks reached
+  it is not known.
+- `noteHeldConnectionDropped` has the same shape, awaiting before it forgets the connection. Not
+  changed: a write in that gap fails on a dead connection and reports it, so nothing is lost silently.
+
+### Spec deviations
+- None.

@@ -1643,7 +1643,10 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         resolveMemoryCap(.stop)
         guard let heldSession, let heldLease else { return }
         if isInTransaction { await rollbackTransaction() }
-        await heldSession.release(heldLease)
+        // Let go of it before anything suspends. A write arriving during the release used
+        // to find the connection still here and open its transaction on one already on its
+        // way back to the pool; Commit then had no connection to send on, so the edit was
+        // lost with its row still locked.
         self.heldLease = nil
         self.heldSession = nil
         heldConnection = nil
@@ -1653,6 +1656,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         // drops it. Left set, the badge would offer Commit for a transaction that no
         // longer exists, and the next run would keep a lease for it.
         isInTransaction = false
+        await heldSession.release(heldLease)
     }
 
     private func startTimer() {

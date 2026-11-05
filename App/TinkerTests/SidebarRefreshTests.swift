@@ -67,6 +67,25 @@ final class SidebarRefreshTests: XCTestCase {
         try await session.withLease { _ = try await $0.executeCollecting(sql) }
     }
 
+    /// The sweep of row views the list leaves behind runs when this moves, so opening and
+    /// closing a row has to move it, a folder included: folders keep their state apart.
+    func testTheTreeGenerationMovesWhenRowsCanChange() async throws {
+        let ids = try await openToTables()
+        var seen = sidebar.treeGeneration
+        func moved(_ what: String) {
+            XCTAssertNotEqual(sidebar.treeGeneration, seen, what)
+            seen = sidebar.treeGeneration
+        }
+        sidebar.collapse(ids[2])
+        moved("closing a row")
+        sidebar.markExpanded(ids[2])
+        moved("opening a row")
+        sidebar.collapse("group/Office")
+        moved("closing a folder")
+        sidebar.rebuildRoots()
+        moved("rebuilding the tree")
+    }
+
     /// Every open row still has its children after a refresh. The old refresh walked the
     /// open rows in `Set` order — random per launch — and a database visited before its
     /// connection was skipped, left open with nothing under it.

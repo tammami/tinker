@@ -12,8 +12,15 @@ import SwiftUI
 @MainActor
 @Observable
 public final class SidebarModel {
-    public private(set) var roots: [SidebarItem] = []
-    public private(set) var expanded: Set<SidebarItem.ID> = []
+    public private(set) var roots: [SidebarItem] = [] {
+        didSet { treeGeneration &+= 1 }
+    }
+    public private(set) var expanded: Set<SidebarItem.ID> = [] {
+        didSet { treeGeneration &+= 1 }
+    }
+    /// Moves whenever the rows on screen may have changed, so a view can follow the tree
+    /// without comparing all of it.
+    public private(set) var treeGeneration = 0
     public private(set) var states: [UUID: ConnectionState] = [:]
     /// MySQL and MariaDB share a dialect, so only a live server says which one this is.
     public private(set) var flavors: [UUID: ServerFlavor] = [:]
@@ -230,7 +237,9 @@ public final class SidebarModel {
         return expanded.contains(id)
     }
 
-    private var collapsedGroups: Set<SidebarItem.ID> = []
+    private var collapsedGroups: Set<SidebarItem.ID> = [] {
+        didSet { treeGeneration &+= 1 }
+    }
 
     /// Records that a node is open, without waiting for its children.
     ///

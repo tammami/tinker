@@ -1206,3 +1206,30 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 
 ### Spec deviations
 - None. §13.2a's Map pane is widened and §13.2b added to describe it; ADR-0064.
+
+## 2026-11-05 — A row left behind in the sidebar (ADR-0074)
+
+### Done
+- `OrphanRowSweeper` removes row views the sidebar's outline no longer tracks, 600 ms after
+  the rows last changed. That was the second state dot on SCADA, and SCADA printed across
+  a database name when Production was opened.
+- `SidebarModel.treeGeneration` says when the rows may have changed.
+
+### Tests
+- `OrphanRowSweeperTests` (5): an untracked visible row view is removed, the outline's own
+  rows are kept, a hidden one is left for reuse, the outline is found from a sibling, and
+  nothing is found from an unrelated view.
+- `SidebarRefreshTests.testTheTreeGenerationMovesWhenRowsCanChange`.
+- A temporary harness (not committed) on an isolated store against the local `tinker_test`:
+  before the fix, an orphan in every run of folder moves with filter changes (iteration 40 at
+  the latest); after it, 6 of 6 runs clean with real orphans swept. A 400-table list kept
+  every visible row through 60 sweeps while scrolling.
+
+### Not done / deferred
+- The trigger inside SwiftUI was not found, and the exact steps of the reported session are
+  unknown: the harness needed the search filter to change, and whether that happened there
+  is not known. The sweep goes by what is left behind, whatever left it.
+- A second bug found on the same path is fixed in the next entry.
+
+### Spec deviations
+- None. ADR-0074 records the approach.

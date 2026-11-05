@@ -1213,3 +1213,39 @@ checks in `testDesignerReadsCheckConstraintsTriggersAndPartitioning` (both serve
 `testAZonedTimestampForMariaDBGoesThroughConvertTZ`;
 `SchemaTranslatorTests.testAnIntegerDisplayWidthIsNotComparedAcrossEngines`; and the
 cross-engine, sync and transfer suites now on MariaDB.
+
+## ADR-0074 — The sidebar removes row views its list leaves behind
+
+**Context.** After a tree update, the sidebar's `List` can leave a row view inside its
+`NSOutlineView`: visible and in `subviews`, but with `row(for:)` answering -1. Nothing lays
+it out or removes it again, so it stays where it was and draws over whichever row sits there
+later. It showed as a connection with two state dots (the leftover kept the width the
+sidebar had when it was stranded, so its dot sat beside the real one) and as "SCADA" printed
+across a database name once Production was opened above it.
+
+A harness driving real sidebar actions against the local `tinker_test` reproduced it. Moving
+connections between folders while the search filter changes left an orphan in every run,
+never later than iteration 40. Colour edits, moves, selection and expansion without that
+filter change stayed clean, so setting a colour is not the cause on its own.
+
+The trigger inside SwiftUI was not found, and two explanations were tested and dropped: a
+per-folder identity for connection rows (so a move is a removal and an insertion), and
+updates arriving during a row animation (it reproduces with 800 ms between actions too).
+
+**Decision.** `OrphanRowSweeper` removes visible row views the outline does not track, 600 ms
+after the rows last changed (`SidebarModel.treeGeneration`, the filter or the selection),
+which is past any row animation. Hidden row views are the outline's reuse pool and stay.
+
+**Rejected.** *Rebuilding the list with `.id(...)` on each change*: loses the scroll position
+and every row view for the sake of a rare leftover. *A flat list with hand-drawn disclosure*:
+gives up what the outline provides, such as arrow-key navigation, with no evidence it would
+avoid the leftover. *Re-implementing the tree in AppKit*: a large change for one defect, and
+it remains the way out if SwiftUI's list misbehaves again.
+
+**Consequences.** This treats what SwiftUI leaves behind, not why it does. A leftover can be
+seen for up to 600 ms before it goes. The sweep relies only on public `NSTableView` API, but
+it does assume a tracked row always answers `row(for:)`, which the outline's own rows do.
+The same harness afterwards: 6 of 6 runs clean, 85–160 iterations each, with real orphans
+swept. A 400-table list scrolled through 60 sweeps kept every visible row. Tests:
+`OrphanRowSweeperTests`, `SidebarRefreshTests.testTheTreeGenerationMovesWhenRowsCanChange`.
+The harness was temporary and is not in the repository.

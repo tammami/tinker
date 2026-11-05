@@ -44,6 +44,7 @@ public struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .background(OrphanRowSweeperAnchor(trigger: sweepTrigger))
         .searchable(text: $workspace.sidebarFilter, placement: .sidebar, prompt: "Filter connections and tables")
         .sheet(item: $workspace.folderEditor) { editor in
             FolderNameSheet(editor: editor, environment: workspace.environment) { workspace.folderEditor = nil }
@@ -81,6 +82,11 @@ public struct SidebarView: View {
                 .background(.bar)
             }
         }
+    }
+
+    /// What can change the rows on screen, which is when the list can leave one behind.
+    private var sweepTrigger: [String] {
+        [String(sidebar.treeGeneration), workspace.sidebarFilter, workspace.sidebarSelection ?? ""]
     }
 
     private var connectionSummary: String {

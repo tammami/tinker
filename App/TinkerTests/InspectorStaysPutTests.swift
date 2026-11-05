@@ -1,6 +1,7 @@
 import AppKit
 import DBCore
 import DBGrid
+import DBSQL
 import DBSQLite
 import SwiftUI
 import XCTest
@@ -266,5 +267,80 @@ final class InspectorStaysPutTests: XCTestCase {
         try await settle()
 
         XCTAssertEqual(controller.model?.edits.pendingStatementCount, 0)
+    }
+
+    /// A sort moves other rows under the same position, with the same value showing. What was
+    /// typed for the row in that position must not land on whichever row is there now.
+    func testASortUnderATypedFieldDoesNotWriteToTheRowNowThere() async throws {
+        try await open(production: false)
+        let session = try XCTUnwrap(environment.session(for: config.id))
+        try await session.withLease { connection in
+            _ = try await connection.executeCollecting("UPDATE items SET name = 'same'")
+        }
+        await controller.model?.rereadRows()
+        controller.bumpRevision()
+        controller.gridDidChangeSelection(GridSelection(row: 2, column: 1))
+        try await settle()
+        try type(" typed", into: try XCTUnwrap(field(showing: "same")))
+        try await settle()
+
+        let model = try XCTUnwrap(controller.model)
+        await model.setSort([PagePlanner.SortTerm(column: "id", ascending: false)])
+        controller.bumpRevision()
+        try await settle()
+        controller.gridDidChangeSelection(GridSelection(row: 0, column: 1))
+        try await settle()
+
+        for id in [1, 2, 4, 5, 6, 7, 8, 9] {
+            let name = try await committed("name", id: id)
+            XCTAssertEqual(name, "same", "row \(id) was never edited")
+        }
+    }
+
+    /// Showing another result moves the selection too, onto a different table. Nothing typed
+    /// for the first result may reach it.
+    func testShowingAnotherResultDoesNotWriteThereWhatWasTypedInTheFirst() async throws {
+        _ = try await prepare(production: false)
+        let session = try XCTUnwrap(environment.session(for: config.id))
+        try await session.withLease { connection in
+            _ = try await connection.executeCollecting("CREATE TABLE others (id INTEGER PRIMARY KEY, name TEXT)")
+            for id in 1 ... 9 {
+                _ = try await connection.executeCollecting("INSERT INTO others VALUES (\(id), 'other \(id)')")
+            }
+        }
+        query = QueryTabController(connectionID: config.id, dialect: .sqlite, environment: environment)
+        query.sql = "SELECT id, name, note FROM items ORDER BY id; SELECT id, name FROM others ORDER BY id"
+        query.caretOffset = 0
+        query.run(all: true)
+        for _ in 0 ..< 500 {
+            if !query.isRunning, query.results.count == 2, query.results.allSatisfy({ $0.grid?.isEditable == true }) {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let tab = WorkspaceTab(kind: .query, connectionID: config.id, title: "SQL 1")
+        tab.isInspectorVisible = true
+        try await show(
+            AnyView(
+                QueryTabView(
+                    controller: query, workspace: WorkspaceModel(environment: environment), tab: tab,
+                    fontName: "Menlo", fontSize: 13, settings: AppSettings(environment: environment))))
+        query.gridDidChangeSelection(GridSelection(row: 4, column: 0, mode: .rows))
+        try await openRowPane()
+        try type(" typed", into: try XCTUnwrap(field(showing: "row 5")))
+        try await settle()
+
+        query.showResult(try XCTUnwrap(query.results.last?.id))
+        try await settle()
+
+        let session2 = try XCTUnwrap(environment.session(for: config.id))
+        let others = try await session2.withLease { connection in
+            try await connection.executeCollecting("SELECT count(*) FROM others WHERE name LIKE '%typed%'")
+        }
+        XCTAssertEqual(others.firstText, "0", "written into a table it was never typed for")
+        let onFive = try await committed("name", id: 5)
+        XCTAssertEqual(onFive, "row 5")
+        XCTAssertEqual(
+            query.errorBanner?.message.contains("was not saved"), true, "it says so rather than dropping it quietly")
     }
 }

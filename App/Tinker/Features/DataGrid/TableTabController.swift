@@ -788,6 +788,15 @@ public final class TableTabController: DataGridDelegate, WriteLogOwner {
         }
     }
 
+    /// A value from the inspector, which goes to the row it was typed for or nowhere.
+    func inspectorDidCommit(_ text: String, column: Int, to target: CellEditTarget) {
+        guard let model, let row = target.row(in: model) else {
+            errorText = CellEditTarget.notSavedMessage(text)
+            return
+        }
+        gridDidCommitEdit(row: row, column: column, text: text)
+    }
+
     public func gridDidCommitEdit(row: Int, column: Int, text: String) {
         guard let model, model.columns.indices.contains(column) else { return }
         if let choices = gridChoices(column), !choices.accepts(text) {

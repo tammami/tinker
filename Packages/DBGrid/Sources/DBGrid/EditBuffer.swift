@@ -21,6 +21,15 @@ public struct RowIdentity: Sendable, Hashable {
     }
 }
 
+/// A row as itself rather than by its position, which a sort, a page or a reload gives to
+/// another row.
+public enum GridRowReference: Sendable, Hashable {
+    /// A row from the table, by its key.
+    case loaded(RowIdentity)
+    /// A row being added, not yet on the server.
+    case new(UUID)
+}
+
 /// A pending change to one loaded row.
 public struct RowEdit: Sendable, Hashable {
     /// New values by column name. Only columns the user actually changed.

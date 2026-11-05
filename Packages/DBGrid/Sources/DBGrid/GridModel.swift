@@ -334,6 +334,23 @@ public final class GridModel {
     }
 
     /// The identity of the loaded row at `row`, the key its edits live under.
+    /// What to hold on to for a row whose position may change; nil for one not loaded.
+    public func reference(toRow row: Int) -> GridRowReference? {
+        if let insert = pendingInsert(at: row) { return .new(insert.id) }
+        return rowIdentity(row).map(GridRowReference.loaded)
+    }
+
+    /// Where a row is now; nil when it is not among the rows held, on another page say.
+    public func row(for reference: GridRowReference) -> Int? {
+        switch reference {
+        case let .loaded(identity):
+            return (0 ..< rowCount).first { rowIdentity($0) == identity }
+        case let .new(id):
+            guard let offset = edits.pendingInserts.firstIndex(where: { $0.id == id }) else { return nil }
+            return displayRowCount - edits.pendingInserts.count + offset
+        }
+    }
+
     public func rowIdentity(_ row: Int) -> RowIdentity? {
         identity(ofRow: row).map(RowIdentity.init)
     }

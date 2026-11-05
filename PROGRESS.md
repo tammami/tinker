@@ -1461,3 +1461,32 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 
 ### Spec deviations
 - None.
+
+## 2026-11-05 — A value typed in the inspector follows its row, not a position
+
+### Done
+- A correction to the entry before last, found by an automated review of the pushed commit. Handing a
+  typed value to "the row it was typed for" went by position. A sort or a page could put another row in
+  that position with an equal value showing, and the value then went there. Showing another result of a
+  query tab moved the selection and sent the value into a different table.
+- `GridRowReference` holds a row by its key, or a new row by its id, and `CellEditTarget` adds the grid.
+  A form field commits to what it was loaded from; a target no longer found is refused, and says so.
+- A cell not yet applied in the Cell pane starts afresh for another cell, so equal values cannot carry
+  its text to a row where Apply would write it.
+- Never published: release 0.1.26 was stopped before notarization to take this in.
+
+### Tests
+- `InspectorStaysPutTests.testASortUnderATypedFieldDoesNotWriteToTheRowNowThere` and
+  `testShowingAnotherResultDoesNotWriteThereWhatWasTypedInTheFirst`. Before the fix they failed on the
+  pushed code: row 7 held the text typed for row 3, and the other table held it too.
+- `GridRowReferenceTests` (4): found where it is, not found on another page, a new row followed until it
+  goes, and no reference for a row not loaded.
+- By hand on an isolated store, SQLite, auto-commit and production: the flows of the entry before last.
+
+### Not done / deferred
+- A field whose rows are reloaded while it holds typed text can go without a word when the form empties
+  during the read, as it could before. Nothing reaches another row.
+- The same position-based hand-over was never in a release, so no user data was at risk from it.
+
+### Spec deviations
+- None.

@@ -1947,6 +1947,19 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         flushNewRowsIfLeft(focusRow: selection.focusRow)
     }
     public func gridDidRequestLoad(range: Range<Int>) {}
+    /// A value from the inspector, which goes to the row it was typed for or nowhere. That
+    /// row may belong to a result no longer shown, and this one may be of another table.
+    func inspectorDidCommit(_ text: String, column: Int, to target: CellEditTarget) {
+        guard let grid = selectedResult?.grid, let row = target.row(in: grid) else {
+            errorBanner = QueryErrorBanner(
+                error: DBError.protocolError(CellEditTarget.notSavedMessage(text)),
+                statement: selectedResult?.statement ?? "")
+            bumpRevision()
+            return
+        }
+        gridDidCommitEdit(row: row, column: column, text: text)
+    }
+
     public func gridDidCommitEdit(row: Int, column: Int, text: String) {
         guard let grid = selectedResult?.grid, grid.columns.indices.contains(column) else { return }
         guard grid.isColumnEditable(column) else {

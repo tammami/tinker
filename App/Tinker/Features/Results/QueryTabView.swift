@@ -688,14 +688,15 @@ public struct QueryTabView: View {
                             columns: grid.columns,
                             focusedColumn: controller.selection.focusColumn,
                             focusedRow: controller.selection.focusRow,
+                            editTarget: CellEditTarget(grid: grid, row: controller.selection.focusRow),
                             rowValues: controller.rowValues(controller.selection.focusRow),
                             rowState: grid.rowChangeState(controller.selection.focusRow),
                             isEditable: grid.isEditable,
                             hasReference: { column in
                                 controller.gridHasReference(row: controller.selection.focusRow, column: column)
                             },
-                            onCommit: { row, column, text in
-                                controller.gridDidCommitEdit(row: row, column: column, text: text)
+                            onCommit: { target, column, text in
+                                controller.inspectorDidCommit(text, column: column, to: target)
                             },
                             onSetNull: { column in
                                 grid.setValue(.null, row: controller.selection.focusRow, column: column)

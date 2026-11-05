@@ -381,14 +381,15 @@ public struct TableTabView: View {
                         columns: model.columns,
                         focusedColumn: controller.selection.focusColumn,
                         focusedRow: controller.selection.focusRow,
+                        editTarget: CellEditTarget(grid: model, row: controller.selection.focusRow),
                         rowValues: controller.rowValues(controller.selection.focusRow),
                         rowState: model.rowChangeState(controller.selection.focusRow),
                         isEditable: model.isEditable,
                         hasReference: { column in
                             controller.gridHasReference(row: controller.selection.focusRow, column: column)
                         },
-                        onCommit: { row, column, text in
-                            controller.gridDidCommitEdit(row: row, column: column, text: text)
+                        onCommit: { target, column, text in
+                            controller.inspectorDidCommit(text, column: column, to: target)
                         },
                         onSetNull: { column in
                             model.setValue(.null, row: controller.selection.focusRow, column: column)

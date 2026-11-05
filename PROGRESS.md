@@ -1406,3 +1406,32 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 
 ### Spec deviations
 - None.
+
+## 2026-11-05 — The inspector stays on the Row pane through an edit
+
+### Done
+- Editing a field in the Row pane sent the inspector back to Cell, took the keyboard out of the next
+  field and threw away anything typed there. `.id(controller.revision)` on `CellInspectorView` rebuilt
+  it on every revision. Removed on table tabs and query tabs. The values still follow: the body reads the
+  revision through the grid, and each form field reloads when its value changes.
+
+### Tests
+- `InspectorStaysPutTests` (4), on the real table and query tabs in a window, auto-commit and production:
+  the pane and the selection stay through an edit and through its commit. With the `.id` restored they
+  fail with "the pane went back to Cell".
+- By hand on an isolated store, SQLite. Auto-commit: edit `name`, click `note`, type, Tab; the pane stays,
+  row 5 stays selected and both values are in the file. Production: the edit waits, the keyboard is in the
+  next field; Commit… and Execute write it, and the pane and row stay.
+
+### Not done / deferred
+- The report also said the selected row lost its highlight. Not reproduced: with the old code restored,
+  SQLite kept the highlight, and nothing in the grid clears the selection on a reload. Whether a real MySQL
+  behaves otherwise was not tried. The tests pin the selection's state, not its drawing.
+- Found, not fixed: text typed in a Row pane field and left by clicking another row in the grid is dropped
+  without a word. It reached no other row. The field's reload for the new row runs before its commit.
+- Which field holds the keyboard is checked by hand only: the test host is not the active app, so
+  SwiftUI's focus state does not move there.
+- Query tabs were not driven by hand.
+
+### Spec deviations
+- None.

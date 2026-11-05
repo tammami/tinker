@@ -711,7 +711,6 @@ public struct QueryTabView: View {
                             onPickReference: { column in controller.requestReferencePicker(column: column) },
                             choices: { column in controller.gridChoices(column) }
                         )
-                        .id(controller.revision)
                     }
                 }
                 if let prompt = controller.memoryCapPrompt {

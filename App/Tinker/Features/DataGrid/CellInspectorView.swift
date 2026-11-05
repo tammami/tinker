@@ -12,7 +12,9 @@ public struct CellInspectorView: View {
     let rowState: CellChangeState
     let isEditable: Bool
     let hasReference: (Int) -> Bool
-    let onCommit: (Int, String) -> Void
+    /// A value for a column of a row. The row is named because a form field can hand over
+    /// what was typed in it after the focus has already moved to another row.
+    let onCommit: (_ row: Int, _ column: Int, _ text: String) -> Void
     let onSetNull: (Int) -> Void
     let onFollow: (Int) -> Void
     /// Whether the grid would accept a write to this column. A query result may carry
@@ -109,7 +111,7 @@ public struct CellInspectorView: View {
                         choices: options,
                         text: value.isNull ? nil : ClipboardFormatter.cellText(value),
                         isEditable: isEditable && isColumnEditable(focusedColumn),
-                        onCommit: { onCommit(focusedColumn, $0) }
+                        onCommit: { onCommit(focusedRow, focusedColumn, $0) }
                     )
                 } else {
                     CellValueEditor(
@@ -117,7 +119,7 @@ public struct CellInspectorView: View {
                         kind: column.kind,
                         value: value,
                         isEditable: isEditable && isColumnEditable(focusedColumn),
-                        onCommit: { onCommit(focusedColumn, $0) },
+                        onCommit: { onCommit(focusedRow, focusedColumn, $0) },
                         onSetNull: { onSetNull(focusedColumn) }
                     )
                 }
@@ -143,12 +145,13 @@ public struct CellInspectorView: View {
                     ForEach(Array(columns.enumerated()), id: \.element.id) { index, column in
                         RowFormField(
                             column: column,
+                            row: focusedRow,
                             value: rowValues.indices.contains(index) ? rowValues[index] : .null,
                             isEditable: isEditable && isColumnEditable(index),
                             hasReference: hasReference(index),
                             canPick: canPickReference(index),
                             choices: choices(index),
-                            onCommit: { onCommit(index, $0) },
+                            onCommit: { row, text in onCommit(row, index, text) },
                             onSetNull: { onSetNull(index) },
                             onFollow: { onFollow(index) },
                             onPick: { onPickReference(index) }
@@ -187,18 +190,29 @@ extension CellChangeState {
 
 /// One column in the row form: label, the value, and the actions the value allows.
 private struct RowFormField: View {
+    /// What a field shows: which row, and that row's value.
+    private struct Source: Equatable {
+        let row: Int
+        let value: DBValue
+    }
+
     let column: ColumnMeta
+    let row: Int
     let value: DBValue
     let isEditable: Bool
     let hasReference: Bool
     var canPick: Bool = false
     var choices: ColumnChoices?
-    let onCommit: (String) -> Void
+    let onCommit: (_ row: Int, _ text: String) -> Void
     let onSetNull: () -> Void
     let onFollow: () -> Void
     var onPick: () -> Void = {}
 
     @State private var draft = ""
+    /// What `draft` was filled from, which is what it is a change to and where it belongs.
+    @State private var loaded: Source?
+    /// What was last handed over, so leaving the field after Return does not send it twice.
+    @State private var committedDraft: String?
     @State private var isNull = false
     @State private var isPickerShown = false
     @FocusState private var isFocused: Bool
@@ -232,14 +246,19 @@ private struct RowFormField: View {
                 if let choices {
                     ChoiceField(
                         choices: choices, text: value.isNull ? nil : ClipboardFormatter.cellText(value),
-                        isEditable: isEditable, onCommit: onCommit)
+                        isEditable: isEditable, onCommit: { onCommit(row, $0) })
                 } else {
                     freeTextField
                 }
             }
         }
         .onAppear { load() }
-        .onChange(of: value) { _, _ in load() }
+        .onChange(of: Source(row: row, value: value)) { old, new in
+            // Clicking another row in the grid moves the row before the field hears it has
+            // lost the focus. What was typed goes to the row it was typed for.
+            if old.row != new.row { commitIfChanged() }
+            load()
+        }
     }
 
     @ViewBuilder
@@ -261,7 +280,7 @@ private struct RowFormField: View {
             ) { picked in
                 draft = picked
                 isPickerShown = false
-                onCommit(picked)
+                onCommit(row, picked)
             }
             .padding(DesignTokens.Spacing.sm)
             .background(Color(nsColor: .controlBackgroundColor))
@@ -272,11 +291,16 @@ private struct RowFormField: View {
     private func load() {
         isNull = value.isNull
         draft = value.isNull ? "" : ClipboardFormatter.cellText(value)
+        loaded = Source(row: row, value: value)
+        committedDraft = nil
     }
 
     private func commitIfChanged() {
-        guard isEditable, CellInspectorView.isChanged(draft: draft, from: value) else { return }
-        onCommit(draft)
+        guard isEditable, let loaded, draft != committedDraft,
+            CellInspectorView.isChanged(draft: draft, from: loaded.value)
+        else { return }
+        committedDraft = draft
+        onCommit(loaded.row, draft)
     }
 }
 

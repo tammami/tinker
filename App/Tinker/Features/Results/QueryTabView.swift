@@ -694,9 +694,8 @@ public struct QueryTabView: View {
                             hasReference: { column in
                                 controller.gridHasReference(row: controller.selection.focusRow, column: column)
                             },
-                            onCommit: { column, text in
-                                controller.gridDidCommitEdit(
-                                    row: controller.selection.focusRow, column: column, text: text)
+                            onCommit: { row, column, text in
+                                controller.gridDidCommitEdit(row: row, column: column, text: text)
                             },
                             onSetNull: { column in
                                 grid.setValue(.null, row: controller.selection.focusRow, column: column)

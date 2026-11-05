@@ -1435,3 +1435,29 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 
 ### Spec deviations
 - None.
+
+## 2026-11-05 — What is typed in the Row pane reaches its own row
+
+### Done
+- Text typed in a Row pane field and left by clicking another row was dropped without a word: the row
+  moved first, and the field reloaded for the new row before it heard it had lost the focus. It now
+  hands over what was typed to the row it was typed for, then reloads. `CellInspectorView.onCommit` names
+  the row, rather than the hosts reading the selection when the value arrives.
+
+### Tests
+- `InspectorStaysPutTests`: `testWhatWasTypedGoesToItsOwnRowWhenTheSelectionMoves`,
+  `testOnProductionWhatWasTypedWaitsOnItsOwnRow`, `testMovingThroughRowsWithNothingTypedWritesNothing`.
+  With the hand-over removed, the first two fail with the value lost.
+- By hand on an isolated store, SQLite. Auto-commit: type in row 5, click row 7; it lands on row 5 and
+  row 7 is untouched. Type in row 7, Return, click row 9; it lands on row 7 and row 9 is untouched.
+  Production: the value waits as a pending edit on row 5, nothing is written, row 7 is untouched.
+
+### Not done / deferred
+- Other ways of losing a typed field were not changed: closing the inspector, closing the tab, and
+  a dirty field whose own row is reloaded with a new value.
+- A value typed in the form for an empty new row, then left by clicking another row, was not tried.
+  Leaving that row removes it as untouched, which may happen before the value arrives.
+- Query tabs share this code and were not driven by hand.
+
+### Spec deviations
+- None.

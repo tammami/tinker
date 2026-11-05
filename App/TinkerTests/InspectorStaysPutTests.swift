@@ -214,4 +214,57 @@ final class InspectorStaysPutTests: XCTestCase {
         XCTAssertEqual(query.selection.focusRow, 4)
         XCTAssertEqual(query.selection.mode, .rows)
     }
+
+    /// Types into a form field the way the keyboard does, without leaving it.
+    private func type(_ text: String, into field: NSTextField) throws {
+        XCTAssertTrue(window.makeFirstResponder(field))
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.moveToEndOfDocument(nil)
+        editor.insertText(text, replacementRange: editor.selectedRange())
+    }
+
+    /// The form follows the selection to another row with what was typed still in a field.
+    /// It goes to the row it was typed for, not the one now shown, and is not dropped.
+    func testWhatWasTypedGoesToItsOwnRowWhenTheSelectionMoves() async throws {
+        try await open(production: false)
+        try type(" edited", into: try XCTUnwrap(field(showing: "row 5")))
+        try await settle()
+
+        controller.gridDidChangeSelection(GridSelection(row: 6, column: 1))
+        try await settle()
+
+        let onFive = try await committed("name", id: 5)
+        let onSeven = try await committed("name", id: 7)
+        XCTAssertEqual(onFive, "row 5 edited", "the typed value was lost")
+        XCTAssertEqual(onSeven, "row 7", "written over a row nobody edited")
+        XCTAssertNotNil(field(showing: "row 7"), "the form now shows row 7")
+    }
+
+    /// On production it waits for the commit sheet, on the row it was typed for.
+    func testOnProductionWhatWasTypedWaitsOnItsOwnRow() async throws {
+        try await open(production: true)
+        try type(" edited", into: try XCTUnwrap(field(showing: "row 5")))
+        try await settle()
+
+        controller.gridDidChangeSelection(GridSelection(row: 6, column: 1))
+        try await settle()
+
+        XCTAssertEqual(controller.model?.edits.pendingStatementCount, 1)
+        XCTAssertEqual(controller.model?.value(row: 4, column: 1), .string("row 5 edited"))
+        XCTAssertEqual(controller.model?.value(row: 6, column: 1), .string("row 7"))
+        let onFive = try await committed("name", id: 5)
+        XCTAssertEqual(onFive, "row 5", "nothing is written until the sheet")
+    }
+
+    /// An untouched form writes nothing as the selection moves through it.
+    func testMovingThroughRowsWithNothingTypedWritesNothing() async throws {
+        try await open(production: true)
+
+        controller.gridDidChangeSelection(GridSelection(row: 6, column: 1))
+        try await settle()
+        controller.gridDidChangeSelection(GridSelection(row: 2, column: 1))
+        try await settle()
+
+        XCTAssertEqual(controller.model?.edits.pendingStatementCount, 0)
+    }
 }

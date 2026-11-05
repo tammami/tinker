@@ -396,6 +396,67 @@ extension SmokeTest {
             check(
                 "Explain Analyze of a write on production asks for the connection's name",
                 asked?.requiredTypedName == config.name)
+            // An edit to a result is committed once, by the commit sheet; what lands is read
+            // through another connection, which an open transaction would hide it from
+            // (ADR-0075).
+            query.sql = "SELECT id, name, amount FROM smoke_features ORDER BY id"
+            query.caretOffset = 0
+            query.run(all: true)
+            try await waitUntil(timeout: .seconds(20)) {
+                !query.isRunning && query.results.first?.statement.hasPrefix("SELECT id") == true
+            }
+            let firstName = { try await sql("SELECT name FROM \(scratchName) ORDER BY id LIMIT 1")?.firstText }
+            if let grid = query.results.first?.grid, let nameColumn = grid.columns.firstIndex(where: { $0.name == "name" }) {
+                let original = try await firstName()
+                query.gridDidCommitEdit(row: 0, column: nameColumn, text: "Edited on production")
+                _ = await query.commitEdits()
+                let landed = try await firstName()
+                check(
+                    "an edit on production is committed by the sheet alone (\(landed ?? "nothing"))",
+                    landed == "Edited on production" && !query.isInTransaction)
+                asked = nil
+                query.revertLastWrite()
+                check("putting an edit back on production asks first", asked != nil)
+                await asked?.action()
+                try await waitUntil(timeout: .seconds(20)) { !query.isWritingEdits && query.writeLog.undoable == nil }
+                let restored = try await firstName()
+                check(
+                    "an edit on production can be put back (\(restored ?? "nothing"))",
+                    restored == original && !query.isInTransaction)
+                // A statement is still held, and an edit beside it joins what it holds.
+                query.sql = "UPDATE smoke_features SET name = name WHERE id = -1"
+                query.caretOffset = 0
+                asked = nil
+                query.run(all: true)
+                try await waitUntil(timeout: .seconds(20)) { asked != nil }
+                await asked?.action()
+                try await waitUntil(timeout: .seconds(20)) { !query.isRunning }
+                query.sql = "SELECT id, name, amount FROM smoke_features ORDER BY id"
+                query.caretOffset = 0
+                query.run(all: true)
+                try await waitUntil(timeout: .seconds(20)) {
+                    !query.isRunning && query.results.first?.statement.hasPrefix("SELECT id") == true
+                }
+                query.gridDidCommitEdit(row: 0, column: nameColumn, text: "Edited on production")
+                _ = await query.commitEdits()
+                let hidden = try await firstName()
+                check(
+                    "an edit joins a transaction a statement holds on production",
+                    query.isInTransaction && hidden == original)
+                await query.rollbackTransaction()
+                let rolledBack = try await firstName()
+                check("Rollback takes that edit too", rolledBack == original && !query.isInTransaction)
+            } else {
+                check("a one-table SELECT on production is editable", false)
+            }
+            // Leave a different result behind: the checks below wait for a result of this
+            // same statement, and must not take this one, with its stale values, for theirs.
+            query.sql = "SELECT 1"
+            query.caretOffset = 0
+            query.run(all: true)
+            try await waitUntil(timeout: .seconds(20)) {
+                !query.isRunning && query.results.first?.statement == "SELECT 1"
+            }
             // With no way to ask, a production write does not run at all.
             query.confirm = nil
             let before = await count()

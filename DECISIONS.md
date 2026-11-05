@@ -1249,3 +1249,32 @@ The same harness afterwards: 6 of 6 runs clean, 85–160 iterations each, with r
 swept. A 400-table list scrolled through 60 sweeps kept every visible row. Tests:
 `OrphanRowSweeperTests`, `SidebarRefreshTests.testTheTreeGenerationMovesWhenRowsCanChange`.
 The harness was temporary and is not in the repository.
+
+## ADR-0075 — An edit on production is committed once
+
+**Context.** Editing a query tab's result on a production connection took two commits:
+Commit… and Execute on the sheet, then Commit again above the editor. Execute wrote through
+`connectionForRun`, which holds any write on production in a transaction (ADR-0057), so the
+edit sat under a savepoint and TRANSACTION OPEN appeared. Nobody chose this; two safeguards
+met. SPEC §12.3 describes one commit, and a table tab on the same connection does one.
+
+It also misled. A button saying Commit and another saying Execute left the rows uncommitted
+and locked on a production server, and the sheet's own message read "Committed 1 statement".
+
+**Decision.** `gridWriteOpensTransaction` decides for result edits and put-backs apart from
+statements, and on production it never opens one. With no transaction open, Execute is one
+transaction of its own. With one open, the edit joins it under a savepoint, because the user
+opened it and it is theirs to end. A statement that writes on production is held as before.
+
+A committed edit is logged, so Undo is the way back. It was refused on production, where the
+reason given ("holds every write until Commit") no longer holds; it now asks first, as on a
+table tab, and does not run with no way to ask.
+
+**Rejected.** *Keeping the hold and relabelling the first button*: rows stay locked for as
+long as the second press takes, for a check the sheet has already made.
+
+**Consequences.** After Execute there is no Rollback for an edit, only Undo, which refuses a
+row that has changed since. `commitEdits` is called only by the sheet and by Retry, which is
+shown only where auto-commit applies, so no path on production skips the sheet. Tests:
+`ProductionGridEditTests` (5), `TransactionOpeningTests.testAGridWriteHoldsATransactionOnlyWhenAutoCommitIsOff`
+and the production checks in the smoke pass, against a real PostgreSQL.

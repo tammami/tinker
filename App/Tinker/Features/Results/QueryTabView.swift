@@ -242,10 +242,14 @@ public struct QueryTabView: View {
             // later, on another turn of the run loop, snaps back to what it read and never
             // shows the click. The commit that turning it on may owe happens after.
             if controller.isProduction {
-                // Production never auto-commits: every write waits for Commit, so the
-                // checkbox would only promise something the tab does not do.
+                // Production never auto-commits: a statement that writes waits for Commit and
+                // an edit waits for the commit sheet, so the checkbox would only promise
+                // something the tab does not do.
                 Badge(text: "MANUAL COMMIT", color: .red)
-                    .help("A production connection holds every write in a transaction until you commit or roll back")
+                    .help(
+                        "On a production connection, a statement that writes waits in a transaction until you "
+                            + "commit or roll back. An edit to a result writes when you execute it on the commit sheet."
+                    )
             } else {
                 Toggle("Auto-commit", isOn: $controller.autoCommit)
                     .toggleStyle(.checkbox)

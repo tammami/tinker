@@ -1266,3 +1266,31 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 
 ### Spec deviations
 - None.
+
+## 2026-11-05 — An edit on production is committed once (ADR-0075)
+
+### Done
+- Editing a query tab's result on a production connection took Commit…, Execute and then
+  Commit again. Execute on the sheet is now the commit, as on a table tab. A statement that
+  writes is still held until Commit, and an edit made while one is held joins it.
+- Undo works on those edits and asks first, as on a table tab; it was refused on production.
+- The MANUAL COMMIT tooltip says which writes wait for what.
+
+### Tests
+- `ProductionGridEditTests` (5, on SQLite, reading back through another connection): one
+  commit and no transaction left, the hidden checkbox, joining a held statement with Rollback
+  taking both, Undo asking first, and Undo not running with no way to ask.
+- `TransactionOpeningTests.testAGridWriteHoldsATransactionOnlyWhenAutoCommitIsOff`.
+- Smoke pass on production, against the local PostgreSQL `tinker_test`: the same flow.
+
+### Not done / deferred
+- A tab with auto-commit turned off before its connection was marked production still opens a
+  transaction on its reads, as ADR-0057 says, the page reload after a write included. An edit
+  made inside one joins it, so that tab can still show Commit, and the checkbox is hidden there.
+- The smoke pass ran on PostgreSQL only; the rule is not engine-specific, and MySQL was not run.
+- The smoke pass is flaky on `committing the transaction lands the result edit`, with auto-commit
+  off: when it fails, the pass then hangs. This predates the change: `HEAD` (108d049) failed that
+  way in 3 of 4 runs against the local PostgreSQL. Not fixed; cause not established.
+
+### Spec deviations
+- None. This brings query tabs in line with SPEC §12.3.

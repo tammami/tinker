@@ -39,10 +39,11 @@ enum GridEditPrompts {
     /// Asked before putting a write back on a production connection: the revert is itself
     /// a write, and production asks about every one of them.
     static func revertWrite(
-        summary: String, table name: String, action: @escaping @MainActor () async -> Void
+        summary: String, table name: String?, action: @escaping @MainActor () async -> Void
     ) -> DestructiveConfirmation {
         DestructiveConfirmation(
-            title: "Put back “\(summary)” on “\(name)”?",
+            // A query tab's log spans its results, so it may not know which table this was.
+            title: name.map { "Put back “\(summary)” on “\($0)”?" } ?? "Put back “\(summary)”?",
             message:
                 "This runs the statements that restore the values the write replaced, in one transaction. "
                 + "A row that changed again since is refused rather than overwritten.",

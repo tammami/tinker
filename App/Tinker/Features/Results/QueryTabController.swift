@@ -152,7 +152,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     public var isProduction: Bool { config?.isProduction ?? false }
 
     /// Whether result edits write as they are made. Never on a production connection:
-    /// there every write goes through the commit sheet, whatever the checkbox says.
+    /// there every edit goes through the commit sheet, whatever the checkbox says, and
+    /// Execute on that sheet is the commit (ADR-0075).
     public var autoCommitsEdits: Bool { autoCommit && !isProduction }
 
     /// Whether statements commit as they run. Never on a production connection: there a
@@ -914,11 +915,12 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
 
     /// Writes the pending edits through the tab's own connection.
     ///
-    /// With auto-commit on, the edits are one transaction of their own. With it off they
-    /// join the tab's open transaction under a savepoint, so a refused statement takes
-    /// only the edits back, not the statements the user ran before them; the transaction
-    /// then commits when the user commits it. Either way the page is re-read afterwards,
-    /// so a timestamp the server set is what the grid shows.
+    /// With no transaction open, the edits are one transaction of their own, on production
+    /// too: there the commit sheet has already asked (ADR-0075). With auto-commit off, or
+    /// with a transaction already open, they join it under a savepoint, so a refused
+    /// statement takes only the edits back, not the statements the user ran before them;
+    /// the transaction then commits when the user commits it. Either way the page is
+    /// re-read afterwards, so a timestamp the server set is what the grid shows.
     public func commitEdits(_ scope: CommitScope = .everything) async -> String? {
         guard let result = selectedResult, let grid = result.grid, grid.isEditable else { return nil }
         lastCommitMessage = nil
@@ -938,10 +940,10 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
             return false
         }
         do {
-            let connection = try await connectionForRun(session: session, writes: true)
+            let connection = try await connectionForRun(session: session, writes: true, isGridWrite: true)
             // A transaction the user opened by hand (BEGIN as a statement) is theirs to
             // commit: the edit joins it under a savepoint rather than committing it.
-            let runner = HeldConnectionRunner(connection: connection, usesSavepoint: !autoCommit || isInTransaction)
+            let runner = HeldConnectionRunner(connection: connection, usesSavepoint: isInTransaction)
             let outcome = try await grid.commitRecordingRevert(using: runner, scope: scope)
             let committed = outcome.result
             isInTransaction = await connection.isInTransaction
@@ -1053,14 +1055,28 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
         return isProduction && statementWrites
     }
 
+    /// Whether writing a result's edits opens a transaction that is left waiting for Commit.
+    ///
+    /// Only when the user turned auto-commit off. A production connection has no such
+    /// checkbox and needs no second commit: its edits have been through the commit sheet,
+    /// and holding them after that said Commit twice and left rows locked (ADR-0075).
+    static func gridWriteOpensTransaction(autoCommit: Bool, isProduction: Bool) -> Bool {
+        !autoCommit && !isProduction
+    }
+
     /// The connection a statement runs on: the held one when a transaction is open, else
     /// a fresh lease returned as soon as the statement finishes.
     ///
     /// `writes` says whether this statement changes anything, which is what decides
-    /// whether a transaction is opened around it.
-    private func connectionForRun(session: ConnectionSession, writes: Bool) async throws -> any SQLConnection {
-        let opensTransaction = Self.opensTransaction(
-            autoCommit: autoCommit, isProduction: isProduction, statementWrites: writes)
+    /// whether a transaction is opened around it. `isGridWrite` says it is a result's edits
+    /// or a put-back rather than a statement the user ran; those have a rule of their own.
+    private func connectionForRun(
+        session: ConnectionSession, writes: Bool, isGridWrite: Bool = false
+    ) async throws -> any SQLConnection {
+        let opensTransaction =
+            isGridWrite
+            ? Self.gridWriteOpensTransaction(autoCommit: autoCommit, isProduction: isProduction)
+            : Self.opensTransaction(autoCommit: autoCommit, isProduction: isProduction, statementWrites: writes)
         if let heldConnection {
             if heldSessionDatabase != sessionDatabase {
                 try await applySessionDatabase(on: heldConnection)
@@ -1068,8 +1084,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
             }
             await session.applyReadOnlyGuard(to: heldConnection)
             // Auto-commit was turned off after this connection was taken, or this is the
-            // first write on a production connection: either way the transaction starts
-            // here rather than never.
+            // first statement that writes on a production connection: either way the
+            // transaction starts here rather than never.
             if opensTransaction, !isInTransaction {
                 try await heldConnection.beginTransaction()
                 isInTransaction = true
@@ -2063,15 +2079,11 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     /// said it was gone. Beside a running statement it would share the held connection.
     public var putBackRefusal: String? {
         if isBusyOnConnection { return "Wait for the running statement to finish before putting a write back." }
-        if isProduction {
-            return "A production tab holds every write until Commit, so a write is not put back here; "
-                + "edit the rows again instead."
-        }
         if isInTransaction {
             return "Commit or roll back this tab's transaction first: a write put back inside it "
                 + "would only stay put back if the transaction were committed."
         }
-        if !autoCommit {
+        if !autoCommit, !isProduction {
             return "Turn auto-commit on to put a write back: with it off, the put-back would wait "
                 + "in a transaction for a Commit."
         }
@@ -2085,15 +2097,26 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     }
 
     /// Runs the statements that put one write back, with the same one-row checks a commit
-    /// uses. Never on a production connection, which holds every write in a transaction
-    /// until Commit: see ``putBackRefusal``.
+    /// uses. On production a put-back is a write like any other and asks first, as on a
+    /// table tab; with no way to ask, it does not run.
     public func revert(_ record: WriteRecord) {
         guard record.canRevert else { return }
         if let putBackRefusal {
             statusText = putBackRefusal
             return
         }
-        enqueueRevert(record)
+        guard isProduction else {
+            enqueueRevert(record)
+            return
+        }
+        guard let confirm else {
+            statusText = "A production write has to be confirmed, and this tab has no way to ask."
+            return
+        }
+        confirm(
+            GridEditPrompts.revertWrite(summary: record.summary, table: nil) { [weak self] in
+                self?.enqueueRevert(record)
+            })
     }
 
     /// Through the same gate a commit goes through, so a revert never runs beside a write
@@ -2124,8 +2147,8 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
             return false
         }
         do {
-            let connection = try await connectionForRun(session: session, writes: true)
-            let runner = HeldConnectionRunner(connection: connection, usesSavepoint: !autoCommit || isInTransaction)
+            let connection = try await connectionForRun(session: session, writes: true, isGridWrite: true)
+            let runner = HeldConnectionRunner(connection: connection, usesSavepoint: isInTransaction)
             _ = try await GridCommitter().commit(record.revert, using: runner)
             isInTransaction = await connection.isInTransaction
             writeLog.markReverted(record.id)

@@ -392,8 +392,21 @@ final class TransactionOpeningTests: XCTestCase {
         XCTAssertNotNil(controller.putBackRefusal)
     }
 
+    /// An edit to a result has been through the commit sheet by the time it writes, so on
+    /// production nothing is left waiting for a second Commit (ADR-0075). Only the checkbox,
+    /// which production does not show, holds one open.
+    func testAGridWriteHoldsATransactionOnlyWhenAutoCommitIsOff() {
+        func opens(autoCommit: Bool, production: Bool) -> Bool {
+            QueryTabController.gridWriteOpensTransaction(autoCommit: autoCommit, isProduction: production)
+        }
+        XCTAssertFalse(opens(autoCommit: true, production: true))
+        XCTAssertFalse(opens(autoCommit: false, production: true), "production has no checkbox to explain it")
+        XCTAssertFalse(opens(autoCommit: true, production: false))
+        XCTAssertTrue(opens(autoCommit: false, production: false))
+    }
+
     /// A write on production still waits for Commit, which is what the badge promises.
-    func testAWriteOnProductionIsHeldUntilItIsCommitted() {
+    func testAStatementThatWritesOnProductionIsHeldUntilItIsCommitted() {
         XCTAssertTrue(opens(autoCommit: true, production: true, writes: true))
     }
 

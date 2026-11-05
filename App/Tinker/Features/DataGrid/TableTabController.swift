@@ -414,17 +414,10 @@ public final class TableTabController: DataGridDelegate, WriteLogOwner {
         guard let model, model.addRow() != nil else { return }
         // The new row is where the user is about to type, so focus moves into it; a row
         // added and never entered would otherwise be dropped on the next selection change.
-        // A hidden column has no cell to type in.
         selection = GridSelection(
-            row: model.displayRowCount - 1,
-            column: Self.firstShownColumn(of: model.columns.map(\.name), hidden: hiddenColumns))
+            row: model.displayRowCount - 1, column: model.firstColumnToFill(hidden: hiddenColumns))
         bumpRevision()
         updateStatus()
-    }
-
-    /// Where typing starts in a new row: the first column the grid is showing.
-    static func firstShownColumn(of names: [String], hidden: Set<String>) -> Int {
-        names.firstIndex { !hidden.contains($0) } ?? 0
     }
 
     /// Marks the selected rows for deletion. With auto-commit on the DELETE reaches the

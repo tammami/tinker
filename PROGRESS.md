@@ -1348,3 +1348,33 @@ reliability, DX, UX) ranked ten findings as critical. This phase closes them.
 
 ### Spec deviations
 - None.
+
+## 2026-11-05 — Add Row starts typing past an auto-increment key
+
+### Done
+- `GridModel.firstColumnToFill` picks the first shown column the user would fill in, passing over
+  auto-increment and generated columns and, in a query result, columns with nothing to write back
+  to. With none left it is the first column shown. Table tabs and query tabs both use it; a query
+  tab used to start at column 0 even when that column was hidden from writing.
+
+### Tests
+- `NewRowColumnTests` (7) for the rule. `QueryTabAddRowTests.testTypingStartsPastTheAutoIncrementKey`
+  on SQLite. A smoke check on a PostgreSQL `serial` key.
+- By hand on an isolated store: a 900-row SQLite table with `AUTOINCREMENT`, Add Row, typing with no
+  click, a real Tab into the next column, clicking away. Read back with `sqlite3`: ids 901 and 902
+  numbered by SQLite, with the typed name and note.
+
+### Not done / deferred
+- A SQLite `INTEGER PRIMARY KEY` without `AUTOINCREMENT` numbers itself too, but the introspector
+  reports only a declared `AUTOINCREMENT`, as the DDL says. Typing starts in that key. Not changed:
+  the comment there records why, as cross-engine comparisons depend on it.
+- MySQL was not driven by hand; the rule uses what the introspector reports.
+- `Scripts/ci.sh` was green on PostgreSQL 16, MySQL 9.4 and SQLite, app and smoke pass included. Not
+  run: MariaDB (nothing listening on port 3316) and Redis (the server refused the `tinker_test` user),
+  both refused before any test reached them. Neither touches this change; the servers were left alone.
+- Found, not fixed: after any auto-commit write the grid jumps to the top. `GridModel.reload` empties
+  the buffer, and the table view is reloaded with no rows. On a long table the row just saved goes out
+  of view. Also, row numbers of three digits are clipped in the gutter on a 900-row table.
+
+### Spec deviations
+- None.

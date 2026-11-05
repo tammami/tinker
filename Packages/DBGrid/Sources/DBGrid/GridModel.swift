@@ -289,6 +289,21 @@ public final class GridModel {
         return editableColumns.contains(columns[column].name)
     }
 
+    /// The column typing starts in on a new row: the first one shown that the user would
+    /// fill in. The server numbers an auto-increment column and refuses a generated one a
+    /// value, so both are passed over while another column is there to type in. With none,
+    /// it is the first column shown, so the row still opens somewhere.
+    public func firstColumnToFill(hidden: Set<String> = []) -> Int {
+        let shown = columns.indices.filter { !hidden.contains(columns[$0].name) }
+        let toFill = shown.first { position in
+            let name = columns[position].name
+            return isColumnEditable(position)
+                && autoIncrementColumns?.contains(name) != true
+                && tableColumns?.contains(name) != false
+        }
+        return toFill ?? shown.first ?? 0
+    }
+
     // MARK: - Reading
 
     /// The value to draw, reading the edit overlay first.

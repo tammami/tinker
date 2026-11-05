@@ -94,6 +94,7 @@ extension SmokeTest {
             let adaRow = (0 ..< 3).first { table.model?.value(row: $0, column: nameColumn) == .string("Ada") } ?? 0
             _ = table.model?.setValue(.string("Ada Lovelace"), row: adaRow, column: nameColumn)
             table.addRow()
+            check("Add Row starts typing past the serial key", table.selection.focusColumn == nameColumn)
             let newRow = (table.model?.displayRowCount ?? 1) - 1
             _ = table.model?.setValue(.string("Margaret"), row: newRow, column: nameColumn)
             check("edits produce 2 pending statements", table.pendingStatements().count == 2)

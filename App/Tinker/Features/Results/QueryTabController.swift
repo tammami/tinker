@@ -904,7 +904,7 @@ public final class QueryTabController: SQLEditorDelegate, DataGridDelegate, Writ
     public func addRow() {
         guard let grid = selectedResult?.grid, grid.isEditable, grid.addRow() != nil else { return }
         // Focus moves into the new row, so it is not flushed as untouched on the next click.
-        selection = GridSelection(row: grid.displayRowCount - 1, column: 0)
+        selection = GridSelection(row: grid.displayRowCount - 1, column: grid.firstColumnToFill())
         bumpRevision()
     }
 

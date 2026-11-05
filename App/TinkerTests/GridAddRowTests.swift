@@ -2,6 +2,8 @@ import AppKit
 import DBCore
 import DBGrid
 import DBSQL
+import DBSQLite
+import DBStore
 import SwiftUI
 import XCTest
 
@@ -144,12 +146,45 @@ final class GridAddRowTests: XCTestCase {
         XCTAssertFalse(rule((900, 1), (900, 1), true), "the same cell")
         XCTAssertFalse(rule((3, 1), (0, 0), false), "an existing row")
     }
+}
 
-    /// A hidden column has no cell to open, so typing starts in the first one shown.
-    func testTypingStartsInTheFirstColumnShown() {
-        let first = TableTabController.firstShownColumn
-        XCTAssertEqual(first(["id", "name"], []), 0)
-        XCTAssertEqual(first(["id", "name"], ["id"]), 1)
-        XCTAssertEqual(first(["id"], ["id"]), 0, "nothing shown")
+/// Add Row on a query tab's result, against a table the server numbers itself. Runs on a
+/// SQLite file of its own and a throwaway store, so it reaches no server.
+@MainActor
+final class QueryTabAddRowTests: XCTestCase {
+    func testTypingStartsPastTheAutoIncrementKey() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("tinker-addrow-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let environment = AppEnvironment(
+            secrets: EphemeralSecretStore(), storePath: directory.appendingPathComponent("store.sqlite").path)
+        await environment.load()
+        let config = ConnectionConfig(
+            name: "add-row-test", dialect: .sqlite, host: "", port: 0, user: "",
+            database: directory.appendingPathComponent("data.sqlite").path,
+            options: [SQLiteDriver.OptionKey.createIfMissing: "true"])
+        await environment.save(config)
+        let session = try XCTUnwrap(environment.session(for: config.id))
+        _ = try await session.connect()
+        try await session.withLease { connection in
+            _ = try await connection.executeCollecting(
+                "CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)")
+            _ = try await connection.executeCollecting("INSERT INTO items (name) VALUES ('first')")
+        }
+        let query = QueryTabController(connectionID: config.id, dialect: .sqlite, environment: environment)
+        query.sql = "SELECT id, name FROM items ORDER BY id"
+        query.caretOffset = 0
+        query.run(all: true)
+        for _ in 0 ..< 500 {
+            if !query.isRunning, query.results.first?.statement == query.sql { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        query.addRow()
+
+        XCTAssertEqual(query.selection.focusRow, 1)
+        XCTAssertEqual(query.selection.focusColumn, 1, "the server numbers id")
+        await query.releaseHeldConnection()
+        await session.disconnect()
     }
 }
